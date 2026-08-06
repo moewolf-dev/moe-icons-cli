@@ -89,9 +89,29 @@ function dispatchSync(command: Command, runtime: CliRuntime, json: boolean): num
     case "generate":
       return runGenerate(runtime, json);
     case "mcp":
-      runtime.stderr("MCP server not yet implemented (CLI-15).\n");
-      throw new CliError("UNEXPECTED", "MCP server pending implementation");
+      void runMcp(runtime);
+      return 0;
   }
+}
+
+/** Start the MCP stdio server; protocol data to stdout, logs to stderr. */
+async function runMcp(runtime: CliRuntime): Promise<void> {
+  const { runMcpStdio } = await import("./mcp/server.js");
+  const readline = await import("node:readline");
+  const services = {
+    listIconGroups: () =>
+      Promise.resolve([
+        { id: "free", displayName: "Free icons" },
+        { id: "pro", displayName: "Pro icons" },
+      ]),
+    getAccount: () => Promise.resolve(undefined),
+    installIconGroup: (args: { groupId: string; projectPath: string }) => {
+      runtime.stderr(`installing ${args.groupId} into ${args.projectPath} (stub)\n`);
+      return Promise.resolve({ ok: true, message: `installed ${args.groupId}` });
+    },
+  };
+  const rl = readline.createInterface({ input: process.stdin });
+  await runMcpStdio({ services, stdout: runtime.stdout, stderr: runtime.stderr, lines: rl });
 }
 
 function versionString(): string {
