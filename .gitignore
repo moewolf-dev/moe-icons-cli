@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+*.tsbuildinfo
+
+# Build output
+dist/
+coverage/
+
+# Editor
+.DS_Store
+.idea/
+.vscode/
+
+# Tokens and secrets
+.token-store.json
+token-store.json
+*.token
+.auth/
+
+# Local env files
+.env
+.env.*
+!.env.example
+
+# Caches
+.rollup.cache/
+.vite/
+
+# Temporary install staging
+.tmp/

@@ -1,0 +1,39 @@
+{
+  "name": "moeicons",
+  "version": "0.1.0",
+  "description": "Moeicons CLI: install icon groups, manage login/tokens, generate React/Vue proxy components, and expose an MCP server.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": {
+    "moeicons": "bin/moeicons.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run",
+    "format": "prettier --write src tests"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.2.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2"
+  }
+}
