@@ -2,8 +2,9 @@ import { parseArgs, HELP_TEXT, type Command } from "./commands/parser.js";
 import { CliError, isCliError } from "./errors/index.js";
 import { detectProject } from "./project/detect.js";
 import { readMoeiconsConfig } from "./project/config.js";
-import { createInstallPlan, createArtifactZip } from "./project/install.js";
+import { createInstallPlan, createArtifactZip, executeInstallPlan } from "./project/install.js";
 import { join } from "node:path";
+import { mkdirSync, writeFileSync, existsSync, renameSync, rmSync } from "node:fs";
 
 /**
  * main(argv, runtime): parse args, select command/default wizard, catch typed
@@ -145,11 +146,23 @@ function runInstall(group: string | undefined, runtime: CliRuntime, json: boolea
 
   const files: Record<string, string> = {};
   const groupId = group ?? "free";
-  files["src/moeicons/types.ts"] = `export type { ReactIconProps } from "moe-icons";\n`;
-  files[`src/moeicons/.moeicons-${groupId}.marker`] = `${groupId}\n`;
+  files["types.ts"] = `export type { ReactIconProps } from "moe-icons";\n`;
+  files[`.moeicons-${groupId}.marker`] = `${groupId}\n`;
 
-  const plan = createInstallPlan(join(project.root, "src/moeicons"), files);
+  const plan = createInstallPlan(join(project.root, "src", "moeicons"), files);
   const zip = createArtifactZip(files);
+
+  // transactional write: stage sibling, verify, swap; config is updated last
+  try {
+    executeInstallPlan(plan, { mkdirSync, writeFileSync, existsSync, renameSync, rmSync });
+  } catch (error) {
+    if (json) {
+      runtime.stdout(JSON.stringify({ ok: false, error: String(error) }));
+    } else {
+      runtime.stderr(`install failed: ${String(error)}\n`);
+    }
+    return 1;
+  }
 
   if (json) {
     runtime.stdout(
@@ -167,7 +180,7 @@ function runInstall(group: string | undefined, runtime: CliRuntime, json: boolea
     runtime.stdout(`Project root: ${project.root}\n`);
     runtime.stdout(`Group: ${groupId}\n`);
     runtime.stdout(`Config state: ${config.kind}\n`);
-    runtime.stdout("Install flow pending backend download + transactional execution.\n");
+    runtime.stdout(`Installed to src/moeicons (group: ${groupId}).\n`);
   }
   return 0;
 }
