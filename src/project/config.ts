@@ -87,3 +87,24 @@ export function mergeMoeiconsConfig(
         : {}),
   };
 }
+
+/** Generate a new v1 config for a framework with a default theme set. */
+export function createMoeiconsConfig(options: {
+  framework: "react" | "vue";
+  outputDir?: string;
+  icons?: readonly string[];
+  themes?: Readonly<Record<string, { styles: string[]; className?: string }>>;
+}): MoeiconsConfigFile {
+  return {
+    schemaVersion: 1,
+    framework: options.framework,
+    outputDir: options.outputDir ?? "src/moeicons",
+    defaultTheme: "outline",
+    themes: options.themes ?? {
+      outline: { styles: ["outline"], className: "text-zinc-700" },
+      solid: { styles: ["fill"], className: "text-zinc-800" },
+    },
+    icons: options.icons ?? [],
+    missingIconPolicy: "fallback",
+  };
+}

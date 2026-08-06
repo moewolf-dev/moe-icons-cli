@@ -1,8 +1,9 @@
 import { parseArgs, HELP_TEXT, type Command } from "./commands/parser.js";
 import { CliError, isCliError } from "./errors/index.js";
 import { detectProject } from "./project/detect.js";
-import { readMoeiconsConfig } from "./project/config.js";
+import { readMoeiconsConfig, createMoeiconsConfig } from "./project/config.js";
 import { createInstallPlan, createArtifactZip, executeInstallPlan } from "./project/install.js";
+import { planGeneratedFiles } from "./generator/generate.js";
 import { join } from "node:path";
 import { mkdirSync, writeFileSync, existsSync, renameSync, rmSync } from "node:fs";
 
@@ -89,10 +90,38 @@ function dispatchSync(command: Command, runtime: CliRuntime, json: boolean): num
       return 0;
     case "generate":
       return runGenerate(runtime, json);
+    case "init":
+      return runInit(runtime, json);
     case "mcp":
       void runMcp(runtime);
       return 0;
   }
+}
+
+/** Create moeicons.config.json if absent (never overwrites an existing config). */
+function runInit(runtime: CliRuntime, json: boolean): number {
+  const cwd = runtime.cwd();
+  const project = detectProject(cwd);
+  if (!project) {
+    throw new CliError("VALIDATION_ERROR", "no project found");
+  }
+  const existing = readMoeiconsConfig(project.root);
+  if (existing.kind === "ok") {
+    if (json) runtime.stdout(JSON.stringify({ ok: false, error: "config already exists" }));
+    else runtime.stdout("moeicons.config.json already exists; not overwritten.\n");
+    return 0;
+  }
+  const config = createMoeiconsConfig({ framework: "react" });
+  const target = join(project.root, "moeicons.config.json");
+  try {
+    writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`);
+  } catch (error) {
+    runtime.stderr(`init failed: ${String(error)}\n`);
+    return 1;
+  }
+  if (json) runtime.stdout(JSON.stringify({ ok: true, created: target }));
+  else runtime.stdout(`Created ${target}\n`);
+  return 0;
 }
 
 /** Start the MCP stdio server; protocol data to stdout, logs to stderr. */
@@ -193,11 +222,37 @@ function runGenerate(runtime: CliRuntime, json: boolean): number {
     throw new CliError("VALIDATION_ERROR", "no project found");
   }
   const config = readMoeiconsConfig(project.root);
+  if (config.kind !== "ok") {
+    if (json) {
+      runtime.stdout(JSON.stringify({ ok: false, error: `config state: ${config.kind}` }));
+    } else {
+      runtime.stderr(`config state: ${config.kind}; run \`moeicons init\` or add moeicons.config.json\n`);
+    }
+    return 1;
+  }
+
+  const plan = planGeneratedFiles(config.config, config.config.outputDir);
+  if (!plan.ok) {
+    runtime.stderr(JSON.stringify({ ok: false, errors: plan.errors }) + "\n");
+    return 1;
+  }
+
+  try {
+    for (const file of plan.files) {
+      const full = join(project.root, file.path);
+      mkdirSync(join(full, ".."), { recursive: true });
+      writeFileSync(full, file.content);
+    }
+  } catch (error) {
+    if (json) runtime.stdout(JSON.stringify({ ok: false, error: String(error) }));
+    else runtime.stderr(`generate failed: ${String(error)}\n`);
+    return 1;
+  }
+
   if (json) {
-    runtime.stdout(JSON.stringify({ ok: true, config: config.kind, generated: [] }));
+    runtime.stdout(JSON.stringify({ ok: true, generated: plan.files.map((f) => f.path) }));
   } else {
-    runtime.stdout(`Config state: ${config.kind}\n`);
-    runtime.stdout("Generation pending (CLI-13/CLI-14).\n");
+    runtime.stdout(`Generated ${plan.files.length} files under ${config.config.outputDir}/\n`);
   }
   return 0;
 }

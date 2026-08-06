@@ -7,6 +7,7 @@ export type Command =
   | { readonly name: "account" }
   | { readonly name: "groups" }
   | { readonly name: "generate" }
+  | { readonly name: "init" }
   | { readonly name: "mcp" }
   | { readonly name: "help" }
   | { readonly name: "version" }
@@ -56,6 +57,8 @@ export function parseArgs(argv: readonly string[]): ParseResult {
       return { command: { name: "groups" }, json, yes };
     case "generate":
       return { command: { name: "generate" }, json, yes };
+    case "init":
+      return { command: { name: "init" }, json, yes };
     case "mcp":
       return { command: { name: "mcp" }, json, yes };
     case "help":
@@ -79,6 +82,7 @@ Usage:
   moeicons account              show account/tier info
   moeicons groups               list available icon groups
   moeicons generate             generate React/Vue proxy components
+  moeicons init                 create moeicons.config.json
   moeicons mcp                  start the MCP stdio server
   moeicons --version            show version
   moeicons --help               show help
