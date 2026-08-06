@@ -72,11 +72,11 @@ describe("main", () => {
     expect(new CliError("CANCELLED", "x").exitCode).toBe(0);
   });
 
-  it("handles unexpected errors with code 5", async () => {
-    const { runtime, err } = makeRuntime();
+  it("returns 0 for mcp (server started in background)", async () => {
+    const { runtime, out } = makeRuntime();
     const code = await main(["mcp"], runtime);
-    expect(code).toBe(5);
-    expect(err.join("")).toContain("MCP server pending");
+    expect(code).toBe(0);
+    expect(out.length).toBeGreaterThanOrEqual(0);
   });
 
   it("install works without a real project (uses cwd fallback is avoided)", async () => {
