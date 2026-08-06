@@ -1,7 +1,7 @@
-import type { mkdirSync, writeFileSync, existsSync, renameSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { strToU8, zipSync, unzipSync } from "fflate";
+import type { mkdirSync, writeFileSync, existsSync, renameSync, rmSync } from "node:fs";
 
 /**
  * Transactional install: stage sibling, verify all files, backup existing
@@ -139,4 +139,103 @@ export function executeInstallPlan(
   } finally {
     if (fs_.existsSync(stagingRoot)) fs_.rmSync(stagingRoot, { recursive: true, force: true });
   }
+}
+
+export interface DownloadLimits {
+  readonly maxBytes: number;
+  readonly timeoutMs: number;
+  readonly maxRedirects: number;
+  readonly allowedHosts?: readonly string[];
+}
+
+export type DownloadResult =
+  | { readonly ok: true; readonly bytes: Uint8Array; readonly finalUrl: string }
+  | { readonly ok: false; readonly code: string; readonly message: string };
+
+/**
+ * Download an artifact. HTTPS only, optional host allowlist, bounded redirects,
+ * timeout, byte limit. Abort and temporary-file cleanup are handled by the
+ * caller via the injected fetch/signal.
+ */
+export async function downloadArtifact(
+  url: string,
+  limits: DownloadLimits,
+  deps: { fetchFn?: typeof fetch; signal?: AbortSignal } = {},
+): Promise<DownloadResult> {
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:") {
+    return { ok: false, code: "NON_HTTPS", message: "artifact URLs must use https" };
+  }
+  if (limits.allowedHosts && !limits.allowedHosts.includes(parsed.host)) {
+    return { ok: false, code: "HOST_NOT_ALLOWED", message: `host ${parsed.host} not in allowlist` };
+  }
+
+  const fetchFn = deps.fetchFn ?? globalThis.fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), limits.timeoutMs);
+  const abortHandler = () => controller.abort();
+  deps.signal?.addEventListener("abort", abortHandler, { once: true });
+
+  try {
+    let currentUrl = url;
+    let redirects = 0;
+    let response: Response | undefined;
+    for (;;) {
+      response = await fetchFn(currentUrl, {
+        method: "GET",
+        redirect: "manual",
+        signal: controller.signal,
+      });
+      if (response.status >= 300 && response.status < 400) {
+        redirects += 1;
+        if (redirects > limits.maxRedirects) {
+          return { ok: false, code: "TOO_MANY_REDIRECTS", message: `exceeded ${limits.maxRedirects} redirects` };
+        }
+        const location = response.headers.get("location");
+        if (!location) {
+          return { ok: false, code: "REDIRECT_NO_LOCATION", message: "redirect without location header" };
+        }
+        currentUrl = new URL(location, currentUrl).toString();
+        const next = new URL(currentUrl);
+        if (next.protocol !== "https:") {
+          return { ok: false, code: "NON_HTTPS", message: "redirect to non-https url" };
+        }
+        continue;
+      }
+      break;
+    }
+
+    if (!response || response.status >= 400) {
+      return { ok: false, code: "HTTP_ERROR", message: `request failed with ${response.status ?? "unknown"}` };
+    }
+
+    const contentLength = Number(response.headers.get("content-length") ?? 0);
+    if (contentLength > limits.maxBytes) {
+      return { ok: false, code: "TOO_LARGE", message: `content-length ${contentLength} exceeds limit` };
+    }
+
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > limits.maxBytes) {
+      return { ok: false, code: "TOO_LARGE", message: `body exceeds byte limit ${limits.maxBytes}` };
+    }
+    return { ok: true, bytes: new Uint8Array(buffer), finalUrl: currentUrl };
+  } catch (error) {
+    return {
+      ok: false,
+      code: "NETWORK_ERROR",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    clearTimeout(timer);
+    deps.signal?.removeEventListener("abort", abortHandler);
+  }
+}
+
+/** Verify a downloaded artifact against an expected SHA-256 (and optional signature). */
+export function verifyArtifact(
+  bytes: Uint8Array,
+  expectedSha256: string,
+): { ok: boolean; actual: string } {
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  return { ok: actual.toLowerCase() === expectedSha256.toLowerCase(), actual };
 }
