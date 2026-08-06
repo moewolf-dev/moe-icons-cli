@@ -35,8 +35,11 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   if (argv.includes("--version") || argv.includes("-v")) {
     return { command: { name: "version" }, json, yes };
   }
-  if (argv.includes("--help") || argv.includes("-h") || positional.length === 0) {
-    return { command: { name: positional.includes("help") ? "help" : "wizard" }, json, yes };
+  if (argv.includes("--help") || argv.includes("-h")) {
+    return { command: { name: "help" }, json, yes };
+  }
+  if (positional.length === 0) {
+    return { command: { name: "wizard" }, json, yes };
   }
 
   const name = positional[0];

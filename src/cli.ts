@@ -6,6 +6,7 @@ import { createInstallPlan, createArtifactZip, executeInstallPlan } from "./proj
 import { planGeneratedFiles } from "./generator/generate.js";
 import { join } from "node:path";
 import { mkdirSync, writeFileSync, existsSync, renameSync, rmSync } from "node:fs";
+import { select, confirm, CancelledError } from "./tui/primitives.js";
 
 /**
  * main(argv, runtime): parse args, select command/default wizard, catch typed
@@ -18,6 +19,9 @@ export interface CliRuntime {
   readonly stdout: (text: string) => void;
   readonly stderr: (text: string) => void;
   readonly env: Readonly<Record<string, string | undefined>>;
+  readonly isTTY: () => boolean;
+  readonly readLine: (prompt: string) => Promise<string>;
+  readonly readKey: () => Promise<string>;
 }
 
 export const BANNER = String.raw`
@@ -52,7 +56,7 @@ export async function main(
   }
 
   try {
-    return dispatchSync(parsed.command, runtime, parsed.json);
+    return await dispatchSync(parsed.command, runtime, parsed.json);
   } catch (error) {
     if (isCliError(error)) {
       runtime.stderr(`error: ${error.message}\n`);
@@ -63,7 +67,7 @@ export async function main(
   }
 }
 
-function dispatchSync(command: Command, runtime: CliRuntime, json: boolean): number {
+async function dispatchSync(command: Command, runtime: CliRuntime, json: boolean): Promise<number> {
   switch (command.name) {
     case "version":
       if (json) runtime.stdout(JSON.stringify({ version: versionString() }));
@@ -73,7 +77,7 @@ function dispatchSync(command: Command, runtime: CliRuntime, json: boolean): num
       runtime.stdout(HELP_TEXT);
       return 0;
     case "wizard":
-      return runWizard(runtime, json);
+      return await runWizard(runtime, json);
     case "install":
       return runInstall(command.group, runtime, json);
     case "login":
@@ -149,17 +153,49 @@ function versionString(): string {
 }
 
 /** Guided flow: Free / Pro / Login, with project-root confirmation before write. */
-function runWizard(runtime: CliRuntime, json: boolean): number {
+async function runWizard(runtime: CliRuntime, json: boolean): Promise<number> {
   renderBanner(runtime);
   if (json) {
     runtime.stdout(JSON.stringify({ ok: true, message: "interactive wizard unavailable in JSON mode; use install/login/account/groups/generate" }));
     return 0;
   }
-  runtime.stdout("Choose an option:\n");
-  runtime.stdout("  1) Install moeicons free\n");
-  runtime.stdout("  2) Install moeicons pro (API key)\n");
-  runtime.stdout("  3) Login\n");
-  runtime.stdout("\nInteractive prompts require a TTY; run a specific command with --json for noninteractive use.\n");
+
+  const tui = {
+    streams: {
+      isTTY: runtime.isTTY,
+      write: runtime.stdout,
+      readLine: runtime.readLine,
+      readKey: runtime.readKey,
+    },
+  };
+
+  let choice: string;
+  try {
+    choice = await select(tui, "Choose an option", {
+      choices: [
+        { value: "free", label: "Install moeicons free" },
+        { value: "pro", label: "Install moeicons pro (API key)" },
+        { value: "login", label: "Login" },
+      ],
+      canCancel: true,
+    });
+  } catch (error) {
+    if (error instanceof CancelledError) return 0;
+    throw error;
+  }
+
+  const project = detectProject(runtime.cwd());
+  if (!project) {
+    throw new CliError("VALIDATION_ERROR", "no package.json found in the current directory or parents; run inside a project");
+  }
+  const confirmed = await confirm(tui, `Install into ${project.root}?`, true);
+  if (!confirmed) return 0;
+
+  runtime.stdout(`Project root: ${project.root}\n`);
+  if (choice === "free") {
+    return runInstall("free", runtime, false);
+  }
+  runtime.stdout(`Flow "pro"/"login" requires backend endpoints (pending BE-02/BE-04).\n`);
   return 0;
 }
 
