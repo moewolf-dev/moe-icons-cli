@@ -28,3 +28,6 @@ token-store.json
 
 # Temporary install staging
 .tmp/
+
+# Generated test fixtures (written at test time)
+tests/.fixtures/
