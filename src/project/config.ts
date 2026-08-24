@@ -34,7 +34,7 @@ export type ConfigLoadResult =
   | { readonly kind: "missing" }
   | { readonly kind: "invalid"; readonly message: string }
   | { readonly kind: "unsupported"; readonly version: number }
-  | { readonly kind: "ok"; readonly config: MoeiconsConfigFile };
+  | { readonly kind: "ok"; readonly config: MoeiconsConfigFile; readonly warnings: readonly string[] };
 
 export const SUPPORTED_FILENAMES = [
   "moeicons.config.jsonc",
@@ -73,8 +73,30 @@ function flattenIcons(value: unknown): readonly string[] {
   return result;
 }
 
-function validateConfig(raw: unknown): MoeiconsConfigFile {
+const ALLOWED_TOP_LEVEL_KEYS = new Set([
+  "schemaVersion", "tier", "framework", "outputDir", "defaultTheme",
+  "themes", "icons", "missingIconPolicy",
+]);
+
+const ALLOWED_THEME_KEYS = new Set([
+  "styleGroup", "styles", "format", "imageSize", "defaultSize", "strokeWidth", "className",
+]);
+
+interface ValidatedConfig {
+  readonly config: MoeiconsConfigFile;
+  readonly warnings: string[];
+}
+
+function validateConfig(raw: unknown): ValidatedConfig {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("config must be an object");
+  const obj = raw as Record<string, unknown>;
+  const warnings: string[] = [];
+
+  // Reject unknown top-level fields (additionalProperties: false).
+  for (const key of Object.keys(obj)) {
+    if (!ALLOWED_TOP_LEVEL_KEYS.has(key)) throw new Error(`unknown config field "${key}"`);
+  }
+
   const config = raw as RawConfig;
   if (config.schemaVersion !== 1) throw new Error("schemaVersion must be 1");
   if (config.tier !== "free" && config.tier !== "pro") throw new Error("tier must be free or pro");
@@ -84,24 +106,53 @@ function validateConfig(raw: unknown): MoeiconsConfigFile {
   if (typeof config.themes !== "object" || config.themes === null || Array.isArray(config.themes)) {
     throw new Error("themes must be an object");
   }
+  if (config.missingIconPolicy !== undefined &&
+    config.missingIconPolicy !== "fallback" &&
+    config.missingIconPolicy !== "error") {
+    throw new Error(`missingIconPolicy must be "fallback" or "error"`);
+  }
+
   const themes: Record<string, MoeiconsThemeConfig> = {};
   for (const [name, value] of Object.entries(config.themes)) {
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`theme ${name} is invalid`);
-    const theme = value as unknown as Record<string, unknown>;
+    const theme = value as Record<string, unknown>;
+
+    // Reject unknown theme fields.
+    for (const key of Object.keys(theme)) {
+      if (!ALLOWED_THEME_KEYS.has(key)) throw new Error(`unknown field "${key}" in theme "${name}"`);
+    }
+
     if (typeof theme.styleGroup !== "string") throw new Error(`theme ${name}.styleGroup is required`);
     const group = findCatalogStyleGroup(theme.styleGroup);
     if (!group) throw new Error(`unknown style group "${theme.styleGroup}"`);
-    if (!group.tiers.includes(config.tier)) throw new Error(`style group "${group.id}" is not available in ${config.tier} tier`);
+    if (!group.tiers.includes(config.tier)) {
+      throw new Error(`style group "${group.id}" is not available in ${config.tier} tier`);
+    }
+
+    // styles[] is deprecated — still accepted for migration but warns.
+    if (Array.isArray(theme.styles) && theme.styles.length > 0) {
+      warnings.push(`theme "${name}": "styles" is deprecated and has no effect; remove it from your config`);
+    }
+
     const format = typeof theme.format === "string" ? theme.format : undefined;
-    if (format !== undefined && (format !== "svg" && format !== "webp" && format !== "png")) throw new Error(`theme ${name}.format is invalid`);
+    if (format !== undefined && (format !== "svg" && format !== "webp" && format !== "png")) {
+      throw new Error(`theme ${name}.format is invalid`);
+    }
     const imageSize = typeof theme.imageSize === "number" ? theme.imageSize : undefined;
-    if (imageSize !== undefined && ![64, 128, 256, 512].includes(imageSize)) throw new Error(`theme ${name}.imageSize is invalid`);
-    if (group.type !== "bitmap" && ((format !== undefined && format !== "svg") || imageSize !== undefined)) throw new Error(`SVG theme ${name} cannot define bitmap options`);
-    if (group.type === "bitmap" && format !== undefined && !group.formats.includes(format)) throw new Error(`format ${format} is unavailable for ${group.id}`);
-    if (group.type === "bitmap" && imageSize !== undefined && !group.imageSizes.includes(imageSize)) throw new Error(`imageSize ${imageSize} is unavailable for ${group.id}`);
+    if (imageSize !== undefined && ![64, 128, 256, 512].includes(imageSize)) {
+      throw new Error(`theme ${name}.imageSize is invalid`);
+    }
+    if (group.type !== "bitmap" && ((format !== undefined && format !== "svg") || imageSize !== undefined)) {
+      throw new Error(`SVG theme ${name} cannot define bitmap options`);
+    }
+    if (group.type === "bitmap" && format !== undefined && !group.formats.includes(format)) {
+      throw new Error(`format ${format} is unavailable for ${group.id}`);
+    }
+    if (group.type === "bitmap" && imageSize !== undefined && !group.imageSizes.includes(imageSize)) {
+      throw new Error(`imageSize ${imageSize} is unavailable for ${group.id}`);
+    }
     themes[name] = {
       styleGroup: theme.styleGroup,
-      ...(Array.isArray(theme.styles) && theme.styles.every((item) => typeof item === "string") ? { styles: theme.styles } : {}),
       ...(format !== undefined ? { format } : {}),
       ...(imageSize !== undefined ? { imageSize: imageSize as 64 | 128 | 256 | 512 } : {}),
       ...(typeof theme.defaultSize === "number" ? { defaultSize: theme.defaultSize } : {}),
@@ -113,14 +164,17 @@ function validateConfig(raw: unknown): MoeiconsConfigFile {
   const icons = flattenIcons(config.icons);
   for (const iconId of icons) if (!findCatalogIcon(iconId)) throw new Error(`unknown icon "${iconId}"`);
   return {
-    schemaVersion: 1,
-    tier: config.tier,
-    framework: config.framework,
-    outputDir: config.outputDir,
-    defaultTheme: config.defaultTheme,
-    themes,
-    icons,
-    ...(config.missingIconPolicy !== undefined ? { missingIconPolicy: config.missingIconPolicy } : {}),
+    config: {
+      schemaVersion: 1,
+      tier: config.tier,
+      framework: config.framework,
+      outputDir: config.outputDir,
+      defaultTheme: config.defaultTheme,
+      themes,
+      icons,
+      ...(config.missingIconPolicy !== undefined ? { missingIconPolicy: config.missingIconPolicy } : {}),
+    },
+    warnings,
   };
 }
 
@@ -137,7 +191,8 @@ export function readMoeiconsConfig(root: string): ConfigLoadResult {
     : undefined;
   if (typeof version === "number" && version !== 1) return { kind: "unsupported", version };
   try {
-    return { kind: "ok", config: validateConfig(parsed.value) };
+    const validated = validateConfig(parsed.value);
+    return { kind: "ok", config: validated.config, warnings: validated.warnings };
   } catch (error) {
     return { kind: "invalid", message: error instanceof Error ? error.message : String(error) };
   }
@@ -178,9 +233,50 @@ export function renderMoeiconsConfigJsonc(options: {
   framework: "react" | "vue";
   tier?: "free" | "pro";
 }): string {
-  const config = createMoeiconsConfig(options);
+  const tier = options.tier ?? "free";
+  const framework = options.framework;
+
+  // Collect style groups available for this tier, ordered by id.
+  const availableGroups = catalog.styleGroups
+    .filter((g) => g.tiers.includes(tier))
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  const defaultThemeName = "outline";
+
+  // Build theme entries: one per available SVG group (bitmap groups get their
+  // own entry with format/imageSize annotations).
+  const themeLines: string[] = [];
+  for (const group of availableGroups) {
+    const themeName = group.id.replace(/^moe-/, "");
+    if (group.type === "bitmap") {
+      // List available format/imageSize combinations as inline comments.
+      const formatsComment = `// format options: ${group.formats.join(", ")}`;
+      const sizesComment = `// imageSize options: ${group.imageSizes.join(", ")}`;
+      themeLines.push(
+        `    // ${themeName} — bitmap style (${group.id})`,
+        `    // ${formatsComment}`,
+        `    // ${sizesComment}`,
+        `    // ${JSON.stringify(themeName)}: {`,
+        `    //   "styleGroup": ${JSON.stringify(group.id)},`,
+        `    //   "format": "webp",`,
+        `    //   "imageSize": 256`,
+        `    // },`,
+      );
+    } else {
+      themeLines.push(
+        `    ${JSON.stringify(themeName)}: {`,
+        `      "styleGroup": ${JSON.stringify(group.id)}`,
+        `    },`,
+      );
+    }
+  }
+
+  // Collect icons: only those available in at least one style group of this tier,
+  // grouped by prefix and default-selected (all selected).
+  const tierGroupIds = new Set(availableGroups.map((g) => g.id));
   const groups = new Map<string, string[]>();
   for (const icon of catalog.icons) {
+    if (!icon.availableIn.some((sg) => tierGroupIds.has(sg))) continue;
     const ids = groups.get(icon.prefix) ?? [];
     ids.push(icon.id);
     groups.set(icon.prefix, ids);
@@ -191,18 +287,17 @@ export function renderMoeiconsConfigJsonc(options: {
     ...ids.map((id) => `      ${JSON.stringify(id)},`),
     "    ],",
   ]);
+
   return [
     "{",
-    `  "schemaVersion": ${config.schemaVersion},`,
-    `  "tier": ${JSON.stringify(config.tier)},`,
-    `  "framework": ${JSON.stringify(config.framework)},`,
-    `  "outputDir": ${JSON.stringify(config.outputDir)},`,
-    `  "defaultTheme": ${JSON.stringify(config.defaultTheme)},`,
+    `  "schemaVersion": 1,`,
+    `  "tier": ${JSON.stringify(tier)},`,
+    `  "framework": ${JSON.stringify(framework)},`,
+    `  "outputDir": "src/moeicons",`,
+    `  "defaultTheme": ${JSON.stringify(defaultThemeName)},`,
     "  \"themes\": {",
-    "    \"outline\": {",
-    "      \"styleGroup\": \"moe-outline\",",
-    "      \"format\": \"svg\"",
-    "    }",
+    ...themeLines,
+    `    // Set defaultTheme above to one of: ${availableGroups.filter(g => g.type !== "bitmap").map(g => JSON.stringify(g.id.replace(/^moe-/, ""))).join(", ")}`,
     "  },",
     "  // Comment out individual IDs or a complete prefix group to exclude it.",
     "  \"icons\": {",

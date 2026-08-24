@@ -19,7 +19,7 @@ const vueConfig: MoeiconsConfigFile = {
   outputDir: "src/moeicons",
   defaultTheme: "outline",
   themes: { outline: { styleGroup: "moe-outline", styles: ["outline"] }, solid: { styleGroup: "moe-solid", styles: ["fill"] } },
-  icons: ["arrow-chevron-right"],
+  icons: ["arrow-bold-right"],
   missingIconPolicy: "fallback",
 };
 
@@ -42,12 +42,30 @@ describe("CLI-14 Vue DOM switch (rendered)", () => {
       mkdirSync(moduleDir, { recursive: true });
       writeFileSync(
         join(moduleDir, "index.js"),
-        `import { h } from "vue"; export const arrowChevronRight = (props) => h("svg", { ...props, "data-moeicon": "arrow-chevron-right", "data-theme": "${group === "moe-outline" ? "outline" : "solid"}" });\n`,
+        `import { h } from "vue"; export const arrowBoldRight = (props) => h("svg", { ...props, "data-moeicon": "arrow-bold-right", "data-theme": "${group === "moe-outline" ? "outline" : "solid"}" });\n`,
       );
     }
     writeFileSync(
       join(FIXTURE, "node_modules", "moe-icons", "package.json"),
       JSON.stringify({ name: "moe-icons", type: "module", exports: { "./free/vue/*": "./free/vue/*/index.js" } }),
+    );
+    mkdirSync(join(FIXTURE, "node_modules", "clsx"), { recursive: true });
+    writeFileSync(
+      join(FIXTURE, "node_modules", "clsx", "package.json"),
+      JSON.stringify({ name: "clsx", type: "module", main: "index.js" }),
+    );
+    writeFileSync(
+      join(FIXTURE, "node_modules", "clsx", "index.js"),
+      `export function clsx(...args) { return args.flat().filter(Boolean).join(" "); }\n`,
+    );
+    mkdirSync(join(FIXTURE, "node_modules", "tailwind-merge"), { recursive: true });
+    writeFileSync(
+      join(FIXTURE, "node_modules", "tailwind-merge", "package.json"),
+      JSON.stringify({ name: "tailwind-merge", type: "module", main: "index.js" }),
+    );
+    writeFileSync(
+      join(FIXTURE, "node_modules", "tailwind-merge", "index.js"),
+      `export function twMerge(...args) { return args.filter(Boolean).join(" "); }\n`,
     );
   });
   afterEach(() => {
@@ -57,23 +75,23 @@ describe("CLI-14 Vue DOM switch (rendered)", () => {
   it("imports the generated Vue tree and renders the icon with the provided theme", async () => {
     const { createSSRApp, h } = require_("vue");
     const { renderToString } = require_("@vue/server-renderer");
-    const { MoeiconsProvider, ArrowChevronRight } = await import(
+    const { MoeiconsProvider, ArrowBoldRight } = await import(
       `${FIXTURE}/src/moeicons/index.ts`
     );
 
     const app = createSSRApp({
       render: () =>
-        h(MoeiconsProvider, { theme: "outline" }, () => h(ArrowChevronRight)),
+        h(MoeiconsProvider, { theme: "outline" }, () => h(ArrowBoldRight)),
     });
     const html = await renderToString(app);
-    expect(html).toContain("data-moeicon=\"arrow-chevron-right\"");
+    expect(html).toContain("data-moeicon=\"arrow-bold-right\"");
     expect(html).toContain("data-theme=\"outline\"");
   });
 
   it("theme changes propagate to the icon DOM (reactive switch, no remount)", async () => {
     const { createSSRApp, h, defineComponent } = require_("vue");
     const { renderToString } = require_("@vue/server-renderer");
-    const { MoeiconsProvider, ArrowChevronRight, useMoeiconsTheme } = await import(
+    const { MoeiconsProvider, ArrowBoldRight, useMoeiconsTheme } = await import(
       `${FIXTURE}/src/moeicons/index.ts`
     );
 
@@ -82,7 +100,7 @@ describe("CLI-14 Vue DOM switch (rendered)", () => {
       setup(props: { theme: string }) {
         const state = useMoeiconsTheme();
         state.setTheme(props.theme);
-        return () => h(ArrowChevronRight);
+        return () => h(ArrowBoldRight);
       },
       props: { theme: { type: String, required: true } },
     });
@@ -104,13 +122,13 @@ describe("CLI-14 Vue DOM switch (rendered)", () => {
   it("outside the provider the icon falls back to the configured default theme", async () => {
     const { createSSRApp, h } = require_("vue");
     const { renderToString } = require_("@vue/server-renderer");
-    const { ArrowChevronRight } = await import(
+    const { ArrowBoldRight } = await import(
       `${FIXTURE}/src/moeicons/index.ts`
     );
 
-    const app = createSSRApp({ render: () => h(ArrowChevronRight) });
+    const app = createSSRApp({ render: () => h(ArrowBoldRight) });
     const html = await renderToString(app);
     expect(html).toContain("data-theme=\"outline\"");
-    expect(html).toContain("data-moeicon=\"arrow-chevron-right\"");
+    expect(html).toContain("data-moeicon=\"arrow-bold-right\"");
   });
 });

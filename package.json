@@ -17,6 +17,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "generate-banner": "node scripts/generate-banner.mjs",
     "build": "tsc -p tsconfig.build.json && node scripts/copy-catalog.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src --ext .ts",
@@ -31,6 +32,7 @@
     "@vue/test-utils": "^2.4.11",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
+    "figlet": "^1.11.4",
     "happy-dom": "^20.11.1",
     "prettier": "^3.2.0",
     "typescript": "^5.5.0",
@@ -38,6 +40,8 @@
     "vue": "^3.5.41"
   },
   "dependencies": {
+    "@clack/prompts": "^0.10.1",
+    "commander": "^12.1.0",
     "fflate": "^0.8.2",
     "jsonc-parser": "^3.3.1"
   }

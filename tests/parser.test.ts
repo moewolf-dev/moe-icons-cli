@@ -43,6 +43,26 @@ describe("parseArgs", () => {
 
   it("rejects unknown commands as validation errors", () => {
     expect(() => parseArgs(["frobnicate"])).toThrow(CliError);
+    try {
+      parseArgs(["frobnicate"]);
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliError);
+      expect((error as CliError).message).toBe("unknown command: frobnicate");
+    }
+  });
+
+  it("does not call process.exit while parsing", () => {
+    const exit = process.exit;
+    process.exit = ((code?: number) => {
+      throw new Error(`process.exit(${String(code)}) must not be called by commander`);
+    }) as typeof process.exit;
+    try {
+      expect(parseArgs(["--help"]).command.name).toBe("help");
+      expect(parseArgs(["install", "free"]).command).toEqual({ name: "install", group: "free" });
+      expect(() => parseArgs(["nope"])).toThrow(CliError);
+    } finally {
+      process.exit = exit;
+    }
   });
 });
 
@@ -73,6 +93,7 @@ describe("main", () => {
     expect(new CliError("AUTH_ERROR", "x").exitCode).toBe(2);
     expect(new CliError("NETWORK_ERROR", "x").exitCode).toBe(3);
     expect(new CliError("CANCELLED", "x").exitCode).toBe(0);
+    expect(new CliError("TAILWIND_VERSION_UNSUPPORTED", "x").exitCode).toBe(1);
   });
 
   it("returns 0 for mcp (server started in background)", async () => {

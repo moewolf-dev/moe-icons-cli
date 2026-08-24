@@ -75,9 +75,18 @@ describe("confirm", () => {
     expect(await confirm({ streams }, "Sure?", false)).toBe(false);
   });
 
-  it("returns default without a TTY", async () => {
+  it("skips the prompt when --yes is set", async () => {
+    const { streams } = makeStreams({ isTTY: () => false, readLine: async () => {
+      throw new Error("confirm must not prompt when --yes is set");
+    } });
+    expect(await confirm({ streams, yes: true }, "Sure?", false)).toBe(true);
+  });
+
+  it("rejects non-TTY confirmation unless --yes is set", async () => {
     const { streams } = makeStreams({ isTTY: () => false });
-    expect(await confirm({ streams }, "Sure?", true)).toBe(true);
+    await expect(confirm({ streams }, "Sure?", true)).rejects.toMatchObject({
+      code: "NOT_TTY",
+    });
   });
 });
 

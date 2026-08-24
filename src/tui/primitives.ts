@@ -16,6 +16,8 @@ export interface TuiStreams {
 export interface TuiDeps {
   readonly streams: TuiStreams;
   readonly signal?: AbortSignal;
+  /** `--yes`: skip confirmations without prompting. */
+  readonly yes?: boolean;
 }
 
 export type Choice<T> = { readonly value: T; readonly label: string };
@@ -67,11 +69,12 @@ export async function select<T>(deps: TuiDeps, prompt: string, options: SelectOp
   }
 }
 
-/** Yes/no confirmation; default from options. */
+/** Yes/no confirmation; default from options. `--yes` skips the prompt. */
 export async function confirm(deps: TuiDeps, prompt: string, defaultValue: boolean): Promise<boolean> {
   assertNotAborted(deps);
+  if (deps.yes) return true;
   if (!deps.streams.isTTY()) {
-    return defaultValue;
+    throw new CliError("NOT_TTY", "confirmation requires a TTY; pass --yes to skip");
   }
   for (;;) {
     const line = (await deps.streams.readLine(`${prompt} [y/N] `)).trim().toLowerCase();

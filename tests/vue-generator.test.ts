@@ -8,8 +8,8 @@ const vueConfig: MoeiconsConfigFile = {
   framework: "vue",
   outputDir: "src/moeicons",
   defaultTheme: "outline",
-  themes: { outline: { styleGroup: "moe-outline", styles: ["outline"] }, solid: { styleGroup: "moe-solid", styles: ["fill"] } },
-  icons: ["arrow-chevron-right", "user-circle"],
+  themes: { outline: { styleGroup: "moe-outline" }, solid: { styleGroup: "moe-solid" } },
+  icons: ["arrow-bold-right", "user-account-circle"],
   missingIconPolicy: "fallback",
 };
 
@@ -24,8 +24,8 @@ describe("planGeneratedFiles (Vue)", () => {
     expect(paths).toContain("src/moeicons/registry.ts");
     expect(paths).toContain("src/moeicons/provider.ts");
     expect(paths).toContain("src/moeicons/composable.ts");
-    expect(paths).toContain("src/moeicons/icons/ArrowChevronRight.ts");
-    expect(paths).toContain("src/moeicons/icons/UserCircle.ts");
+    expect(paths).toContain("src/moeicons/icons/ArrowBoldRight.ts");
+    expect(paths).toContain("src/moeicons/icons/UserAccountCircle.ts");
     expect(paths).toContain("src/moeicons/index.ts");
     // React artifacts must not appear for Vue configs
     expect(paths.some((p) => p.endsWith(".tsx"))).toBe(false);
@@ -42,7 +42,7 @@ describe("planGeneratedFiles (Vue)", () => {
     const theme = result.files.find((f) => f.path.endsWith("theme.ts"))?.content ?? "";
     expect(provider).toContain("MoeiconsProvider");
     expect(provider).toContain("provide");
-    expect(provider).toContain("ref<string>");
+    expect(provider).toContain("ref<Theme>");
     expect(composable).toContain("useMoeiconsTheme");
     expect(composable).toContain("inject");
     expect(theme).toContain("MOEICONS_THEME_KEY");
@@ -53,7 +53,7 @@ describe("planGeneratedFiles (Vue)", () => {
     const result = planGeneratedFiles(vueConfig, "src/moeicons");
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const proxy = result.files.find((f) => f.path.endsWith("icons/ArrowChevronRight.ts"))?.content ?? "";
+    const proxy = result.files.find((f) => f.path.endsWith("icons/ArrowBoldRight.ts"))?.content ?? "";
     expect(proxy).toContain("defineComponent");
     expect(proxy).toContain("inject");
     expect(proxy).toContain("computed");
@@ -67,7 +67,7 @@ describe("planGeneratedFiles (Vue)", () => {
     if (!result.ok) return;
     const registry = result.files.find((f) => f.path.endsWith("registry.ts"))?.content ?? "";
     expect(registry).toContain('import type { Component } from "vue"');
-    expect(registry).toContain("readonly ArrowChevronRight: Component");
+    expect(registry).toContain("readonly ArrowBoldRight: Component");
     expect(registry).toContain('"outline"');
     expect(registry).toContain('"solid"');
   });
@@ -76,9 +76,9 @@ describe("planGeneratedFiles (Vue)", () => {
     const result = planGeneratedFiles(vueConfig, "src/moeicons");
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const proxy = result.files.find((f) => f.path.endsWith("icons/ArrowChevronRight.ts"))?.content ?? "";
-    expect(proxy).toContain("ArrowChevronRight");
-    expect(toPascalCase("arrow-chevron-right")).toBe("ArrowChevronRight");
+    const proxy = result.files.find((f) => f.path.endsWith("icons/ArrowBoldRight.ts"))?.content ?? "";
+    expect(proxy).toContain("ArrowBoldRight");
+    expect(toPascalCase("arrow-bold-right")).toBe("ArrowBoldRight");
   });
 
   it("writes generated Vue files deterministically", async () => {

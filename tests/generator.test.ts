@@ -8,8 +8,8 @@ const config: MoeiconsConfigFile = {
   framework: "react",
   outputDir: "src/moeicons",
   defaultTheme: "outline",
-  themes: { outline: { styleGroup: "moe-outline", styles: ["outline"] }, solid: { styleGroup: "moe-solid", styles: ["fill"] } },
-  icons: ["arrow-chevron-right", "user-circle"],
+  themes: { outline: { styleGroup: "moe-outline" }, solid: { styleGroup: "moe-solid" } },
+  icons: ["arrow-bold-right", "user-account-circle"],
   missingIconPolicy: "fallback",
 };
 
@@ -27,12 +27,44 @@ describe("planGeneratedFiles", () => {
       const paths = result.files.map((f) => f.path);
       expect(paths).toContain("src/moeicons/types.ts");
       expect(paths).toContain("src/moeicons/registry.ts");
-      expect(paths).toContain("src/moeicons/icons/ArrowChevronRight.tsx");
-      expect(paths).toContain("src/moeicons/icons/UserCircle.tsx");
+      expect(paths).toContain("src/moeicons/icons/ArrowBoldRight.tsx");
+      expect(paths).toContain("src/moeicons/icons/UserAccountCircle.tsx");
       expect(paths).toContain("src/moeicons/index.ts");
       const registry = result.files.find((f) => f.path.endsWith("registry.ts"))?.content;
-      expect(registry).toContain("ArrowChevronRight");
-      expect(registry).toContain("UserCircle");
+      expect(registry).toContain("ArrowBoldRight");
+      expect(registry).toContain("UserAccountCircle");
+      expect(registry).toContain(
+        'import { arrowBoldRight as OutlineMoeOutlineArrowBoldRight } from "moe-icons/free/react/moe-outline";',
+      );
+      expect(paths).toContain("src/moeicons/cn.ts");
+      const proxy = result.files.find((f) => f.path.endsWith("icons/ArrowBoldRight.tsx"))?.content;
+      expect(proxy).toContain('cn("moe-icon"');
+    }
+  });
+
+  it("rejects icons that are not available in every configured theme", () => {
+    const unavailable: MoeiconsConfigFile = {
+      ...config,
+      icons: ["arrow-chevron-right"],
+    };
+    const result = planGeneratedFiles(unavailable, "src/moeicons");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((error) => error.includes('icon "arrow-chevron-right"'))).toBe(true);
+      expect(result.errors.some((error) => error.includes('style group "moe-outline"'))).toBe(true);
+    }
+  });
+
+  it("rejects colliding proxy names that only meet after reserved-word prefixing", () => {
+    const dup: MoeiconsConfigFile = {
+      ...config,
+      icons: ["class", "icon-class"],
+    };
+    const result = planGeneratedFiles(dup, "src/moeicons");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((error) => error.includes("duplicate PascalCase"))).toBe(true);
+      expect(result.errors.some((error) => error.includes("duplicate library export"))).toBe(true);
     }
   });
 

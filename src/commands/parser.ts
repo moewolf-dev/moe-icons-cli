@@ -1,3 +1,4 @@
+import { Command as Commander, CommanderError } from "commander";
 import { CliError } from "../errors/index.js";
 
 export type Command =
@@ -17,62 +18,112 @@ export interface ParseResult {
   readonly command: Command;
   /** Non-interactive/JSON mode flag. */
   readonly json: boolean;
-  /** --yes: skip confirmations in noninteractive mode. */
   readonly yes: boolean;
+  /** Skip Tailwind config auto-integration (H4). */
+  readonly noTailwind: boolean;
 }
 
+const SIMPLE_COMMANDS = [
+  "login",
+  "logout",
+  "account",
+  "groups",
+  "generate",
+  "init",
+  "mcp",
+  "help",
+] as const;
+
+function addSharedOptions(command: Commander): Commander {
+  return command
+    .allowUnknownOption(true)
+    .allowExcessArguments(true)
+    .helpOption(false)
+    .option("-h, --help")
+    .option("-v, --showVersion")
+    .option("--version")
+    .option("--json")
+    .option("--yes")
+    .option("--no-tailwind")
+    .option("--pro")
+    .option("--ent");
+}
+
+function createProgram(onSelect: (command: Command) => void): Commander {
+  const program = addSharedOptions(new Commander());
+  program
+    .name("moeicons")
+    .exitOverride()
+    .addHelpCommand(false)
+    .showHelpAfterError(false)
+    .enablePositionalOptions()
+    .configureOutput({
+      writeOut: () => undefined,
+      writeErr: () => undefined,
+    })
+    .action(() => {
+      onSelect({ name: "wizard" });
+    });
+
+  addSharedOptions(program.command("install").argument("[group]")).action((group?: string) => {
+    onSelect(group ? { name: "install", group } : { name: "install" });
+  });
+  for (const name of SIMPLE_COMMANDS) {
+    addSharedOptions(program.command(name)).action(() => {
+      onSelect({ name });
+    });
+  }
+  return program;
+}
+
+function toCliError(error: unknown): never {
+  if (error instanceof CommanderError && error.code === "commander.unknownCommand") {
+    const match = /unknown command ['`]?([^'`\s]+)/.exec(error.message);
+    throw new CliError("VALIDATION_ERROR", `unknown command: ${match?.[1] ?? "unknown"}`);
+  }
+  if (error instanceof CommanderError && (error.code === "commander.help" || error.code === "commander.helpDisplayed")) {
+    throw new CliError("VALIDATION_ERROR", error.message);
+  }
+  throw error;
+}
+
+const KNOWN_COMMANDS = new Set<string>(["install", ...SIMPLE_COMMANDS]);
+
 /**
- * Parse argv into a Command. Unknown options/commands are validation errors.
- * `moeicons --pro` / `--ent` / `--license-key` legacy aliases map to install
- * for the compatibility window (CLI-18).
+ * Parse argv into a Command via Commander. Never calls `process.exit()`.
+ * `moeicons --pro` / `--ent` legacy aliases map to install for the compatibility window.
  */
 export function parseArgs(argv: readonly string[]): ParseResult {
   const json = argv.includes("--json");
   const yes = argv.includes("--yes");
+  const noTailwind = argv.includes("--no-tailwind");
+  const version = argv.includes("--version") || argv.includes("-v");
+  const help = argv.includes("--help") || argv.includes("-h");
+  const pro = argv.includes("--pro");
+  const ent = argv.includes("--ent");
 
-  const positional = argv.filter((a) => !a.startsWith("-"));
+  // Preserve previous flag precedence: version/help/legacy aliases beat subcommands.
+  if (version) return { command: { name: "version" }, json, yes, noTailwind };
+  if (help) return { command: { name: "help" }, json, yes, noTailwind };
+  if (pro) return { command: { name: "install", group: "pro" }, json, yes, noTailwind };
+  if (ent) return { command: { name: "install", group: "ent" }, json, yes, noTailwind };
 
-  if (argv.includes("--version") || argv.includes("-v")) {
-    return { command: { name: "version" }, json, yes };
-  }
-  if (argv.includes("--help") || argv.includes("-h")) {
-    return { command: { name: "help" }, json, yes };
-  }
-  if (positional.length === 0) {
-    return { command: { name: "wizard" }, json, yes };
-  }
-
-  const name = positional[0];
-  if (!name) {
-    throw new CliError("VALIDATION_ERROR", "no command provided");
+  const positional = argv.filter((arg) => !arg.startsWith("-"));
+  const first = positional[0];
+  if (first !== undefined && !KNOWN_COMMANDS.has(first)) {
+    throw new CliError("VALIDATION_ERROR", `unknown command: ${first}`);
   }
 
-  switch (name) {
-    case "install":
-      return { command: positional[1] ? { name: "install", group: positional[1] } : { name: "install" }, json, yes };
-    case "login":
-      return { command: { name: "login" }, json, yes };
-    case "logout":
-      return { command: { name: "logout" }, json, yes };
-    case "account":
-      return { command: { name: "account" }, json, yes };
-    case "groups":
-      return { command: { name: "groups" }, json, yes };
-    case "generate":
-      return { command: { name: "generate" }, json, yes };
-    case "init":
-      return { command: { name: "init" }, json, yes };
-    case "mcp":
-      return { command: { name: "mcp" }, json, yes };
-    case "help":
-      return { command: { name: "help" }, json, yes };
-    // legacy compatibility aliases (migration window)
-    case "--pro":
-    case "--ent":
-      return { command: { name: "install", group: name.slice(2) }, json, yes };
-    default:
-      throw new CliError("VALIDATION_ERROR", `unknown command: ${name}`);
+  let selected: Command | undefined;
+  try {
+    createProgram((command) => {
+      selected = command;
+    }).parse([...argv], { from: "user" });
+  } catch (error) {
+    toCliError(error);
   }
+
+  return { command: selected ?? { name: "wizard" }, json, yes, noTailwind };
 }
 
 export const HELP_TEXT = `moeicons — Moeicons icon library CLI
@@ -91,6 +142,7 @@ Usage:
   moeicons --help               show help
 
 Options:
-  --json    machine-readable JSON output
-  --yes     skip confirmations in noninteractive mode
+  --json         machine-readable JSON output
+  --yes          skip confirmations in noninteractive mode
+  --no-tailwind  skip Tailwind config auto-integration
 `;
