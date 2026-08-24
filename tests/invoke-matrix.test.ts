@@ -43,10 +43,12 @@ afterEach(() => {
 
 describe("CLI-16 packed-tarball invocation matrix", () => {
   it("npm pack produces a tarball the npm install step can consume", () => {
-    const output = run("npm pack --pack-destination . 2>/dev/null");
+    const packDir = mkdtempSync(join(tmpdir(), "moeicons-pack-"));
+    const output = run(`npm pack --pack-destination "${packDir}" 2>/dev/null`);
     const tarball = output.trim().split("\n").pop() ?? "";
     expect(tarball).toMatch(/\.tgz$/);
-    rmSync(join(cwd, tarball), { force: true });
+    expect(existsSync(join(packDir, tarball))).toBe(true);
+    rmSync(packDir, { recursive: true, force: true });
   });
 
   it("npm install of the tarball then invokes moeicons --version without modifying a real project", () => {

@@ -21,14 +21,13 @@ afterEach(() => {
 
 describe("npm pack inspection", () => {
   it("produces a tarball whose contents are the intended files", () => {
-    const cwd = process.cwd();
-    const output = execSync("npm pack --pack-destination . 2>/dev/null", {
-      cwd,
+    const output = execSync(`npm pack --pack-destination "${dir}" 2>/dev/null`, {
+      cwd: process.cwd(),
       encoding: "utf8",
     });
     const tarball = output.trim().split("\n").pop();
     expect(tarball).toMatch(/\.tgz$/);
-    const tarPath = join(cwd, tarball ?? "");
+    const tarPath = join(dir, tarball ?? "");
     expect(existsSync(tarPath)).toBe(true);
     try {
       const listing = execSync(`tar -tzf "${tarPath}"`, { encoding: "utf8" });
