@@ -4,10 +4,11 @@ import type { MoeiconsConfigFile } from "../src/project/config.js";
 
 const vueConfig: MoeiconsConfigFile = {
   schemaVersion: 1,
+  tier: "free",
   framework: "vue",
   outputDir: "src/moeicons",
   defaultTheme: "outline",
-  themes: { outline: { styles: ["outline"] }, solid: { styles: ["fill"] } },
+  themes: { outline: { styleGroup: "moe-outline", styles: ["outline"] }, solid: { styleGroup: "moe-solid", styles: ["fill"] } },
   icons: ["arrow-chevron-right", "user-circle"],
   missingIconPolicy: "fallback",
 };
@@ -55,8 +56,9 @@ describe("planGeneratedFiles (Vue)", () => {
     const proxy = result.files.find((f) => f.path.endsWith("icons/ArrowChevronRight.ts"))?.content ?? "";
     expect(proxy).toContain("defineComponent");
     expect(proxy).toContain("inject");
-    expect(proxy).toContain('"data-moeicon": "arrow-chevron-right"');
-    expect(proxy).toContain("state.theme.value");
+    expect(proxy).toContain("computed");
+    expect(proxy).toContain("registry[");
+    expect(proxy).toContain("state?.theme.value");
   });
 
   it("generates a registry typed with Vue Component", () => {
@@ -75,7 +77,7 @@ describe("planGeneratedFiles (Vue)", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const proxy = result.files.find((f) => f.path.endsWith("icons/ArrowChevronRight.ts"))?.content ?? "";
-    expect(proxy).toContain('"arrow-chevron-right"');
+    expect(proxy).toContain("ArrowChevronRight");
     expect(toPascalCase("arrow-chevron-right")).toBe("ArrowChevronRight");
   });
 

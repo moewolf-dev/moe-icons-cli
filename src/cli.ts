@@ -1,12 +1,14 @@
 import { parseArgs, HELP_TEXT, type Command } from "./commands/parser.js";
 import { CliError, isCliError } from "./errors/index.js";
 import { detectProject } from "./project/detect.js";
-import { readMoeiconsConfig, createMoeiconsConfig } from "./project/config.js";
+import { readMoeiconsConfig } from "./project/config.js";
 import { createInstallPlan, createArtifactZip, executeInstallPlan } from "./project/install.js";
-import { planGeneratedFiles } from "./generator/generate.js";
 import { join } from "node:path";
 import { mkdirSync, writeFileSync, existsSync, renameSync, rmSync } from "node:fs";
 import { select, confirm, CancelledError } from "./tui/primitives.js";
+import { runInitUseCase } from "./core/init.js";
+import { runGenerateUseCase } from "./core/generate.js";
+import type { CommandContext } from "./core/context.js";
 
 /**
  * main(argv, runtime): parse args, select command/default wizard, catch typed
@@ -22,6 +24,17 @@ export interface CliRuntime {
   readonly isTTY: () => boolean;
   readonly readLine: (prompt: string) => Promise<string>;
   readonly readKey: () => Promise<string>;
+}
+
+function commandContext(runtime: CliRuntime): CommandContext {
+  const unsupported = (): Promise<never> => Promise.reject(new Error("interactive UI is not available for this command"));
+  return {
+    ui: { select: unsupported, confirm: unsupported, text: unsupported, note: () => undefined },
+    cwd: runtime.cwd(),
+    env: runtime.env,
+    signal: new AbortController().signal,
+    now: () => new Date(),
+  };
 }
 
 export const BANNER = String.raw`
@@ -81,17 +94,13 @@ async function dispatchSync(command: Command, runtime: CliRuntime, json: boolean
     case "install":
       return runInstall(command.group, runtime, json);
     case "login":
-      runtime.stdout(json ? JSON.stringify({ ok: true, message: "login flow placeholder" }) : "Login flow pending backend endpoints.\n");
-      return 0;
+      throw new CliError("NOT_IMPLEMENTED", "login is not implemented yet");
     case "logout":
-      runtime.stdout(json ? JSON.stringify({ ok: true }) : "Logged out (no session stored).\n");
-      return 0;
+      throw new CliError("NOT_IMPLEMENTED", "logout is not implemented yet");
     case "account":
-      runtime.stdout(json ? JSON.stringify({ ok: true, tier: "unknown" }) : "Account info pending backend endpoints.\n");
-      return 0;
+      throw new CliError("NOT_IMPLEMENTED", "account is not implemented yet");
     case "groups":
-      runtime.stdout(json ? JSON.stringify({ ok: true, groups: [] }) : "No groups available yet.\n");
-      return 0;
+      throw new CliError("NOT_IMPLEMENTED", "groups is not implemented yet");
     case "generate":
       return runGenerate(runtime, json);
     case "init":
@@ -102,29 +111,20 @@ async function dispatchSync(command: Command, runtime: CliRuntime, json: boolean
   }
 }
 
-/** Create moeicons.config.json if absent (never overwrites an existing config). */
+/** Create moeicons.config.jsonc if absent (never overwrites an existing config). */
 function runInit(runtime: CliRuntime, json: boolean): number {
-  const cwd = runtime.cwd();
-  const project = detectProject(cwd);
-  if (!project) {
-    throw new CliError("VALIDATION_ERROR", "no project found");
-  }
-  const existing = readMoeiconsConfig(project.root);
-  if (existing.kind === "ok") {
+  const result = runInitUseCase(commandContext(runtime), { mkdirSync, writeFileSync, existsSync, renameSync, rmSync });
+  if (!result.ok && result.reason === "exists") {
     if (json) runtime.stdout(JSON.stringify({ ok: false, error: "config already exists" }));
-    else runtime.stdout("moeicons.config.json already exists; not overwritten.\n");
+    else runtime.stdout("moeicons.config.jsonc already exists; not overwritten.\n");
     return 0;
   }
-  const config = createMoeiconsConfig({ framework: "react" });
-  const target = join(project.root, "moeicons.config.json");
-  try {
-    writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`);
-  } catch (error) {
-    runtime.stderr(`init failed: ${String(error)}\n`);
+  if (!result.ok) {
+    runtime.stderr(`${result.reason === "no-project" ? "no project found" : "init failed"}\n`);
     return 1;
   }
-  if (json) runtime.stdout(JSON.stringify({ ok: true, created: target }));
-  else runtime.stdout(`Created ${target}\n`);
+  if (json) runtime.stdout(JSON.stringify({ ok: true, created: result.created }));
+  else runtime.stdout(`Created ${result.created}\n`);
   return 0;
 }
 
@@ -252,43 +252,13 @@ function runInstall(group: string | undefined, runtime: CliRuntime, json: boolea
 
 /** Generate proxy components from config. */
 function runGenerate(runtime: CliRuntime, json: boolean): number {
-  const cwd = runtime.cwd();
-  const project = detectProject(cwd);
-  if (!project) {
-    throw new CliError("VALIDATION_ERROR", "no project found");
-  }
-  const config = readMoeiconsConfig(project.root);
-  if (config.kind !== "ok") {
-    if (json) {
-      runtime.stdout(JSON.stringify({ ok: false, error: `config state: ${config.kind}` }));
-    } else {
-      runtime.stderr(`config state: ${config.kind}; run \`moeicons init\` or add moeicons.config.json\n`);
-    }
+  const result = runGenerateUseCase(commandContext(runtime), { mkdirSync, writeFileSync, existsSync, renameSync, rmSync });
+  if (!result.ok) {
+    if (json) runtime.stdout(JSON.stringify({ ok: false, error: result.reason, ...(result.errors ? { errors: result.errors } : {}) }));
+    else runtime.stderr(`${result.reason === "validation" ? JSON.stringify({ ok: false, errors: result.errors }) : `generate failed: ${result.reason}`}\n`);
     return 1;
   }
-
-  const plan = planGeneratedFiles(config.config, config.config.outputDir);
-  if (!plan.ok) {
-    runtime.stderr(JSON.stringify({ ok: false, errors: plan.errors }) + "\n");
-    return 1;
-  }
-
-  try {
-    for (const file of plan.files) {
-      const full = join(project.root, file.path);
-      mkdirSync(join(full, ".."), { recursive: true });
-      writeFileSync(full, file.content);
-    }
-  } catch (error) {
-    if (json) runtime.stdout(JSON.stringify({ ok: false, error: String(error) }));
-    else runtime.stderr(`generate failed: ${String(error)}\n`);
-    return 1;
-  }
-
-  if (json) {
-    runtime.stdout(JSON.stringify({ ok: true, generated: plan.files.map((f) => f.path) }));
-  } else {
-    runtime.stdout(`Generated ${plan.files.length} files under ${config.config.outputDir}/\n`);
-  }
+  if (json) runtime.stdout(JSON.stringify({ ok: true, generated: result.files }));
+  else runtime.stdout(`Generated ${result.files.length} files.\n`);
   return 0;
 }

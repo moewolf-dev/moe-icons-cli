@@ -4,10 +4,11 @@ import type { MoeiconsConfigFile } from "../src/project/config.js";
 
 const config: MoeiconsConfigFile = {
   schemaVersion: 1,
+  tier: "free",
   framework: "react",
   outputDir: "src/moeicons",
   defaultTheme: "outline",
-  themes: { outline: { styles: ["outline"] }, solid: { styles: ["fill"] } },
+  themes: { outline: { styleGroup: "moe-outline", styles: ["outline"] }, solid: { styleGroup: "moe-solid", styles: ["fill"] } },
   icons: ["arrow-chevron-right", "user-circle"],
   missingIconPolicy: "fallback",
 };

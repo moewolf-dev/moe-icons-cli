@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { main } from "../src/cli.js";
+import { executeGeneratedFiles } from "../src/project/install.js";
+import { parse } from "jsonc-parser";
 
 /**
  * CLI-12/CLI-13: config generation and React proxy generation.
@@ -48,9 +50,9 @@ describe("CLI init + generate", () => {
     setCwd(dir);
     const code = await main(["init", "--json"], runtime);
     expect(code).toBe(0);
-    const configPath = join(dir, "moeicons.config.json");
+    const configPath = join(dir, "moeicons.config.jsonc");
     expect(existsSync(configPath)).toBe(true);
-    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    const config = parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
     expect(config.schemaVersion).toBe(1);
     expect(config.framework).toBe("react");
 
@@ -65,16 +67,16 @@ describe("CLI init + generate", () => {
     setCwd(dir);
     await main(["init"], runtime);
     // add icons to the config so generation has something to emit
-    const configPath = join(dir, "moeicons.config.json");
-    const config = JSON.parse(readFileSync(configPath, "utf8"));
-    config.icons = ["arrow-chevron-right", "user-circle"];
+    const configPath = join(dir, "moeicons.config.jsonc");
+    const config = parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    config.icons = ["arrow-chevron-right", "user-account-circle"];
     writeFileSync(configPath, JSON.stringify(config, null, 2));
 
     const code = await main(["generate", "--json"], runtime);
     expect(code).toBe(0);
     expect(existsSync(join(dir, "src", "moeicons", "registry.ts"))).toBe(true);
     expect(existsSync(join(dir, "src", "moeicons", "icons", "ArrowChevronRight.tsx"))).toBe(true);
-    expect(existsSync(join(dir, "src", "moeicons", "icons", "UserCircle.tsx"))).toBe(true);
+    expect(existsSync(join(dir, "src", "moeicons", "icons", "UserAccountCircle.tsx"))).toBe(true);
     const registry = readFileSync(join(dir, "src", "moeicons", "registry.ts"), "utf8");
     expect(registry).toContain("ArrowChevronRight");
   });
@@ -87,5 +89,50 @@ describe("CLI init + generate", () => {
     const parsed = JSON.parse(out.join("")) as { ok: boolean; error: string };
     expect(parsed.ok).toBe(false);
     expect(parsed.error).toContain("missing");
+  });
+
+  it("does not replace user-owned files in the output directory", async () => {
+    const { runtime, setCwd } = makeRuntime();
+    setCwd(dir);
+    await main(["init"], runtime);
+    const configPath = join(dir, "moeicons.config.jsonc");
+    const config = parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    config.icons = ["ui-search"];
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+    const userFile = join(dir, "src", "moeicons", "user-note.md");
+    mkdirSync(join(dir, "src", "moeicons"), { recursive: true });
+    writeFileSync(userFile, "keep me");
+    expect(await main(["generate"], runtime)).toBe(0);
+    expect(readFileSync(userFile, "utf8")).toBe("keep me");
+  });
+
+  it("restores generated files when a replacement fails", () => {
+    const output = join(dir, "src", "moeicons");
+    const oldFile = join(output, "old.ts");
+    mkdirSync(output, { recursive: true });
+    writeFileSync(oldFile, "old");
+    const real = { mkdirSync, writeFileSync, existsSync, renameSync, rmSync };
+    let renames = 0;
+    expect(() =>
+      executeGeneratedFiles(
+        [
+          { path: "src/moeicons/old.ts", content: "new" },
+          { path: "src/moeicons/new.ts", content: "new file" },
+        ],
+        dir,
+        "src/moeicons",
+        {
+          ...real,
+          renameSync: (...args: Parameters<typeof renameSync>) => {
+            renames += 1;
+            if (renames === 3) throw new Error("simulated rename failure");
+            return renameSync(...args);
+          },
+        },
+      ),
+    ).toThrow("simulated rename failure");
+    expect(readFileSync(oldFile, "utf8")).toBe("old");
+    expect(existsSync(join(output, "new.ts"))).toBe(false);
   });
 });

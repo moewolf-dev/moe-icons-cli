@@ -99,11 +99,12 @@ describe("readMoeiconsConfig / mergeMoeiconsConfig", () => {
       join(dir, "moeicons.config.json"),
       JSON.stringify({
         schemaVersion: 1,
+        tier: "free",
         framework: "react",
         outputDir: "src/moeicons",
         defaultTheme: "outline",
-        themes: { outline: { styles: ["outline"] } },
-        icons: ["search"],
+        themes: { outline: { styleGroup: "moe-outline", styles: ["outline"] } },
+        icons: ["ui-search"],
       }),
     );
     const result = readMoeiconsConfig(dir);
@@ -126,15 +127,16 @@ describe("readMoeiconsConfig / mergeMoeiconsConfig", () => {
   it("merges patches preserving unrelated fields", () => {
     const base = {
       schemaVersion: 1 as const,
+      tier: "free" as const,
       framework: "react" as const,
       outputDir: "src/moeicons",
       defaultTheme: "outline",
-      themes: { outline: { styles: ["outline"] } },
-      icons: ["search"],
+      themes: { outline: { styleGroup: "moe-outline", styles: ["outline"] } },
+      icons: ["ui-search"],
     };
     const merged = mergeMoeiconsConfig(base, { outputDir: "lib/moeicons" });
     expect(merged.outputDir).toBe("lib/moeicons");
     expect(merged.framework).toBe("react");
-    expect(merged.icons).toEqual(["search"]);
+    expect(merged.icons).toEqual(["ui-search"]);
   });
 });

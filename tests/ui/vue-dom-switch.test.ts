@@ -14,10 +14,11 @@ import type { MoeiconsConfigFile } from "../../src/project/config.js";
 
 const vueConfig: MoeiconsConfigFile = {
   schemaVersion: 1,
+  tier: "free",
   framework: "vue",
   outputDir: "src/moeicons",
   defaultTheme: "outline",
-  themes: { outline: { styles: ["outline"] }, solid: { styles: ["fill"] } },
+  themes: { outline: { styleGroup: "moe-outline", styles: ["outline"] }, solid: { styleGroup: "moe-solid", styles: ["fill"] } },
   icons: ["arrow-chevron-right"],
   missingIconPolicy: "fallback",
 };
@@ -36,6 +37,18 @@ describe("CLI-14 Vue DOM switch (rendered)", () => {
       mkdirSync(dirname(full), { recursive: true });
       writeFileSync(full, file.content);
     }
+    for (const group of ["moe-outline", "moe-solid"]) {
+      const moduleDir = join(FIXTURE, "node_modules", "moe-icons", "free", "vue", group);
+      mkdirSync(moduleDir, { recursive: true });
+      writeFileSync(
+        join(moduleDir, "index.js"),
+        `import { h } from "vue"; export const arrowChevronRight = (props) => h("svg", { ...props, "data-moeicon": "arrow-chevron-right", "data-theme": "${group === "moe-outline" ? "outline" : "solid"}" });\n`,
+      );
+    }
+    writeFileSync(
+      join(FIXTURE, "node_modules", "moe-icons", "package.json"),
+      JSON.stringify({ name: "moe-icons", type: "module", exports: { "./free/vue/*": "./free/vue/*/index.js" } }),
+    );
   });
   afterEach(() => {
     rmSync(FIXTURE, { recursive: true, force: true });
@@ -88,7 +101,7 @@ describe("CLI-14 Vue DOM switch (rendered)", () => {
     expect(solidHtml).not.toContain("data-theme=\"outline\"");
   });
 
-  it("outside the provider the icon falls back to the auto theme", async () => {
+  it("outside the provider the icon falls back to the configured default theme", async () => {
     const { createSSRApp, h } = require_("vue");
     const { renderToString } = require_("@vue/server-renderer");
     const { ArrowChevronRight } = await import(
@@ -97,7 +110,7 @@ describe("CLI-14 Vue DOM switch (rendered)", () => {
 
     const app = createSSRApp({ render: () => h(ArrowChevronRight) });
     const html = await renderToString(app);
-    expect(html).toContain("data-theme=\"auto\"");
+    expect(html).toContain("data-theme=\"outline\"");
     expect(html).toContain("data-moeicon=\"arrow-chevron-right\"");
   });
 });

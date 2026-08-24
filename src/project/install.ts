@@ -19,6 +19,14 @@ export interface InstallPlan {
   readonly items: readonly InstallPlanItem[];
 }
 
+export interface TransactionalFs {
+  readonly mkdirSync: typeof mkdirSync;
+  readonly writeFileSync: typeof writeFileSync;
+  readonly existsSync: typeof existsSync;
+  readonly renameSync: typeof renameSync;
+  readonly rmSync: typeof rmSync;
+}
+
 /** Pure list of install operations with expected checksums. */
 export function createInstallPlan(
   targetRoot: string,
@@ -88,13 +96,7 @@ export function sha256Hex(content: string): string {
  */
 export function executeInstallPlan(
   plan: InstallPlan,
-  fs_: {
-    mkdirSync: typeof mkdirSync;
-    writeFileSync: typeof writeFileSync;
-    existsSync: typeof existsSync;
-    renameSync: typeof renameSync;
-    rmSync: typeof rmSync;
-  },
+  fs_: TransactionalFs,
 ): void {
   const writes = plan.items.filter((i) => i.kind === "write");
 
@@ -106,6 +108,7 @@ export function executeInstallPlan(
   fs_.mkdirSync(stagingRoot, { recursive: true });
 
   const backups: { original: string; backup: string }[] = [];
+  const installed: string[] = [];
   try {
     for (const item of writes) {
       const rel = item.path.replace(/\\/g, "/").split("/").pop() ?? "file";
@@ -125,8 +128,14 @@ export function executeInstallPlan(
       }
       fs_.mkdirSync(join(item.path, ".."), { recursive: true });
       fs_.renameSync(staged, item.path);
+      installed.push(item.path);
     }
   } catch (error) {
+    for (const path of installed) {
+      if (!backups.some((backup) => backup.original === path) && fs_.existsSync(path)) {
+        fs_.rmSync(path, { force: true });
+      }
+    }
     // restore any backups made before the failure
     for (const b of backups) {
       try {
@@ -138,6 +147,88 @@ export function executeInstallPlan(
     throw error;
   } finally {
     if (fs_.existsSync(stagingRoot)) fs_.rmSync(stagingRoot, { recursive: true, force: true });
+  }
+
+  for (const backup of backups) {
+    if (fs_.existsSync(backup.backup)) fs_.rmSync(backup.backup, { force: true });
+  }
+}
+
+/**
+ * Transactionally replace only generated files. Existing files outside this
+ * explicit list are left untouched, which makes the output directory safe to
+ * share with user-owned files.
+ */
+export function executeGeneratedFiles(
+  files: readonly { path: string; content: string }[],
+  projectRoot: string,
+  outputDir: string,
+  fs_: TransactionalFs,
+): void {
+  const outputRoot = resolve(projectRoot, outputDir);
+  const stagingRoot = `${outputRoot}.staging`;
+  if (fs_.existsSync(stagingRoot)) fs_.rmSync(stagingRoot, { recursive: true, force: true });
+
+  const entries = files.map((file) => {
+    const target = resolve(projectRoot, file.path);
+    const relative = target.slice(outputRoot.length).replace(/^[/\\]/, "");
+    if (target !== outputRoot && !target.startsWith(`${outputRoot}/`) && !target.startsWith(`${outputRoot}\\`)) {
+      throw new Error(`generated path escapes output directory: ${file.path}`);
+    }
+    return { target, staged: join(stagingRoot, relative), content: file.content };
+  });
+  fs_.mkdirSync(stagingRoot, { recursive: true });
+  const backups: { original: string; backup: string }[] = [];
+  const installed: string[] = [];
+  try {
+    for (const entry of entries) {
+      fs_.mkdirSync(join(entry.staged, ".."), { recursive: true });
+      fs_.writeFileSync(entry.staged, entry.content);
+    }
+    for (const entry of entries) {
+      if (fs_.existsSync(entry.target)) {
+        const backup = `${entry.target}.bak`;
+        fs_.renameSync(entry.target, backup);
+        backups.push({ original: entry.target, backup });
+      }
+      fs_.mkdirSync(join(entry.target, ".."), { recursive: true });
+      fs_.renameSync(entry.staged, entry.target);
+      installed.push(entry.target);
+    }
+  } catch (error) {
+    for (const path of installed) {
+      if (!backups.some((backup) => backup.original === path) && fs_.existsSync(path)) {
+        fs_.rmSync(path, { force: true });
+      }
+    }
+    for (const backup of backups) {
+      try {
+        if (fs_.existsSync(backup.backup)) fs_.renameSync(backup.backup, backup.original);
+      } catch {
+        // Preserve the backup when the filesystem cannot restore it.
+      }
+    }
+    throw error;
+  } finally {
+    if (fs_.existsSync(stagingRoot)) fs_.rmSync(stagingRoot, { recursive: true, force: true });
+  }
+  for (const backup of backups) {
+    if (fs_.existsSync(backup.backup)) fs_.rmSync(backup.backup, { force: true });
+  }
+}
+
+/** Atomically create a new file without replacing an existing user file. */
+export function createFileIfAbsent(target: string, content: string, fs_: TransactionalFs): boolean {
+  if (fs_.existsSync(target)) return false;
+  const staging = `${target}.staging`;
+  if (fs_.existsSync(staging)) fs_.rmSync(staging, { force: true });
+  fs_.mkdirSync(join(target, ".."), { recursive: true });
+  try {
+    fs_.writeFileSync(staging, content, { flag: "wx" });
+    fs_.renameSync(staging, target);
+    return true;
+  } finally {
+    if (fs_.existsSync(staging)) fs_.rmSync(staging, { force: true });
   }
 }
 

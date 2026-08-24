@@ -14,6 +14,7 @@ export type CliErrorCode =
   | "NOT_FOUND"
   | "FORBIDDEN"
   | "NOT_TTY"
+  | "NOT_IMPLEMENTED"
   | "UNEXPECTED";
 
 export class CliError extends Error {
@@ -36,6 +37,7 @@ export function exitCodeFor(code: CliErrorCode): number {
       return 0;
     case "VALIDATION_ERROR":
     case "NOT_TTY":
+    case "NOT_IMPLEMENTED":
       return 1;
     case "AUTH_ERROR":
     case "FORBIDDEN":

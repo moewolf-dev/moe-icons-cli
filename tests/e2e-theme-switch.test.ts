@@ -13,12 +13,13 @@ import type { MoeiconsConfigFile } from "../src/project/config.js";
 
 const config: MoeiconsConfigFile = {
   schemaVersion: 1,
+  tier: "free",
   framework: "react",
   outputDir: "src/moeicons",
   defaultTheme: "outline",
   themes: {
-    outline: { styles: ["outline"], className: "text-zinc-700" },
-    solid: { styles: ["fill"], className: "text-zinc-800" },
+    outline: { styleGroup: "moe-outline", styles: ["outline"], className: "text-zinc-700" },
+    solid: { styleGroup: "moe-solid", styles: ["fill"], className: "text-zinc-800" },
   },
   icons: ["arrow-chevron-right", "user-circle"],
   missingIconPolicy: "fallback",
@@ -50,8 +51,8 @@ describe("E2E-07 theme-switch contract", () => {
     expect(plan.ok).toBe(true);
     if (!plan.ok) return;
     const proxy = plan.files.find((f) => f.path.endsWith("icons/ArrowChevronRight.tsx"))?.content ?? "";
-    // proxy carries the canonical icon id for runtime resolution
-    expect(proxy).toContain('data-moeicon="arrow-chevron-right"');
+    expect(proxy).toContain("useMoeiconsTheme");
+    expect(proxy).toContain('registry[theme]?.ArrowChevronRight');
     // proxy accepts user props (className/size/strokeWidth) passthrough
     expect(proxy).toContain("props");
   });
