@@ -13,16 +13,24 @@ jobs:
   package:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      MOEICONS_PACKAGE_MAKER_REPO: ${{ github.workspace }}/moe-icons-package-maker
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout shared contract fixture authority
+        uses: actions/checkout@v4
+        with:
+          repository: moewolf-dev/moe-icons-package-maker
+          path: moe-icons-package-maker
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
       - run: npm run build
+      - run: npm test
       - name: Pack immutable candidate
         id: pack
         shell: bash
