@@ -1,4 +1,4 @@
-import { findCatalogStyleGroup, type CatalogStyleGroup } from "../catalog/catalog.js";
+import { catalog, findCatalogStyleGroup, type CatalogStyleGroup, type IconCatalog } from "../catalog/catalog.js";
 import type { MoeiconsConfigFile, MoeiconsThemeConfig } from "../project/config.js";
 import {
   assetRelativePath,
@@ -17,11 +17,11 @@ export interface ResolvedTheme {
   readonly variant?: ResourceVariant;
 }
 
-export function resolveThemes(config: MoeiconsConfigFile): { readonly ok: true; readonly themes: ResolvedTheme[] } | { readonly ok: false; readonly errors: string[] } {
+export function resolveThemes(config: MoeiconsConfigFile, sourceCatalog: IconCatalog = catalog): { readonly ok: true; readonly themes: ResolvedTheme[] } | { readonly ok: false; readonly errors: string[] } {
   const errors: string[] = [];
   const themes: ResolvedTheme[] = [];
   for (const [theme, entry] of Object.entries(config.themes)) {
-    const group = findCatalogStyleGroup(entry.styleGroup);
+    const group = findCatalogStyleGroup(entry.styleGroup, sourceCatalog);
     if (!group) {
       errors.push(`unknown style group "${entry.styleGroup}" for theme "${theme}"`);
       continue;

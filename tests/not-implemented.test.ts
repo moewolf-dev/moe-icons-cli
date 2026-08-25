@@ -20,7 +20,7 @@ function runtime() {
 }
 
 describe("unimplemented command contract", () => {
-  for (const command of ["login", "logout", "account", "groups"]) {
+  for (const command of ["groups"]) {
     it(`${command} returns a stable failure instead of success`, async () => {
       const fixture = runtime();
       expect(await main([command], fixture.runtime)).toBe(1);

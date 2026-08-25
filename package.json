@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "description": "Moeicons CLI: install icon groups, manage login/tokens, generate React/Vue proxy components, and expose an MCP server.",
   "type": "module",
+  "main": "./dist/cli.js",
+  "types": "./dist/cli.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    }
+  },
   "license": "Apache-2.0",
   "bin": {
     "moeicons": "bin/moeicons.js"

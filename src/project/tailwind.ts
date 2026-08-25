@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CliError } from "../errors/index.js";
 import { CLSX_VERSION_RANGE, TAILWIND_MERGE_VERSION_RANGE } from "../generator/cn.js";
+import { applyEdits, modify } from "jsonc-parser";
 
 /**
  * H3: only rewrite Tailwind v3 configs whose `content` is a static string-array
@@ -47,9 +48,12 @@ function packageDeclaresTailwindV4(projectRoot: string): boolean {
 
 export function detectTailwind(projectRoot: string): TailwindDetectResult {
   const configPath = findTailwindConfig(projectRoot);
+  if (packageDeclaresTailwindV4(projectRoot)) {
+    return { kind: "v4", configPath: configPath ?? join(projectRoot, "package.json") };
+  }
   if (!configPath) return { kind: "missing" };
   const source = readFileSync(configPath, "utf8");
-  if (packageDeclaresTailwindV4(projectRoot) || /\b@tailwindcss\/(vite|postcss)\b/.test(source)) {
+  if (/\b@tailwindcss\/(vite|postcss)\b/.test(source)) {
     return { kind: "v4", configPath };
   }
   if (/content\s*:/.test(source)) return { kind: "v3", configPath, source };
@@ -172,9 +176,20 @@ export function ensureClassMergeDependencies(source: string): {
     notes.push(`add dependencies.tailwind-merge ${TAILWIND_MERGE_VERSION_RANGE}`);
   }
   if (!changed) return { nextSource: source, changed: false, notes: ["clsx/tailwind-merge already declared"] };
-  return {
-    nextSource: `${JSON.stringify({ ...pkg, dependencies: deps }, null, 2)}\n`,
-    changed: true,
-    notes,
-  };
+  const eol = source.includes("\r\n") ? "\r\n" : "\n";
+  const indent = source.match(/\n([ \t]+)"/)?.[1] ?? "  ";
+  const formattingOptions = { insertSpaces: !indent.includes("\t"), tabSize: indent.includes("\t") ? 1 : indent.length, eol };
+  if (!pkg.dependencies) {
+    const closing = source.lastIndexOf("}");
+    const beforeClosing = source.slice(0, closing);
+    const whitespace = beforeClosing.match(/\s*$/)?.[0] ?? "";
+    const body = beforeClosing.slice(0, beforeClosing.length - whitespace.length);
+    const comma = Object.keys(pkg).length > 0 ? "," : "";
+    const block = `${comma}${eol}${indent}"dependencies": {${eol}${indent}${indent}"clsx": ${JSON.stringify(CLSX_VERSION_RANGE)},${eol}${indent}${indent}"tailwind-merge": ${JSON.stringify(TAILWIND_MERGE_VERSION_RANGE)}${eol}${indent}}`;
+    return { nextSource: `${body}${block}${whitespace}${source.slice(closing)}`, changed: true, notes };
+  }
+  let nextSource = source;
+  if (!pkg.dependencies?.clsx) nextSource = applyEdits(nextSource, modify(nextSource, ["dependencies", "clsx"], CLSX_VERSION_RANGE, { formattingOptions }));
+  if (!pkg.dependencies?.["tailwind-merge"]) nextSource = applyEdits(nextSource, modify(nextSource, ["dependencies", "tailwind-merge"], TAILWIND_MERGE_VERSION_RANGE, { formattingOptions }));
+  return { nextSource, changed: true, notes };
 }

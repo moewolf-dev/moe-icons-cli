@@ -1,6 +1,6 @@
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
-import { executeGeneratedFilesDir, type TransactionalFsWithCopy } from "../project/install.js";
+import { executeGeneratedFilesDir, executeManagedReconcile, type TransactionalFsWithCopy } from "../project/install.js";
 import { detectProject } from "../project/detect.js";
 import { readMoeiconsConfig, type MoeiconsConfigFile } from "../project/config.js";
 import { planGeneratedFiles } from "../generator/generate.js";
@@ -10,6 +10,8 @@ import { extractTarGz } from "../project/tar-gz.js";
 import { artifactCachePath } from "./free-download.js";
 import { resolveThemes } from "../generator/theme-resolve.js";
 import type { CommandContext } from "./context.js";
+import { parseInstallMetadata, serializeInstallMetadata, sha256Bytes, type InstallMetadata } from "../project/install-metadata.js";
+import { withProjectLockSync } from "../project/project-lock.js";
 
 export type GenerateResult =
   | { readonly ok: true; readonly files: readonly string[]; readonly warnings?: readonly string[]; readonly notes?: readonly string[] }
@@ -85,7 +87,7 @@ export function loadArchiveFiles(
 export function runGenerateUseCase(
   context: CommandContext,
   fs_: TransactionalFsWithCopy,
-  options: { readonly noTailwind?: boolean; readonly archiveFiles?: Readonly<Record<string, Uint8Array>> } = {},
+  options: { readonly noTailwind?: boolean; readonly archiveFiles?: Readonly<Record<string, Uint8Array>>; readonly reconcileInstalled?: boolean } = {},
 ): GenerateResult {
   const project = detectProject(context.cwd);
   if (!project) return { ok: false, reason: "no-project" };
@@ -138,6 +140,37 @@ export function runGenerateUseCase(
   }
 
   try {
+    if (options.reconcileInstalled) {
+      const metadataPath = join(project.root, ".moeicons", "install-metadata.json");
+      if (!fs_.existsSync(metadataPath)) return { ok: false, reason: "managed install metadata is missing; run repair or reinstall" };
+      const metadata = parseInstallMetadata(fs_.readFileSync(metadataPath, "utf8"));
+      if (!metadata || metadata.tier !== loaded.config.tier) return { ok: false, reason: "managed install metadata is invalid or does not match config tier; run repair or reinstall" };
+      for (const [managedPath, expected] of Object.entries(metadata.managedFiles)) {
+        const absolute = join(project.root, managedPath);
+        if (!fs_.existsSync(absolute) || sha256Bytes(fs_.readFileSync(absolute) as string | Uint8Array) !== expected) {
+          return { ok: false, reason: `managed file was modified or removed: ${managedPath}` };
+        }
+      }
+      if (metadata.managedFiles[".moeicons/catalog.json"] !== metadata.catalogSha256) return { ok: false, reason: "managed catalog hash is inconsistent; run repair or reinstall" };
+
+      const outputPrefix = loaded.config.outputDir.replace(/\\/g, "/").replace(/\/$/, "") + "/";
+      const generated = Object.fromEntries(plan.files.map((file) => [file.path.replace(/\\/g, "/"), file.content]));
+      const nextManaged: Record<string, string> = {};
+      for (const [managedPath, hash] of Object.entries(metadata.managedFiles)) if (!managedPath.startsWith(outputPrefix)) nextManaged[managedPath] = hash;
+      for (const [path, content] of Object.entries(generated)) nextManaged[path] = sha256Bytes(content);
+      const nextMetadata: InstallMetadata = { ...metadata, managedFiles: nextManaged };
+      const writes: Record<string, string | Uint8Array> = { ...generated };
+      for (const file of sideFiles) {
+        const absolute = resolve(file.path);
+        const rel = relative(project.root, absolute).replace(/\\/g, "/");
+        if (!rel || rel.startsWith("../") || rel === "..") return { ok: false, reason: `side file escapes project: ${file.path}` };
+        writes[rel] = file.content;
+      }
+      writes[".moeicons/install-metadata.json"] = serializeInstallMetadata(nextMetadata);
+      const stale = Object.keys(metadata.managedFiles).filter((path) => path.startsWith(outputPrefix) && !(path in generated));
+      withProjectLockSync(project.root, "reload", () => executeManagedReconcile(project.root, writes, stale, fs_));
+      return { ok: true, files: plan.files.map((file) => file.path), ...((loaded.warnings.length > 0 || notes.length > 0) ? { warnings: [...loaded.warnings, ...notes] } : {}) };
+    }
     executeGeneratedFilesDir(plan.files, project.root, loaded.config.outputDir, fs_);
     for (const file of sideFiles) {
       fs_.writeFileSync(file.path, file.content);

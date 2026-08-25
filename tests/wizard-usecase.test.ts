@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runWizardUseCase } from "../src/core/wizard.js";
+import { homeChoices, runWizardUseCase } from "../src/core/wizard.js";
 import type { CommandContext, CommandUi } from "../src/core/context.js";
 import { CliError } from "../src/errors/index.js";
 
@@ -85,5 +85,32 @@ describe("runWizardUseCase", () => {
         { json: false },
       ),
     ).rejects.toMatchObject({ code: "CANCELLED" });
+  });
+
+  it("freezes signed-out, authenticated and unknown home menu order", () => {
+    expect(homeChoices("signed-out").map((choice) => choice.value)).toEqual(["free", "pro", "manage", "login", "settings"]);
+    expect(homeChoices("authenticated").map((choice) => choice.value)).toEqual(["free", "pro", "manage", "settings"]);
+    expect(homeChoices("unknown").map((choice) => choice.value)).toEqual(["free", "pro", "manage", "login", "settings"]);
+    expect(homeChoices("unknown").find((choice) => choice.value === "login")?.label).toContain("unknown");
+  });
+
+  it("shows management status in the update action and returns both management flows", async () => {
+    const seen: string[][] = [];
+    let selections: Array<string | undefined> = ["manage", "library-update"];
+    const ui = fakeUi({ select: async (_message, choices) => { seen.push(choices.map((choice) => choice.label)); return selections.shift(); } });
+    await expect(runWizardUseCase(context(dir, ui), { json: false, getLibraryStatus: async () => "Current: 1.0.0 / Latest: 1.1.0 / Status: update available" })).resolves.toEqual({ ok: true, action: "manage", flow: "library-update" });
+    expect(seen[1]?.[1]).toContain("Current: 1.0.0");
+    selections = ["manage", "reload"];
+    await expect(runWizardUseCase(context(dir, ui), { json: false })).resolves.toEqual({ ok: true, action: "manage", flow: "reload" });
+  });
+
+  it("shows logout only for a verified authenticated session", async () => {
+    const values: string[][] = [];
+    const ui = fakeUi({ select: async (_message, choices) => { values.push(choices.map((choice) => choice.value)); return values.length === 1 ? "settings" : "cli-update"; } });
+    await runWizardUseCase(context(dir, ui), { json: false, session: "signed-out" });
+    expect(values[1]).toEqual(["cli-update"]);
+    values.length = 0;
+    await runWizardUseCase(context(dir, ui), { json: false, session: "authenticated" });
+    expect(values[1]).toEqual(["logout", "cli-update"]);
   });
 });

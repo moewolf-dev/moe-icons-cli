@@ -14,7 +14,7 @@ export function runInitUseCase(context: CommandContext, fs_: TransactionalFs): I
   if (findConfigFile(project.root)) return { ok: false, reason: "exists" };
   const target = join(project.root, "moeicons.config.jsonc");
   try {
-    const created = createFileIfAbsent(target, renderMoeiconsConfigJsonc({ framework: "react" }), fs_);
+    const created = createFileIfAbsent(target, renderMoeiconsConfigJsonc({ framework: project.framework === "vue" ? "vue" : "react" }), fs_);
     return created ? { ok: true, created: target } : { ok: false, reason: "exists", path: target };
   } catch {
     return { ok: false, reason: "write-failed", path: target };

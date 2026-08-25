@@ -41,6 +41,7 @@ export function createClackUi(options: { readonly yes: boolean }): CommandUi {
       const spinner = p.spinner();
       spinner.start(message);
       return {
+        update(next) { spinner.message(next); },
         stop(done) {
           spinner.stop(done ?? message);
         },

@@ -11,6 +11,7 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runInstallUseCase } from "../../src/core/install.js";
+import { readInstalledResourceState } from "../../src/project/install-metadata.js";
 import type { CommandContext, CommandUi } from "../../src/core/context.js";
 import { writeFreeReleaseFixture } from "../helpers/free-release-fixture.js";
 
@@ -102,6 +103,7 @@ describe("runInstallUseCase", () => {
     expect(metadata.artifactVersion).toBe(result.artifactVersion);
     expect(metadata.artifactSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(metadata.artifactSha256.length).toBe(64);
+    expect(readInstalledResourceState(project, "free").kind).toBe("ok");
   });
 
   it("routes pro/ent away from the free download path", async () => {
@@ -140,5 +142,14 @@ describe("runInstallUseCase", () => {
     controller.abort();
     const result = await runInstallUseCase(context(project, controller.signal), deps(), { group: "free" });
     expect(result).toMatchObject({ ok: false, reason: "cancelled" });
+  });
+
+  it("rejects version-check/download identity drift before project writes", async () => {
+    const result = await runInstallUseCase(context(project), deps(), {
+      group: "free", sourceVersion: "0.0.15-alpha", expectedDescriptorSha256: "f".repeat(64),
+    });
+    expect(result).toMatchObject({ ok: false, reason: "validation" });
+    expect(existsSync(join(project, ".moeicons"))).toBe(false);
+    expect(existsSync(join(project, "src", "moeicons"))).toBe(false);
   });
 });

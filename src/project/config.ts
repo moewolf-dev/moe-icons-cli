@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse, type ParseError } from "jsonc-parser";
-import { catalog, findCatalogIcon, findCatalogStyleGroup } from "../catalog/catalog.js";
+import { catalog, findCatalogIcon, findCatalogStyleGroup, type IconCatalog } from "../catalog/catalog.js";
 
 export interface MoeiconsThemeConfig {
   readonly styleGroup: string;
@@ -87,7 +87,7 @@ interface ValidatedConfig {
   readonly warnings: string[];
 }
 
-function validateConfig(raw: unknown): ValidatedConfig {
+function validateConfig(raw: unknown, sourceCatalog: IconCatalog): ValidatedConfig {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("config must be an object");
   const obj = raw as Record<string, unknown>;
   const warnings: string[] = [];
@@ -123,7 +123,7 @@ function validateConfig(raw: unknown): ValidatedConfig {
     }
 
     if (typeof theme.styleGroup !== "string") throw new Error(`theme ${name}.styleGroup is required`);
-    const group = findCatalogStyleGroup(theme.styleGroup);
+    const group = findCatalogStyleGroup(theme.styleGroup, sourceCatalog);
     if (!group) throw new Error(`unknown style group "${theme.styleGroup}"`);
     if (!group.tiers.includes(config.tier)) {
       throw new Error(`style group "${group.id}" is not available in ${config.tier} tier`);
@@ -162,7 +162,7 @@ function validateConfig(raw: unknown): ValidatedConfig {
   }
   if (!(config.defaultTheme in themes)) throw new Error(`defaultTheme "${config.defaultTheme}" is not defined`);
   const icons = flattenIcons(config.icons);
-  for (const iconId of icons) if (!findCatalogIcon(iconId)) throw new Error(`unknown icon "${iconId}"`);
+  for (const iconId of icons) if (!findCatalogIcon(iconId, sourceCatalog)) throw new Error(`unknown icon "${iconId}"`);
   return {
     config: {
       schemaVersion: 1,
@@ -178,7 +178,7 @@ function validateConfig(raw: unknown): ValidatedConfig {
   };
 }
 
-export function readMoeiconsConfig(root: string): ConfigLoadResult {
+export function readMoeiconsConfig(root: string, sourceCatalog: IconCatalog = catalog): ConfigLoadResult {
   const configPath = findConfigFile(root);
   if (!configPath) return { kind: "missing" };
   if (!configPath.endsWith(".json") && !configPath.endsWith(".jsonc")) {
@@ -191,7 +191,7 @@ export function readMoeiconsConfig(root: string): ConfigLoadResult {
     : undefined;
   if (typeof version === "number" && version !== 1) return { kind: "unsupported", version };
   try {
-    const validated = validateConfig(parsed.value);
+    const validated = validateConfig(parsed.value, sourceCatalog);
     return { kind: "ok", config: validated.config, warnings: validated.warnings };
   } catch (error) {
     return { kind: "invalid", message: error instanceof Error ? error.message : String(error) };

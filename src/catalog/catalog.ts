@@ -39,7 +39,7 @@ function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
-function validateCatalog(value: unknown): IconCatalog {
+export function parseCatalog(value: unknown): IconCatalog {
   if (!isRecord(value) || value.schemaVersion !== 1) {
     throw new Error("unsupported catalog schema; reinstall a compatible moeicons package");
   }
@@ -108,12 +108,12 @@ function validateCatalog(value: unknown): IconCatalog {
   };
 }
 
-export const catalog: IconCatalog = validateCatalog(bundledCatalog);
+export const catalog: IconCatalog = parseCatalog(bundledCatalog);
 
-export function findCatalogStyleGroup(id: string): CatalogStyleGroup | undefined {
-  return catalog.styleGroups.find((group) => group.id === id);
+export function findCatalogStyleGroup(id: string, source: IconCatalog = catalog): CatalogStyleGroup | undefined {
+  return source.styleGroups.find((group) => group.id === id);
 }
 
-export function findCatalogIcon(id: string): CatalogIcon | undefined {
-  return catalog.icons.find((icon) => icon.id === id);
+export function findCatalogIcon(id: string, source: IconCatalog = catalog): CatalogIcon | undefined {
+  return source.icons.find((icon) => icon.id === id);
 }

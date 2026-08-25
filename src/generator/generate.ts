@@ -1,4 +1,4 @@
-import { findCatalogIcon } from "../catalog/catalog.js";
+import { catalog, findCatalogIcon, type IconCatalog } from "../catalog/catalog.js";
 import type { MoeiconsConfigFile } from "../project/config.js";
 import {
   reportLibraryExportNameCollisions,
@@ -390,7 +390,7 @@ ${config.icons
 export function planGeneratedFiles(
   config: MoeiconsConfigFile,
   outputDir: string,
-  options: { readonly archiveFiles?: Readonly<Record<string, Uint8Array>> } = {},
+  options: { readonly archiveFiles?: Readonly<Record<string, Uint8Array>>; readonly catalog?: IconCatalog } = {},
 ): GenerationOutcome {
   const errors: string[] = [];
   if (Object.keys(config.themes).length === 0) {
@@ -403,7 +403,7 @@ export function planGeneratedFiles(
   errors.push(...reportProxyNameCollisions(config.icons));
   errors.push(...reportLibraryExportNameCollisions(config.icons));
   for (const iconId of config.icons) {
-    const catalogIcon = findCatalogIcon(iconId);
+    const catalogIcon = findCatalogIcon(iconId, options.catalog ?? catalog);
     if (!catalogIcon) {
       errors.push(`unknown icon "${iconId}"`);
       continue;
@@ -415,7 +415,7 @@ export function planGeneratedFiles(
     }
   }
 
-  const resolved = resolveThemes(config);
+  const resolved = resolveThemes(config, options.catalog ?? catalog);
   if (!resolved.ok) errors.push(...resolved.errors);
   if (errors.length > 0 || !resolved.ok) return { ok: false, errors };
 

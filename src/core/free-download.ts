@@ -46,9 +46,13 @@ export interface FreeDownloadIo {
   readonly mkdirSync: (path: string) => void;
   readonly existsSync: (path: string) => boolean;
   readonly fixtureDir?: string;
+  /** Test-only loopback HTTP fixture root; production callers leave unset. */
+  readonly fixtureBaseUrl?: string;
+  readonly timeoutMs?: number;
   readonly cacheDir: string;
   readonly cliVersion: string;
   readonly signal: AbortSignal;
+  readonly onProgress?: DownloadLimits["onProgress"];
 }
 
 function sha256Hex(bytes: Uint8Array): string {
@@ -59,23 +63,27 @@ function userAgent(cliVersion: string): string {
   return `moeicons/${cliVersion} (+https://github.com/moewolf-dev/moe-icons-cli)`;
 }
 
-function descriptorLimits(cliVersion: string): DownloadLimits {
+function descriptorLimits(cliVersion: string, onProgress?: DownloadLimits["onProgress"], fixtureBaseUrl?: string, timeoutMs = DOWNLOAD_TIMEOUT_MS): DownloadLimits {
   return {
     maxBytes: DESCRIPTOR_MAX_BYTES,
-    timeoutMs: DOWNLOAD_TIMEOUT_MS,
+    timeoutMs,
     maxRedirects: MAX_REDIRECTS,
-    allowedHosts: FREE_DOWNLOAD_HOSTS,
+    allowedHosts: fixtureBaseUrl ? [new URL(fixtureBaseUrl).host] : FREE_DOWNLOAD_HOSTS,
+    ...(fixtureBaseUrl ? { allowHttpLoopback: true } : {}),
     userAgent: userAgent(cliVersion),
+    ...(onProgress ? { onProgress } : {}),
   };
 }
 
-function artifactLimits(cliVersion: string): DownloadLimits {
+function artifactLimits(cliVersion: string, onProgress?: DownloadLimits["onProgress"], fixtureBaseUrl?: string, timeoutMs = DOWNLOAD_TIMEOUT_MS): DownloadLimits {
   return {
     maxBytes: ARTIFACT_MAX_BYTES,
-    timeoutMs: DOWNLOAD_TIMEOUT_MS,
+    timeoutMs,
     maxRedirects: MAX_REDIRECTS,
-    allowedHosts: FREE_DOWNLOAD_HOSTS,
+    allowedHosts: fixtureBaseUrl ? [new URL(fixtureBaseUrl).host] : FREE_DOWNLOAD_HOSTS,
+    ...(fixtureBaseUrl ? { allowHttpLoopback: true } : {}),
     userAgent: userAgent(cliVersion),
+    ...(onProgress ? { onProgress } : {}),
   };
 }
 
@@ -113,7 +121,7 @@ async function loadBytes(
       return { ok: false, reason: "validation", message: error instanceof Error ? error.message : String(error) };
     }
   }
-  const url = githubReleaseAssetUrl(tag, filename);
+  const url = io.fixtureBaseUrl ? new URL(filename, io.fixtureBaseUrl.endsWith("/") ? io.fixtureBaseUrl : `${io.fixtureBaseUrl}/`).toString() : githubReleaseAssetUrl(tag, filename);
   const result = await downloadArtifact(url, limits, { fetchFn: io.fetchFn, signal: io.signal });
   if (!result.ok) return mapDownloadError(result.code, result.message);
   return { ok: true, bytes: result.bytes };
@@ -150,7 +158,7 @@ export async function downloadFreeRelease(io: FreeDownloadIo, sourceVersion: str
   if (io.signal.aborted) return { ok: false, reason: "cancelled", message: "download cancelled" };
   const tag = `v${sourceVersion}`;
 
-  const shaFile = await loadBytes(io, DESCRIPTOR_SHA_NAME, descriptorLimits(io.cliVersion), tag);
+  const shaFile = await loadBytes(io, DESCRIPTOR_SHA_NAME, descriptorLimits(io.cliVersion, io.onProgress, io.fixtureBaseUrl, io.timeoutMs), tag);
   if (!shaFile.ok) {
     if (!io.fixtureDir && shaFile.reason === "network") {
       return { ok: false, reason: "offline-no-cache", message: shaFile.message };
@@ -164,7 +172,7 @@ export async function downloadFreeRelease(io: FreeDownloadIo, sourceVersion: str
     return { ok: false, reason: "validation", message: error instanceof Error ? error.message : String(error) };
   }
 
-  const descriptorFile = await loadBytes(io, DESCRIPTOR_NAME, descriptorLimits(io.cliVersion), tag);
+  const descriptorFile = await loadBytes(io, DESCRIPTOR_NAME, descriptorLimits(io.cliVersion, io.onProgress, io.fixtureBaseUrl, io.timeoutMs), tag);
   if (!descriptorFile.ok) return descriptorFile;
   const actualDescriptorSha = sha256Hex(descriptorFile.bytes);
   if (actualDescriptorSha !== expectedDescriptorSha) {
@@ -208,7 +216,7 @@ export async function downloadFreeRelease(io: FreeDownloadIo, sourceVersion: str
     }
   }
 
-  const artifact = await loadBytes(io, descriptor.free.filename, artifactLimits(io.cliVersion), tag);
+  const artifact = await loadBytes(io, descriptor.free.filename, artifactLimits(io.cliVersion, io.onProgress, io.fixtureBaseUrl, io.timeoutMs), tag);
   if (!artifact.ok) {
     if (!io.fixtureDir && artifact.reason === "network") {
       return { ok: false, reason: "offline-no-cache", message: artifact.message };

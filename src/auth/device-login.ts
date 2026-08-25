@@ -13,6 +13,7 @@ interface CreateResponse {
   readonly loginId: string;
   readonly pollingToken: string;
   readonly browserUrl: string;
+  readonly intervalSeconds: number;
   readonly expiresAt: string;
 }
 
@@ -54,6 +55,9 @@ export async function loginWithDeviceSession(
     method: 'POST', body: { codeChallenge: pkce.challenge, clientNonce: state.nonce, state: state.state }, ...(signal ? { signal } : {}),
   });
   assertBrowserUrl(created.data.browserUrl, config.websiteOrigin);
+  if (!Number.isSafeInteger(created.data.intervalSeconds) || created.data.intervalSeconds < 1 || created.data.intervalSeconds > 60) {
+    throw new CliError('AUTH_ERROR', 'backend returned an invalid polling interval');
+  }
   await deps.openBrowser(created.data.browserUrl);
   const auth = `Bearer ${created.data.pollingToken}`;
   const sessionPath = `/v1/cli-login-sessions/${encodeURIComponent(created.data.loginId)}`;
@@ -78,7 +82,7 @@ export async function loginWithDeviceSession(
         deps.tokenStore.set(stored);
         return stored;
       }
-      await deps.sleep(1500, signal);
+      await deps.sleep(created.data.intervalSeconds * 1000, signal);
     }
     throw new CliError('AUTH_ERROR', 'login session expired');
   } catch (error) {

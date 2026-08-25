@@ -22,6 +22,22 @@ describe("downloadArtifact", () => {
     if (result.ok) expect(result.bytes).toEqual(GOOD_ZIP);
   });
 
+  it("reports exact streamed bytes with and without Content-Length", async () => {
+    const known: Array<{ downloadedBytes: number; totalBytes?: number }> = [];
+    const knownResult = await downloadArtifact("https://cdn.example.com/g.zip", {
+      maxBytes: 1024, timeoutMs: 5000, maxRedirects: 0, onProgress: (event) => known.push(event),
+    }, { fetchFn: async () => new Response(GOOD_ZIP, { headers: { "content-length": String(GOOD_ZIP.byteLength) } }) });
+    expect(knownResult.ok).toBe(true);
+    expect(known.at(-1)).toEqual({ downloadedBytes: GOOD_ZIP.byteLength, totalBytes: GOOD_ZIP.byteLength });
+
+    const unknown: Array<{ downloadedBytes: number; totalBytes?: number }> = [];
+    const unknownResult = await downloadArtifact("https://cdn.example.com/g.zip", {
+      maxBytes: 1024, timeoutMs: 5000, maxRedirects: 0, onProgress: (event) => unknown.push(event),
+    }, { fetchFn: async () => new Response(GOOD_ZIP) });
+    expect(unknownResult.ok).toBe(true);
+    expect(unknown.at(-1)).toEqual({ downloadedBytes: GOOD_ZIP.byteLength });
+  });
+
   it("rejects non-https urls", async () => {
     const result = await downloadArtifact("http://cdn.example.com/g.zip", {
       maxBytes: 1024,

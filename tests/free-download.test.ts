@@ -8,6 +8,7 @@ import { githubReleaseAssetUrl, parseReleaseDescriptor, PUBLIC_FREE_REPO } from 
 import { writeFreeReleaseFixture } from "./helpers/free-release-fixture.js";
 import { downloadArtifact } from "../src/project/install.js";
 import { createTarGz, extractTarGz } from "../src/project/tar-gz.js";
+import { createServer, type Server } from "node:http";
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -170,5 +171,29 @@ describe("downloadFreeRelease", () => {
     expect(result.ok).toBe(true);
     expect(requested).toContain(githubReleaseAssetUrl(`v${meta.version}`, meta.freeName));
     expect(requested.some((url) => /moe-icons-free-/.test(url) && !url.endsWith(meta.freeName))).toBe(false);
+  });
+
+  it("uses a loopback HTTP fixture for success, 404, timeout and checksum failure", async () => {
+    const meta = writeFreeReleaseFixture(fixture);
+    let mode: "ok" | "missing" | "slow" | "corrupt" = "ok";
+    const server: Server = createServer((request, response) => {
+      const name = new URL(request.url ?? "/", "http://localhost").pathname.slice(1);
+      if (mode === "missing") { response.writeHead(404).end(); return; }
+      if (mode === "slow") { setTimeout(() => response.end("late"), 100); return; }
+      if (mode === "corrupt" && name === meta.freeName) { response.end("corrupt"); return; }
+      try { response.end(readFileSync(join(fixture, name))); } catch { response.writeHead(404).end(); }
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("fixture server failed to bind");
+    const { fixtureDir: _fixtureDir, ...base } = io();
+    const remote = (timeoutMs = 1000) => ({ ...base, fixtureBaseUrl: `http://127.0.0.1:${address.port}`, timeoutMs });
+    try {
+      expect(await downloadFreeRelease(remote(), meta.version)).toMatchObject({ ok: true });
+      rmSync(cache, { recursive: true, force: true }); mkdirSync(cache);
+      mode = "missing"; expect(await downloadFreeRelease(remote(), meta.version)).toMatchObject({ ok: false, reason: "not-found" });
+      mode = "slow"; expect(await downloadFreeRelease(remote(5), meta.version)).toMatchObject({ ok: false, reason: "offline-no-cache" });
+      mode = "corrupt"; expect(await downloadFreeRelease(remote(), meta.version)).toMatchObject({ ok: false, reason: "checksum-mismatch" });
+    } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
   });
 });

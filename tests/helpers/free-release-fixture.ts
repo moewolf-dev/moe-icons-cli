@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTarGz } from "../../src/project/tar-gz.js";
 import { bundledSourceVersion, DESCRIPTOR_NAME, DESCRIPTOR_SHA_NAME } from "../../src/core/free-download.js";
@@ -11,7 +11,7 @@ function sha256(bytes: string | Uint8Array): string {
 /** Write a GitHub-Release-shaped free fixture directory for E1/E2 tests. */
 export function writeFreeReleaseFixture(
   dir: string,
-  options: { readonly corruptArtifact?: boolean; readonly wrongDescriptorSha?: boolean } = {},
+  options: { readonly corruptArtifact?: boolean; readonly wrongDescriptorSha?: boolean; readonly version?: string; readonly useBundledCatalog?: boolean } = {},
 ): {
   readonly version: string;
   readonly freeName: string;
@@ -19,8 +19,10 @@ export function writeFreeReleaseFixture(
   readonly freeSha: string;
   readonly catalogSha: string;
 } {
-  const version = bundledSourceVersion();
-  const catalog = JSON.stringify({
+  const version = options.version ?? bundledSourceVersion();
+  const catalog = options.useBundledCatalog
+    ? `${JSON.stringify({ ...JSON.parse(readFileSync(join(import.meta.dirname, "../../src/catalog/catalog.json"), "utf8")), catalogVersion: version, sourceVersion: version })}\n`
+    : JSON.stringify({
     schemaVersion: 1,
     catalogVersion: version,
     sourceVersion: version,
@@ -28,7 +30,7 @@ export function writeFreeReleaseFixture(
     generatorCommit: "b".repeat(40),
     styleGroups: [],
     icons: [],
-  });
+    });
   const catalogSha = sha256(catalog);
   const tgz = createTarGz({ "catalog.json": catalog });
   const freeSha = sha256(tgz);

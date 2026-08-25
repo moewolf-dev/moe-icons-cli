@@ -132,9 +132,6 @@ describe("CLI output compatibility contract", () => {
   it("keeps the current failure contract for unsupported commands", async () => {
     const fixture = makeRuntime();
     const cases = [
-      { argv: ["login"], message: "login is not implemented yet" },
-      { argv: ["logout"], message: "logout is not implemented yet" },
-      { argv: ["account"], message: "account is not implemented yet" },
       { argv: ["groups"], message: "groups is not implemented yet" },
       { argv: ["frobnicate"], message: "unknown command: frobnicate" },
       { argv: ["install"], message: "no package.json found in the current directory or parents; run inside a project" },
@@ -160,13 +157,13 @@ describe("CLI output compatibility contract", () => {
     expect(success.out.join("")).not.toContain(MOEICONS_BANNER.trim());
 
     const failure = makeRuntime();
-    expect(await main(["login", "--json"], failure.runtime)).toBe(CLI_ERROR_EXIT_MAP.NOT_IMPLEMENTED);
+    expect(await main(["groups", "--json"], failure.runtime)).toBe(CLI_ERROR_EXIT_MAP.NOT_IMPLEMENTED);
     expect(failure.err).toEqual([]);
     const failureBody = JSON.parse(failure.out.join("")) as { ok: boolean; code: string; message: string };
     expect(failureBody).toEqual({
       ok: false,
       code: "NOT_IMPLEMENTED",
-      message: "login is not implemented yet",
+      message: "groups is not implemented yet",
     });
     expect(failure.out.join("")).not.toMatch(ansi);
     expect(failure.out.join("")).not.toContain(MOEICONS_BANNER.trim());

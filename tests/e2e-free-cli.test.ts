@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { main } from "../src/cli.js";
+import { main, type CliRuntime } from "../src/cli.js";
+import type { StoredSession, TokenStore } from "../src/auth/token-store.js";
 import { writeFreeReleaseFixture } from "./helpers/free-release-fixture.js";
 
 /**
@@ -10,7 +11,7 @@ import { writeFreeReleaseFixture } from "./helpers/free-release-fixture.js";
  * root, config generation, and idempotent reinstall.
  */
 
-function makeRuntime(env: Record<string, string | undefined> = {}) {
+function makeRuntime(env: Record<string, string | undefined> = {}, auth?: CliRuntime["auth"]) {
   const out: string[] = [];
   const err: string[] = [];
   let cwd = "";
@@ -23,6 +24,7 @@ function makeRuntime(env: Record<string, string | undefined> = {}) {
       isTTY: () => false,
       readLine: async () => "",
       readKey: async () => "",
+      ...(auth ? { auth } : {}),
     },
     out,
     err,
@@ -104,15 +106,30 @@ describe("E2E-03 free CLI flow", () => {
     }
   });
 
-  it("does not fake-succeed pro install", async () => {
-    const { runtime, out, setCwd } = makeRuntime(env);
+  it("installs pro through authenticated descriptor and signed bytes", async () => {
+    const meta = writeFreeReleaseFixture(releaseDir);
+    const archive = new Uint8Array(readFileSync(join(releaseDir, meta.freeName)));
+    const session: StoredSession = { accountId: "auth0|user", accessToken: "access", refreshToken: "refresh", expiresAt: Date.now() + 60_000, scope: "openid", storedAt: 1 };
+    const tokenStore: TokenStore = { get: () => session, getActive: () => session, set() {}, delete() {}, clear() {} };
+    const fetch = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/v1/icon-library/versions")) return Response.json({ schemaVersion: 1, free: null, pro: { version: meta.version, releasedAt: "2026-08-24T00:00:00Z", descriptorSha256: meta.descriptorSha } });
+      if (url.includes("artifact-descriptor")) {
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer access");
+        return Response.json({ ok: true, tier: "pro", version: meta.version, descriptorSha256: meta.descriptorSha, catalogFilename: "catalog.json", catalogSha256: meta.catalogSha, url: "https://06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com/pro.tgz", expiresAt: "2099-01-01T00:00:00Z", size: archive.byteLength, sha256: meta.freeSha });
+      }
+      expect(new Headers(init?.headers).has("authorization")).toBe(false);
+      return new Response(archive);
+    };
+    const config = { schemaVersion: 1, tier: "pro", framework: "react", outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"] };
+    writeFileSync(join(dir, "moeicons.config.jsonc"), JSON.stringify(config));
+    const { runtime, out, setCwd } = makeRuntime(env, { tokenStore, fetch: fetch as typeof globalThis.fetch });
     setCwd(dir);
     const code = await main(["install", "pro", "--json"], runtime);
-    expect(code).toBe(1);
+    expect(code).toBe(0);
     expect(JSON.parse(out.join(""))).toMatchObject({
-      ok: false,
-      code: "NOT_IMPLEMENTED",
+      ok: true, group: "pro", artifactVersion: meta.version,
     });
-    expect(existsSync(join(dir, ".moeicons"))).toBe(false);
+    expect(existsSync(join(dir, "src", "moeicons", ".moeicons-pro.marker"))).toBe(true);
   });
 });

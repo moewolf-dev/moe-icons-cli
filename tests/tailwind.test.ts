@@ -57,6 +57,15 @@ describe("Tailwind content inject (H3/H4)", () => {
     expect(skipped.notes[0]).toContain("--no-tailwind");
   });
 
+  it("detects config-less Tailwind v4 Vite projects from package.json", () => {
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "x", dependencies: { tailwindcss: "4.1.12", "@tailwindcss/vite": "4.1.12" } }),
+    );
+    expect(detectTailwind(dir)).toMatchObject({ kind: "v4", configPath: join(dir, "package.json") });
+    expect(() => planTailwindIntegration(dir, "src/moeicons", { noTailwind: false })).toThrow("only auto-integrates Tailwind v3");
+  });
+
   it("updates a v3 config on disk plan", () => {
     writeFileSync(
       join(dir, "package.json"),
@@ -76,5 +85,13 @@ describe("Tailwind content inject (H3/H4)", () => {
     expect(pkg.dependencies.clsx).toBe("^2.1.1");
     expect(pkg.dependencies["tailwind-merge"]).toBe("^2.5.2");
     expect(Object.values(pkg.dependencies).every((range) => range !== "latest")).toBe(true);
+  });
+
+  it("preserves CRLF and untouched package fields during minimal dependency edits", () => {
+    const source = '{\r\n\t"name": "x",\r\n\t"custom": { "keep": true }\r\n}\r\n';
+    const result = ensureClassMergeDependencies(source);
+    expect(result.nextSource).not.toMatch(/(^|[^\r])\n/);
+    expect(result.nextSource).toContain('\t"custom": { "keep": true }');
+    expect(JSON.parse(result.nextSource)).toMatchObject({ custom: { keep: true }, dependencies: { clsx: "^2.1.1", "tailwind-merge": "^2.5.2" } });
   });
 });

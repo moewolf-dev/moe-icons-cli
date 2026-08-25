@@ -47,7 +47,7 @@ export function createStreamUi(runtime: StreamUiRuntime, options: { readonly yes
     },
     progress(message) {
       runtime.stdout(`${message}\n`);
-      return { stop() { return undefined; } };
+      return { update(next) { runtime.stdout(`${next}\n`); }, stop() { return undefined; } };
     },
   };
 }

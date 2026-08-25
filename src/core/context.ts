@@ -12,7 +12,7 @@ export interface CommandUi {
   readonly confirm: (message: string, signal: AbortSignal) => Promise<boolean | undefined>;
   readonly text: (message: string, signal: AbortSignal) => Promise<string | undefined>;
   readonly note: (message: string, signal: AbortSignal) => void;
-  readonly progress: (message: string, signal: AbortSignal) => { readonly stop: (message?: string) => void };
+  readonly progress: (message: string, signal: AbortSignal) => { readonly update?: (message: string) => void; readonly stop: (message?: string) => void };
 }
 
 /** Dependencies shared by command use cases; it deliberately contains no Node globals. */

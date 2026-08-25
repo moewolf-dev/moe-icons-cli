@@ -14,6 +14,7 @@ export interface DetectedProject {
   readonly packageManager: PackageManager;
   /** Workspace members if this root declares workspaces. */
   readonly workspaceMembers: readonly string[];
+  readonly framework: "react" | "vue" | "unknown";
 }
 
 /** Walk upward from startDir to find the nearest package.json. */
@@ -90,7 +91,15 @@ export function detectProject(startDir: string): DetectedProject | undefined {
   if (!root) return undefined;
   const packageManager = detectPackageManager(root);
   const workspaceMembers = detectWorkspace(root);
-  return { root, packageManager, workspaceMembers };
+  const pkg = readJsonSafe(join(root, "package.json"));
+  const dependencyNames = new Set([
+    ...Object.keys((pkg?.dependencies as Record<string, unknown> | undefined) ?? {}),
+    ...Object.keys((pkg?.devDependencies as Record<string, unknown> | undefined) ?? {}),
+  ]);
+  const hasReact = dependencyNames.has("react");
+  const hasVue = dependencyNames.has("vue");
+  const framework = hasReact === hasVue ? "unknown" : hasVue ? "vue" : "react";
+  return { root, packageManager, workspaceMembers, framework };
 }
 
 /** Confirm a target is inside a selected workspace and not node_modules. */
