@@ -12,6 +12,14 @@
     }
   },
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moewolf-dev/moe-icons-cli.git"
+  },
+  "homepage": "https://github.com/moewolf-dev/moe-icons-cli#readme",
+  "bugs": {
+    "url": "https://github.com/moewolf-dev/moe-icons-cli/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
