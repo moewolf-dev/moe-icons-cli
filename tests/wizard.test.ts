@@ -84,7 +84,7 @@ describe("wizard TUI (CLI-04)", () => {
     });
     setCwd(dir);
     expect(await main([], runtime)).toBe(0);
-    expect(out.join("")).toContain("Current 0.1.0 / Latest unavailable / Update: unavailable");
+    expect(out.join("")).toContain("Current 0.0.1 / Latest unavailable / Update: unavailable");
   });
 
   it("exits 0 when the user cancels at the menu", async () => {

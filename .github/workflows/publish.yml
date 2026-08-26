@@ -157,8 +157,8 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm test
       - run: npm run build
+      - run: npm test
       - name: Audit package contents
         run: npm pack --dry-run
       - name: Publish package

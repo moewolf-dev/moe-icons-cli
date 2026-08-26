@@ -1,8 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { describe, it, expect } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
-import { tmpdir } from "node:os";
 
 /**
  * P1-06 consumer contract test (CLI). Validates the SAME canonical fixture
@@ -27,9 +26,15 @@ const packageMakerRoot = resolve(
 );
 
 describe("P1-06 CLI shared contract fixtures", () => {
-  it("validates the same fixture bytes as package-maker (recorded checksums)", () => {
+  it("validates the same fixture bytes as package-maker (recorded checksums)", (ctx) => {
+    const schemasDir = join(packageMakerRoot, "tests", "fixtures", "schemas");
+    if (!existsSync(schemasDir)) {
+      // Publish acceptance checkouts only cli/clitest/code-library; skip unless maker is present.
+      ctx.skip();
+      return;
+    }
     for (const [name, fixture] of Object.entries(FIXTURES)) {
-      const bytes = readFileSync(join(packageMakerRoot, "tests", "fixtures", "schemas", name));
+      const bytes = readFileSync(join(schemasDir, name));
       const actual = createHash("sha256").update(bytes).digest("hex");
       expect(actual, `${name} checksum must match the shared contract`).toBe(
         fixture.checksum,

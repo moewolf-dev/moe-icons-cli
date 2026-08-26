@@ -21,6 +21,10 @@ afterEach(() => {
 
 describe("npm pack inspection", () => {
   it("produces a tarball whose contents are the intended files", () => {
+    // Fresh CI checkouts have no dist/; pack contents require a prior build.
+    if (!existsSync(join(process.cwd(), "dist", "cli.js"))) {
+      execSync("npm run build", { cwd: process.cwd(), stdio: "inherit" });
+    }
     const output = execSync(`npm pack --pack-destination "${dir}" 2>/dev/null`, {
       cwd: process.cwd(),
       encoding: "utf8",

@@ -31,7 +31,14 @@ function hasPnpm(): boolean {
   }
 }
 
+function ensureBuilt(): void {
+  if (!existsSync(join(cwd, "dist", "cli.js"))) {
+    execFileSync("npm", ["run", "build"], { cwd, stdio: "inherit" });
+  }
+}
+
 function packCli(packDir: string): string {
+  ensureBuilt();
   const output = run("npm", ["pack", "--pack-destination", packDir]);
   const tarballName = output.trim().split("\n").pop() ?? "";
   const tarball = join(packDir, tarballName);
