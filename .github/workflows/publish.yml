@@ -35,10 +35,10 @@ jobs:
           : "${clitest_ref:?set CLITEST_REF repo variable (full commit SHA) or clitest_sha input}"
           : "${code_library_ref:?set CODE_LIBRARY_REF repo variable (full commit SHA) or code_library_sha input}"
           for ref in "$clitest_ref" "$code_library_ref"; do
-            case "$ref" in
-              [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
-              *) echo "ref must be a full 40-hex commit SHA: $ref" >&2; exit 1 ;;
-            esac
+            if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "ref must be a full 40-hex commit SHA: $ref" >&2
+              exit 1
+            fi
           done
           echo "clitest_sha=${clitest_ref}" >> "${GITHUB_OUTPUT}"
           echo "code_library_sha=${code_library_ref}" >> "${GITHUB_OUTPUT}"
