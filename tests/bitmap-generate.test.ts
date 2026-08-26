@@ -59,9 +59,9 @@ function archiveWithBothVariants(): Record<string, Uint8Array> {
 
 function bitmapConfig(overrides: Partial<MoeiconsConfigFile> = {}): MoeiconsConfigFile {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     tier: "free",
-    framework: "react",
+    target: "react",
     outputDir: "src/moeicons",
     defaultTheme: "cute",
     themes: {
@@ -210,7 +210,7 @@ describe("bitmap assets transaction (G5)", () => {
     expect(readFileSync(join(output, "user-note.md"), "utf8")).toBe("keep me");
   });
 
-  it("runGenerateUseCase fails closed when bitmap themes lack an archive", () => {
+  it("runGenerateUseCase fails closed when bitmap themes lack an archive", async () => {
     writeFileSync(
       join(dir, "moeicons.config.json"),
       JSON.stringify({
@@ -230,7 +230,7 @@ describe("bitmap assets transaction (G5)", () => {
       signal: new AbortController().signal,
       now: () => new Date("2026-08-24T00:00:00.000Z"),
     };
-    const result = runGenerateUseCase(context, fs_, { noTailwind: true });
+    const result = await runGenerateUseCase(context, fs_, { noTailwind: true });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("validation");

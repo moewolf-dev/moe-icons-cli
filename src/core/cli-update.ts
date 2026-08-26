@@ -1,4 +1,4 @@
-import { fetchMoeiconsVersions, latestInChannel } from "./version-service.js";
+import { fetchMoeiconsVersionsCached, latestInChannel } from "./version-service.js";
 import { decideUpdate } from "./update-policy.js";
 
 export type InstallSource =
@@ -6,6 +6,8 @@ export type InstallSource =
   | { readonly kind: "global"; readonly manager: "npm" | "pnpm" | "yarn" }
   | { readonly kind: "npx" }
   | { readonly kind: "unknown" };
+
+const CLI_PACKAGE = "@moewolf/moe-icons-cli";
 
 export function detectInstallSource(input: { env: Readonly<Record<string, string | undefined>>; localManager?: "npm" | "pnpm" | "yarn"; localDependency?: boolean }): InstallSource {
   if (input.localDependency && input.localManager) return { kind: "local", manager: input.localManager };
@@ -17,7 +19,7 @@ export function detectInstallSource(input: { env: Readonly<Record<string, string
 }
 
 export function fixedUpdateInstruction(source: InstallSource, version: string): string {
-  const spec = `moeicons@${version}`;
+  const spec = `${CLI_PACKAGE}@${version}`;
   if (source.kind === "npx") return `npx --yes ${spec}`;
   if (source.kind === "unknown") return `See https://moeicons.com/docs/cli-update for ${spec}`;
   if (source.kind === "local") {
@@ -47,7 +49,7 @@ export interface CliUpdateFileSystem {
 export function detectLocalInstall(cwd: string, fs: CliUpdateFileSystem): { readonly localDependency: boolean; readonly localManager?: "npm" | "pnpm" | "yarn" } {
   let parsed: { dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> } = {};
   try { parsed = JSON.parse(fs.readFileSync(`${cwd}/package.json`, "utf8")) as typeof parsed; } catch { return { localDependency: false }; }
-  const localDependency = typeof parsed.dependencies?.moeicons === "string" || typeof parsed.devDependencies?.moeicons === "string";
+  const localDependency = typeof parsed.dependencies?.[CLI_PACKAGE] === "string" || typeof parsed.devDependencies?.[CLI_PACKAGE] === "string";
   if (!localDependency) return { localDependency: false };
   if (fs.existsSync(`${cwd}/pnpm-lock.yaml`)) return { localDependency, localManager: "pnpm" };
   if (fs.existsSync(`${cwd}/yarn.lock`)) return { localDependency, localManager: "yarn" };
@@ -62,10 +64,14 @@ export async function runCliUpdateCheck(input: {
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly fs: CliUpdateFileSystem;
   readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
   readonly fetchVersions?: () => Promise<readonly string[]>;
 }): Promise<ReturnType<typeof planCliUpdate> & { readonly source: InstallSource }> {
   const local = detectLocalInstall(input.cwd, input.fs);
   const source = detectInstallSource({ env: input.env, ...local });
-  const versions = await (input.fetchVersions ?? (() => fetchMoeiconsVersions({ ...(input.signal ? { signal: input.signal } : {}) })))();
+  const versions = await (input.fetchVersions ?? (() => fetchMoeiconsVersionsCached({
+    ...(input.signal ? { signal: input.signal } : {}),
+    ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+  })))();
   return { ...planCliUpdate(input.currentVersion, versions, source), source };
 }

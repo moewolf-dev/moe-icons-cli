@@ -4,6 +4,8 @@
  * to stdout; logs go to stderr. Graceful shutdown on SIGINT/SIGTERM.
  */
 
+import { CLI_VERSION } from "../ui/banner.js";
+
 interface McpRequest {
   readonly jsonrpc: "2.0";
   readonly id: number | string;
@@ -72,7 +74,7 @@ export function createMcpServer(deps: McpDeps) {
           result: {
             protocolVersion: "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: "moeicons", version: "0.1.0" },
+            serverInfo: { name: "moeicons", version: CLI_VERSION },
           },
         };
       case "tools/list":

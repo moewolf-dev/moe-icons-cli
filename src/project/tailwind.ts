@@ -40,7 +40,12 @@ function packageDeclaresTailwindV4(projectRoot: string): boolean {
     };
     const range = pkg.dependencies?.tailwindcss ?? pkg.devDependencies?.tailwindcss;
     if (!range) return false;
-    return range.startsWith("^4") || range.startsWith("~4") || range.startsWith(">=4") || /^4(\.|$)/.test(range);
+    return (
+      range.startsWith("^4") ||
+      range.startsWith("~4") ||
+      range.startsWith(">=4") ||
+      /^4(\.|$)/.test(range)
+    );
   } catch {
     return false;
   }
@@ -96,9 +101,20 @@ export function injectContentGlob(source: string, glob: string): ContentInjectRe
   return { ok: true, changed: true, nextSource: source.replace(full, nextArray) };
 }
 
-export function moeiconsContentGlob(outputDir: string): string {
+export function moeiconsContentGlob(
+  outputDir: string,
+  target?: "react" | "vue" | "vanilla" | "assets",
+): string {
   const normalized = outputDir.replace(/\\/g, "/").replace(/\/$/, "");
-  return `./${normalized}/**/*.{js,ts,jsx,tsx,vue}`;
+  const extensions =
+    target === undefined
+      ? "js,ts,jsx,tsx,vue"
+      : target === "react"
+        ? "js,ts,jsx,tsx"
+        : target === "vue"
+          ? "js,ts,vue"
+          : "js,ts,html,svg";
+  return `./${normalized}/**/*.{${extensions}}`;
 }
 
 /**
@@ -108,13 +124,19 @@ export function moeiconsContentGlob(outputDir: string): string {
 export function planTailwindIntegration(
   projectRoot: string,
   outputDir: string,
-  options: { readonly noTailwind: boolean },
+  options: {
+    readonly noTailwind: boolean;
+    readonly target?: "react" | "vue" | "vanilla" | "assets";
+  },
 ): {
   readonly files: readonly { path: string; content: string }[];
   readonly notes: readonly string[];
 } {
   if (options.noTailwind) {
     return { files: [], notes: ["skipped Tailwind config (--no-tailwind)"] };
+  }
+  if (options.target === "vanilla" || options.target === "assets") {
+    return { files: [], notes: [`skipped Tailwind integration for ${options.target} target`] };
   }
   const detected = detectTailwind(projectRoot);
   if (detected.kind === "missing") {
@@ -134,7 +156,7 @@ export function planTailwindIntegration(
       ],
     };
   }
-  const glob = moeiconsContentGlob(outputDir);
+  const glob = moeiconsContentGlob(outputDir, options.target);
   const injected = injectContentGlob(detected.source, glob);
   if (!injected.ok) {
     return { files: [], notes: [injected.hint] };
@@ -161,7 +183,11 @@ export function ensureClassMergeDependencies(source: string): {
   try {
     pkg = JSON.parse(source) as typeof pkg;
   } catch {
-    return { nextSource: source, changed: false, notes: ["package.json is not valid JSON; skipped clsx/tailwind-merge"] };
+    return {
+      nextSource: source,
+      changed: false,
+      notes: ["package.json is not valid JSON; skipped clsx/tailwind-merge"],
+    };
   }
   const deps = { ...(pkg.dependencies ?? {}) };
   let changed = false;
@@ -175,10 +201,15 @@ export function ensureClassMergeDependencies(source: string): {
     changed = true;
     notes.push(`add dependencies.tailwind-merge ${TAILWIND_MERGE_VERSION_RANGE}`);
   }
-  if (!changed) return { nextSource: source, changed: false, notes: ["clsx/tailwind-merge already declared"] };
+  if (!changed)
+    return { nextSource: source, changed: false, notes: ["clsx/tailwind-merge already declared"] };
   const eol = source.includes("\r\n") ? "\r\n" : "\n";
   const indent = source.match(/\n([ \t]+)"/)?.[1] ?? "  ";
-  const formattingOptions = { insertSpaces: !indent.includes("\t"), tabSize: indent.includes("\t") ? 1 : indent.length, eol };
+  const formattingOptions = {
+    insertSpaces: !indent.includes("\t"),
+    tabSize: indent.includes("\t") ? 1 : indent.length,
+    eol,
+  };
   if (!pkg.dependencies) {
     const closing = source.lastIndexOf("}");
     const beforeClosing = source.slice(0, closing);
@@ -186,10 +217,24 @@ export function ensureClassMergeDependencies(source: string): {
     const body = beforeClosing.slice(0, beforeClosing.length - whitespace.length);
     const comma = Object.keys(pkg).length > 0 ? "," : "";
     const block = `${comma}${eol}${indent}"dependencies": {${eol}${indent}${indent}"clsx": ${JSON.stringify(CLSX_VERSION_RANGE)},${eol}${indent}${indent}"tailwind-merge": ${JSON.stringify(TAILWIND_MERGE_VERSION_RANGE)}${eol}${indent}}`;
-    return { nextSource: `${body}${block}${whitespace}${source.slice(closing)}`, changed: true, notes };
+    return {
+      nextSource: `${body}${block}${whitespace}${source.slice(closing)}`,
+      changed: true,
+      notes,
+    };
   }
   let nextSource = source;
-  if (!pkg.dependencies?.clsx) nextSource = applyEdits(nextSource, modify(nextSource, ["dependencies", "clsx"], CLSX_VERSION_RANGE, { formattingOptions }));
-  if (!pkg.dependencies?.["tailwind-merge"]) nextSource = applyEdits(nextSource, modify(nextSource, ["dependencies", "tailwind-merge"], TAILWIND_MERGE_VERSION_RANGE, { formattingOptions }));
+  if (!pkg.dependencies?.clsx)
+    nextSource = applyEdits(
+      nextSource,
+      modify(nextSource, ["dependencies", "clsx"], CLSX_VERSION_RANGE, { formattingOptions }),
+    );
+  if (!pkg.dependencies?.["tailwind-merge"])
+    nextSource = applyEdits(
+      nextSource,
+      modify(nextSource, ["dependencies", "tailwind-merge"], TAILWIND_MERGE_VERSION_RANGE, {
+        formattingOptions,
+      }),
+    );
   return { nextSource, changed: true, notes };
 }

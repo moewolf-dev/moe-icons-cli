@@ -102,7 +102,8 @@ describe("CLI output compatibility contract", () => {
       Options:
         --json         machine-readable JSON output
         --yes          skip confirmations in noninteractive mode
-        --no-tailwind  skip Tailwind config auto-integration
+  --target       output target: react, vue, vanilla, or assets
+  --no-tailwind  skip Tailwind config auto-integration
       ",
       }
     `);
@@ -113,8 +114,8 @@ describe("CLI output compatibility contract", () => {
     const json = makeRuntime();
     expect(await main(["--version"], text.runtime)).toBe(0);
     expect(await main(["--version", "--json"], json.runtime)).toBe(0);
-    expect(text.out.join("")).toBe("0.1.0\n");
-    expect(json.out.join("")).toBe('{"ok":true,"version":"0.1.0"}');
+    expect(text.out.join("")).toBe("0.0.1\n");
+    expect(json.out.join("")).toBe('{"ok":true,"version":"0.0.1"}');
     expect(text.err).toEqual([]);
     expect(json.err).toEqual([]);
   });
@@ -134,7 +135,10 @@ describe("CLI output compatibility contract", () => {
     const cases = [
       { argv: ["groups"], message: "groups is not implemented yet" },
       { argv: ["frobnicate"], message: "unknown command: frobnicate" },
-      { argv: ["install"], message: "no package.json found in the current directory or parents; run inside a project" },
+      {
+        argv: ["install"],
+        message: "no package.json found in the current directory or parents; run inside a project",
+      },
     ] as const;
     for (const testCase of cases) {
       const runtime = makeRuntime();
@@ -151,15 +155,21 @@ describe("CLI output compatibility contract", () => {
     const success = makeRuntime();
     expect(await main(["--version", "--json"], success.runtime)).toBe(0);
     const successBody = JSON.parse(success.out.join("")) as { ok: boolean; version: string };
-    expect(successBody).toEqual({ ok: true, version: "0.1.0" });
+    expect(successBody).toEqual({ ok: true, version: "0.0.1" });
     expect(success.err).toEqual([]);
     expect(success.out.join("")).not.toMatch(ansi);
     expect(success.out.join("")).not.toContain(MOEICONS_BANNER.trim());
 
     const failure = makeRuntime();
-    expect(await main(["groups", "--json"], failure.runtime)).toBe(CLI_ERROR_EXIT_MAP.NOT_IMPLEMENTED);
+    expect(await main(["groups", "--json"], failure.runtime)).toBe(
+      CLI_ERROR_EXIT_MAP.NOT_IMPLEMENTED,
+    );
     expect(failure.err).toEqual([]);
-    const failureBody = JSON.parse(failure.out.join("")) as { ok: boolean; code: string; message: string };
+    const failureBody = JSON.parse(failure.out.join("")) as {
+      ok: boolean;
+      code: string;
+      message: string;
+    };
     expect(failureBody).toEqual({
       ok: false,
       code: "NOT_IMPLEMENTED",
@@ -171,8 +181,16 @@ describe("CLI output compatibility contract", () => {
 
   it("maps unknown command, NOT_IMPLEMENTED, NOT_TTY, and install-without-project to the frozen table", async () => {
     const jsonCases: { argv: string[]; code: CliErrorCode; message: string }[] = [
-      { argv: ["frobnicate", "--json"], code: "VALIDATION_ERROR", message: "unknown command: frobnicate" },
-      { argv: ["groups", "--json"], code: "NOT_IMPLEMENTED", message: "groups is not implemented yet" },
+      {
+        argv: ["frobnicate", "--json"],
+        code: "VALIDATION_ERROR",
+        message: "unknown command: frobnicate",
+      },
+      {
+        argv: ["groups", "--json"],
+        code: "NOT_IMPLEMENTED",
+        message: "groups is not implemented yet",
+      },
       { argv: ["install", "--json"], code: "VALIDATION_ERROR", message: "no package.json found" },
     ];
 
@@ -181,7 +199,11 @@ describe("CLI output compatibility contract", () => {
       const exit = await main(testCase.argv, fixture.runtime);
       expect(exit).toBe(CLI_ERROR_EXIT_MAP[testCase.code]);
       expect(fixture.err).toEqual([]);
-      const body = JSON.parse(fixture.out.join("")) as { ok: false; code: CliErrorCode; message: string };
+      const body = JSON.parse(fixture.out.join("")) as {
+        ok: false;
+        code: CliErrorCode;
+        message: string;
+      };
       expect(body.ok).toBe(false);
       expect(body.code).toBe(testCase.code);
       expect(body.message).toContain(testCase.message);
@@ -205,7 +227,10 @@ describe("CLI output compatibility contract", () => {
 
     const dir = mkdtempSync(join(tmpdir(), "cli-contract-"));
     try {
-      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "fixture", version: "1.0.0" }));
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ name: "fixture", version: "1.0.0" }),
+      );
       const missingConfig = makeRuntime(dir);
       expect(await main(["generate", "--json"], missingConfig.runtime)).toBe(1);
       expect(missingConfig.err).toEqual([]);
@@ -222,7 +247,10 @@ describe("CLI output compatibility contract", () => {
   it("returns NOT_TTY for a non-TTY wizard without an explicit command and writes no files", async () => {
     const dir = mkdtempSync(join(tmpdir(), "cli-contract-notty-"));
     try {
-      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "fixture", version: "1.0.0" }));
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ name: "fixture", version: "1.0.0" }),
+      );
       const before = readdirSync(dir).sort();
       const fixture = makeRuntime(dir);
       expect(await main([], fixture.runtime)).toBe(1);

@@ -12,9 +12,9 @@ import type { MoeiconsConfigFile } from "../src/project/config.js";
  */
 
 const config: MoeiconsConfigFile = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   tier: "free",
-  framework: "react",
+  target: "react",
   outputDir: "src/moeicons",
   defaultTheme: "outline",
   themes: {

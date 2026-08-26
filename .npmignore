@@ -1,0 +1,6 @@
+**/*.map
+tests/
+scripts/
+src/
+.github/
+.env*

@@ -1,11 +1,25 @@
 const SHA256_HEX = /^[0-9a-f]{64}$/i;
 const SAFE_FILENAME = /^[A-Za-z0-9._-]+$/;
+const SAFE_SUBTREE_PATH = /^[A-Za-z0-9._/-]+$/;
+
+export type ReleaseTarget = "react" | "vue" | "vanilla" | "assets";
+export const RELEASE_TARGETS: readonly ReleaseTarget[] = ["react", "vue", "vanilla", "assets"];
+
+/** Per-target subtree metadata written by the code-library release packer. */
+export interface ReleaseTargetMetadata {
+  readonly path: string;
+  readonly sha256: string;
+  readonly fileCount: number;
+  readonly byteCount: number;
+}
 
 export interface ReleaseTierArtifact {
   readonly filename: string;
   readonly sha256: string;
   readonly styleGroups?: readonly string[];
   readonly styleGroupCount?: number;
+  readonly targets?: readonly ReleaseTarget[];
+  readonly targetMetadata?: Readonly<Partial<Record<ReleaseTarget, ReleaseTargetMetadata>>>;
 }
 
 export interface ReleaseCatalogRef {
@@ -40,6 +54,41 @@ function requireFilename(value: unknown, field: string): string {
   return value;
 }
 
+function requireTarget(value: unknown, field: string): ReleaseTarget {
+  if (value !== "react" && value !== "vue" && value !== "vanilla" && value !== "assets") {
+    throw new Error(`${field} must be one of react, vue, vanilla, assets`);
+  }
+  return value;
+}
+
+function parseTargetMetadata(
+  value: unknown,
+  field: string,
+): Readonly<Partial<Record<ReleaseTarget, ReleaseTargetMetadata>>> {
+  if (!isRecord(value)) throw new Error(`${field} must be an object`);
+  const result: Partial<Record<ReleaseTarget, ReleaseTargetMetadata>> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const target = requireTarget(key, `${field}.${key}`);
+    if (!isRecord(entry)) throw new Error(`${field}.${key} must be an object`);
+    if (typeof entry.path !== "string" || !SAFE_SUBTREE_PATH.test(entry.path)) {
+      throw new Error(`${field}.${key}.path must be a safe subtree path`);
+    }
+    if (typeof entry.fileCount !== "number" || !Number.isSafeInteger(entry.fileCount) || entry.fileCount < 0) {
+      throw new Error(`${field}.${key}.fileCount must be a non-negative integer`);
+    }
+    if (typeof entry.byteCount !== "number" || !Number.isSafeInteger(entry.byteCount) || entry.byteCount < 0) {
+      throw new Error(`${field}.${key}.byteCount must be a non-negative integer`);
+    }
+    result[target] = {
+      path: entry.path,
+      sha256: requireSha(entry.sha256, `${field}.${key}.sha256`),
+      fileCount: entry.fileCount,
+      byteCount: entry.byteCount,
+    };
+  }
+  return result;
+}
+
 function parseTier(value: unknown, field: string): ReleaseTierArtifact {
   if (!isRecord(value)) throw new Error(`${field} must be an object`);
   return {
@@ -49,6 +98,12 @@ function parseTier(value: unknown, field: string): ReleaseTierArtifact {
       ? { styleGroups: value.styleGroups }
       : {}),
     ...(typeof value.styleGroupCount === "number" ? { styleGroupCount: value.styleGroupCount } : {}),
+    ...(Array.isArray(value.targets)
+      ? { targets: value.targets.map((item) => requireTarget(item, `${field}.targets[]`)) }
+      : {}),
+    ...(value.targetMetadata !== undefined
+      ? { targetMetadata: parseTargetMetadata(value.targetMetadata, `${field}.targetMetadata`) }
+      : {}),
   };
 }
 

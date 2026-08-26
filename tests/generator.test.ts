@@ -1,11 +1,14 @@
 import { describe, it, expect } from "vitest";
+import { createHash } from "node:crypto";
 import { planGeneratedFiles, toPascalCase } from "../src/generator/generate.js";
 import type { MoeiconsConfigFile } from "../src/project/config.js";
 
+const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+
 const config: MoeiconsConfigFile = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   tier: "free",
-  framework: "react",
+  target: "react",
   outputDir: "src/moeicons",
   defaultTheme: "outline",
   themes: { outline: { styleGroup: "moe-outline" }, solid: { styleGroup: "moe-solid" } },
@@ -82,5 +85,105 @@ describe("planGeneratedFiles", () => {
     const bad: MoeiconsConfigFile = { ...config, themes: {} };
     const result = planGeneratedFiles(bad, "src/moeicons");
     expect(result.ok).toBe(false);
+  });
+
+  it("assets target emits selected raw resources and manifest, never TypeScript", () => {
+    const svg = new TextEncoder().encode('<svg viewBox="0 0 24 24"><path d="M1 1"/></svg>');
+    const result = planGeneratedFiles(
+      { ...config, target: "assets", icons: ["arrow-bold-right"] },
+      "src/moeicons",
+      {
+        archiveFiles: {
+          "free/assets/manifest.json": new TextEncoder().encode(JSON.stringify({
+            schemaVersion: 1,
+            assets: [
+              { path: "moe-outline/arrow-bold-right.svg", size: svg.byteLength, sha256: sha256(svg) },
+              { path: "moe-solid/arrow-bold-right.svg", size: svg.byteLength, sha256: sha256(svg) },
+            ],
+          })),
+          "free/assets/moe-outline/arrow-bold-right.svg": svg,
+          "free/assets/moe-solid/arrow-bold-right.svg": svg,
+        },
+      },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.files.map((file) => file.path)).toEqual([
+        "src/moeicons/assets/moe-outline/arrow-bold-right.svg",
+        "src/moeicons/assets/moe-solid/arrow-bold-right.svg",
+        "src/moeicons/assets/manifest.json",
+      ]);
+    }
+  });
+
+  it("assets target rejects a manifest whose size/sha256 do not match the archive bytes", () => {
+    const svg = new TextEncoder().encode('<svg viewBox="0 0 24 24"><path d="M1 1"/></svg>');
+    const wrongSha = sha256(new TextEncoder().encode("different bytes"));
+    const wrongSize = new TextEncoder().encode('<svg viewBox="0 0 24 24"><path d="M1 1"/></svg>extra');
+    const tampered: Array<[string, Record<string, unknown>]> = [
+      [
+        "size mismatch",
+        { size: svg.byteLength + 1, sha256: sha256(svg) },
+      ],
+      [
+        "sha mismatch",
+        { size: svg.byteLength, sha256: wrongSha },
+      ],
+      [
+        "size and sha mismatch",
+        { size: wrongSize.byteLength, sha256: wrongSha },
+      ],
+    ];
+    for (const [label, entry] of tampered) {
+      const result = planGeneratedFiles(
+        { ...config, target: "assets", icons: ["arrow-bold-right"] },
+        "src/moeicons",
+        {
+          archiveFiles: {
+            "assets/manifest.json": new TextEncoder().encode(JSON.stringify({
+              schemaVersion: 1,
+              assets: [{ path: "moe-outline/arrow-bold-right.svg", ...entry }],
+            })),
+            "assets/moe-outline/arrow-bold-right.svg": svg,
+          },
+        },
+      );
+      expect(result.ok, label).toBe(false);
+      if (!result.ok) {
+        expect(result.errors.some((error) => error.includes("raw asset verification failed"))).toBe(true);
+      }
+    }
+  });
+
+  it("vanilla target emits dependency-free DOM factories from raw SVG", () => {
+    const svg = new TextEncoder().encode('<svg viewBox="0 0 24 24"><g><path d="M1 1"/></g></svg>');
+    const result = planGeneratedFiles(
+      { ...config, target: "vanilla" },
+      "src/moeicons",
+      {
+        archiveFiles: {
+          "free/assets/manifest.json": new TextEncoder().encode(JSON.stringify({
+            schemaVersion: 1,
+            assets: [
+              { path: "moe-outline/arrow-bold-right.svg", size: svg.byteLength, sha256: sha256(svg) },
+              { path: "moe-solid/arrow-bold-right.svg", size: svg.byteLength, sha256: sha256(svg) },
+              { path: "moe-outline/user-account-circle.svg", size: svg.byteLength, sha256: sha256(svg) },
+              { path: "moe-solid/user-account-circle.svg", size: svg.byteLength, sha256: sha256(svg) },
+            ],
+          })),
+          "free/assets/moe-outline/arrow-bold-right.svg": svg,
+          "free/assets/moe-solid/arrow-bold-right.svg": svg,
+          "free/assets/moe-outline/user-account-circle.svg": svg,
+          "free/assets/moe-solid/user-account-circle.svg": svg,
+        },
+      },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const factory = result.files.find((file) => file.path.endsWith("moe-outline/ArrowBoldRight.ts"))?.content;
+      expect(factory).toContain("createElementNS");
+      expect(factory).toContain("createArrowBoldRight");
+      expect(factory).not.toContain("export const ArrowBoldRight =");
+    }
   });
 });

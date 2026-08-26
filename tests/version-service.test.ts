@@ -56,29 +56,29 @@ describe("read-only CLI update instructions", () => {
     ] as const;
     for (const source of sources) {
       const instruction = fixedUpdateInstruction(source, "1.2.3");
-      expect(instruction).toContain("moeicons@1.2.3");
+       expect(instruction).toContain("@moewolf/moe-icons-cli@1.2.3");
       expect(instruction).not.toContain("latest");
     }
     expect(planCliUpdate("1.0.0", ["1.0.0", "1.1.0", "2.0.0-alpha"], { kind: "npx" })).toEqual({
-      status: "update", currentVersion: "1.0.0", latestVersion: "1.1.0", instruction: "npx --yes moeicons@1.1.0",
+       status: "update", currentVersion: "1.0.0", latestVersion: "1.1.0", instruction: "npx --yes @moewolf/moe-icons-cli@1.1.0",
     });
   });
 
   it("detects a project-local dependency from its lockfile and remains read-only", async () => {
     const reads: string[] = [];
     const fs = {
-      readFileSync(path: string) { reads.push(path); return JSON.stringify({ devDependencies: { moeicons: "0.1.0" } }); },
+       readFileSync(path: string) { reads.push(path); return JSON.stringify({ devDependencies: { "@moewolf/moe-icons-cli": "0.1.0" } }); },
       existsSync(path: string) { reads.push(path); return path.endsWith("pnpm-lock.yaml"); },
     };
     expect(detectLocalInstall("/project", fs)).toEqual({ localDependency: true, localManager: "pnpm" });
     const result = await runCliUpdateCheck({ currentVersion: "0.1.0", cwd: "/project", env: {}, fs, fetchVersions: async () => ["0.1.0", "0.1.1"] });
-    expect(result).toMatchObject({ status: "update", latestVersion: "0.1.1", source: { kind: "local", manager: "pnpm" }, instruction: "pnpm add --save-exact moeicons@0.1.1" });
+     expect(result).toMatchObject({ status: "update", latestVersion: "0.1.1", source: { kind: "local", manager: "pnpm" }, instruction: "pnpm add --save-exact @moewolf/moe-icons-cli@0.1.1" });
     expect(reads.every((path) => path.startsWith("/project/"))).toBe(true);
   });
 
   it("does not downgrade and keeps prerelease channels separate", async () => {
     const fs = { readFileSync: () => { throw new Error("absent"); }, existsSync: () => false };
     await expect(runCliUpdateCheck({ currentVersion: "2.0.0", cwd: "/p", env: {}, fs, fetchVersions: async () => ["1.9.9"] })).resolves.toMatchObject({ status: "current", latestVersion: "1.9.9" });
-    await expect(runCliUpdateCheck({ currentVersion: "1.0.0-alpha", cwd: "/p", env: { npm_command: "exec" }, fs, fetchVersions: async () => ["9.0.0", "1.0.1-alpha"] })).resolves.toMatchObject({ status: "update", instruction: "npx --yes moeicons@1.0.1-alpha" });
+     await expect(runCliUpdateCheck({ currentVersion: "1.0.0-alpha", cwd: "/p", env: { npm_command: "exec" }, fs, fetchVersions: async () => ["9.0.0", "1.0.1-alpha"] })).resolves.toMatchObject({ status: "update", instruction: "npx --yes @moewolf/moe-icons-cli@1.0.1-alpha" });
   });
 });

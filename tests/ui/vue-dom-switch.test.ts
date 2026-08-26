@@ -13,9 +13,9 @@ import type { MoeiconsConfigFile } from "../../src/project/config.js";
  */
 
 const vueConfig: MoeiconsConfigFile = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   tier: "free",
-  framework: "vue",
+  target: "vue",
   outputDir: "src/moeicons",
   defaultTheme: "outline",
   themes: { outline: { styleGroup: "moe-outline", styles: ["outline"] }, solid: { styleGroup: "moe-solid", styles: ["fill"] } },

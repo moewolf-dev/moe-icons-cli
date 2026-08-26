@@ -4,6 +4,7 @@ import { sha256Bytes } from "../project/install-metadata.js";
 import { downloadSignedArtifact, type SignedArtifactDescriptor } from "./signed-artifact.js";
 import { runAccessTokenUseCase, type AuthUseCaseDependencies } from "./auth.js";
 import type { CommandContext } from "./context.js";
+import type { ReleaseTarget, ReleaseTargetMetadata } from "./release-descriptor.js";
 
 const ENDPOINT = "https://api.moeicons.com/v1/icon-library/pro/artifact-descriptor";
 export const PRO_DOWNLOAD_HOSTS = ["06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com"] as const;
@@ -16,19 +17,56 @@ export interface ProArtifactDescriptor extends SignedArtifactDescriptor {
   readonly descriptorSha256: string;
   readonly catalogFilename: "catalog.json";
   readonly catalogSha256: string;
+  /** Optional per-target subtree metadata; verified when the API provides it. */
+  readonly targetMetadata?: Readonly<Partial<Record<ReleaseTarget, ReleaseTargetMetadata>>>;
+}
+
+function parseTargetMetadata(
+  value: unknown,
+): Readonly<Partial<Record<ReleaseTarget, ReleaseTargetMetadata>>> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const result: Partial<Record<ReleaseTarget, ReleaseTargetMetadata>> = {};
+  for (const [key, entry] of Object.entries(record)) {
+    if (
+      key !== "react" &&
+      key !== "vue" &&
+      key !== "vanilla" &&
+      key !== "assets"
+    ) {
+      return undefined;
+    }
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return undefined;
+    const item = entry as Record<string, unknown>;
+    if (typeof item.path !== "string" || /(^|[\\/])\.\.([\\/]|$)/.test(item.path)) return undefined;
+    if (typeof item.sha256 !== "string" || !SHA.test(item.sha256)) return undefined;
+    if (typeof item.fileCount !== "number" || !Number.isSafeInteger(item.fileCount)) return undefined;
+    if (typeof item.byteCount !== "number" || !Number.isSafeInteger(item.byteCount)) return undefined;
+    result[key] = {
+      path: item.path,
+      sha256: item.sha256,
+      fileCount: item.fileCount,
+      byteCount: item.byteCount,
+    };
+  }
+  return result;
 }
 
 function parse(value: unknown, expected: { version: string; descriptorSha256: string }): ProArtifactDescriptor {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new CliError("VALIDATION_ERROR", "invalid pro artifact descriptor");
   const item = value as Record<string, unknown>;
-  const allowed = ["ok", "tier", "version", "descriptorSha256", "catalogFilename", "catalogSha256", "url", "expiresAt", "size", "sha256"];
+  const allowed = ["ok", "tier", "version", "descriptorSha256", "catalogFilename", "catalogSha256", "url", "expiresAt", "size", "sha256", "targetMetadata"];
   if (Object.keys(item).some((key) => !allowed.includes(key)) || item.ok !== true || item.tier !== "pro" || item.version !== expected.version || item.descriptorSha256 !== expected.descriptorSha256 ||
       typeof item.version !== "string" || !VERSION.test(item.version) || typeof item.descriptorSha256 !== "string" || !SHA.test(item.descriptorSha256) ||
       item.catalogFilename !== "catalog.json" || typeof item.catalogSha256 !== "string" || !SHA.test(item.catalogSha256) || typeof item.url !== "string" ||
       typeof item.expiresAt !== "string" || typeof item.size !== "number" || !Number.isSafeInteger(item.size) || item.size < 1 || typeof item.sha256 !== "string" || !SHA.test(item.sha256)) {
     throw new CliError("VALIDATION_ERROR", "invalid or changed pro artifact descriptor");
   }
-  return item as unknown as ProArtifactDescriptor;
+  const targetMetadata = item.targetMetadata !== undefined ? parseTargetMetadata(item.targetMetadata) : undefined;
+  return {
+    ...(item as unknown as ProArtifactDescriptor),
+    ...(targetMetadata ? { targetMetadata } : {}),
+  };
 }
 
 async function requestDescriptor(token: string, expected: { version: string; descriptorSha256: string }, deps: { fetch: typeof fetch; signal: AbortSignal }): Promise<{ status: number; value?: ProArtifactDescriptor }> {

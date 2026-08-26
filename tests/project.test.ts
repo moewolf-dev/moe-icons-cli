@@ -116,8 +116,8 @@ describe("readMoeiconsConfig / mergeMoeiconsConfig", () => {
     const result = readMoeiconsConfig(dir);
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
-      expect(result.config.framework).toBe("react");
-      expect(result.warnings).toEqual([]);
+      expect(result.config.target).toBe("react");
+      expect(result.warnings).toContain('config schema v1 migrated "framework" to "target"');
     }
   });
 
@@ -170,6 +170,18 @@ describe("readMoeiconsConfig / mergeMoeiconsConfig", () => {
   it("rejects an unsupported version", () => {
     writeFileSync(join(dir, "moeicons.config.json"), JSON.stringify({ schemaVersion: 99 }));
     expect(readMoeiconsConfig(dir).kind).toBe("unsupported");
+  });
+
+  it("requires target in v2 and rejects framework in v2", () => {
+    writeConfig(dir, { schemaVersion: 2, framework: undefined, target: undefined });
+    let result = readMoeiconsConfig(dir);
+    expect(result.kind).toBe("invalid");
+    if (result.kind === "invalid") expect(result.message).toContain("target is required");
+
+    writeConfig(dir, { schemaVersion: 2, target: "react", framework: "react" });
+    result = readMoeiconsConfig(dir);
+    expect(result.kind).toBe("invalid");
+    if (result.kind === "invalid") expect(result.message).toContain("use target");
   });
 
   it("rejects unparseable JSON", () => {
@@ -267,7 +279,8 @@ describe("readMoeiconsConfig / mergeMoeiconsConfig", () => {
     };
     const merged = mergeMoeiconsConfig(base, { outputDir: "lib/moeicons" });
     expect(merged.outputDir).toBe("lib/moeicons");
-    expect(merged.framework).toBe("react");
+    expect(merged.target).toBe("react");
+    expect("framework" in merged).toBe(false);
     expect(merged.icons).toEqual(["ui-search"]);
   });
 });
@@ -275,8 +288,8 @@ describe("readMoeiconsConfig / mergeMoeiconsConfig", () => {
 describe("renderMoeiconsConfigJsonc", () => {
   it("uses the supplied framework (vue), not a hardcoded react", () => {
     const jsonc = renderMoeiconsConfigJsonc({ framework: "vue", tier: "free" });
-    expect(jsonc).toContain('"framework": "vue"');
-    expect(jsonc).not.toContain('"framework": "react"');
+    expect(jsonc).toContain('"target": "vue"');
+    expect(jsonc).not.toContain('"target": "react"');
   });
 
   it("uses the supplied tier", () => {
@@ -303,8 +316,8 @@ describe("renderMoeiconsConfigJsonc", () => {
     // The rendered config is a valid, parseable JSONC with all catalog icons selected
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
-      expect(result.config.schemaVersion).toBe(1);
-      expect(result.config.framework).toBe("react");
+      expect(result.config.schemaVersion).toBe(2);
+      expect(result.config.target).toBe("react");
       expect(result.config.icons.length).toBeGreaterThan(100);
     }
   });

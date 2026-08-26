@@ -16,7 +16,7 @@ describe("managed install metadata contract", () => {
     writeFileSync(join(root, ".moeicons", "catalog.json"), catalog);
     writeFileSync(join(root, "src", "moeicons", ".marker"), marker);
     metadata = {
-      schemaVersion: 1, artifactVersion: "0.0.15-alpha", tier: "free",
+      schemaVersion: 1, artifactVersion: "0.0.15-alpha", tier: "free", target: "react",
       descriptorSha256: "a".repeat(64), artifactSha256: "b".repeat(64),
       catalogSha256: sha256Bytes(catalog), installedAt: "2026-08-24T00:00:00.000Z",
       managedFiles: { ".moeicons/catalog.json": sha256Bytes(catalog), "src/moeicons/.marker": sha256Bytes(marker) },
@@ -39,6 +39,10 @@ describe("managed install metadata contract", () => {
     expect(readInstalledResourceState(root, "free")).toMatchObject({ kind: "invalid", message: expect.stringContaining("catalog hash") });
     rmSync(join(root, ".moeicons", "install-metadata.json"));
     expect(readInstalledResourceState(root, "free")).toMatchObject({ kind: "missing" });
+  });
+
+  it("requires target instead of inferring it", () => {
+    expect(parseInstallMetadata(serializeInstallMetadata({ ...metadata, target: undefined as never }))).toBeUndefined();
   });
 
   it("rejects unknown fields, unsafe paths and placeholder hashes", () => {

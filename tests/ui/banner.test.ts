@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { MOEICONS_BANNER, renderBannerText } from "../../src/ui/banner.js";
+import {
+  MOEICONS_BANNER,
+  renderBannerText,
+  renderNoticeBox,
+  visibleWidth,
+} from "../../src/ui/banner.js";
 import { main } from "../../src/cli.js";
 
 function makeRuntime(options: { isTTY?: boolean } = {}) {
@@ -14,6 +19,7 @@ function makeRuntime(options: { isTTY?: boolean } = {}) {
       isTTY: () => options.isTTY ?? false,
       readLine: async () => "",
       readKey: async () => "",
+      fetchVersions: async () => [],
     },
     out,
     err,
@@ -26,17 +32,68 @@ describe("MOEICONS banner", () => {
       "
         __  __  ___  _____ ___ ____ ___  _   _ ____
        |  \\/  |/ _ \\| ____|_ _/ ___/ _ \\| \\ | / ___|
-       | |\\/| | | | |  _|  | | |  | | | |  \\| \\___ \\
+       | |\\/| | | | |  _|  | |  | | | |  \\| \\___ \\
        | |  | | |_| | |___ | | |__| |_| | |\\  |___) |
        |_|  |_|\\___/|_____|___\\____\\___/|_| \\_|____/
       "
     `);
   });
 
-  it("renderBannerText includes the constant and product line", () => {
+  it("renderBannerText includes the constant and dependency notice", () => {
     const text = renderBannerText();
     expect(text).toContain(MOEICONS_BANNER);
-    expect(text).toContain("Moeicons icon library — CLI");
+    expect(text).toContain("Run moeicons from your project root.");
+  });
+
+  it("counts East Asian full-width characters as two visible columns", () => {
+    expect(visibleWidth("猫")).toBe(2);
+    expect(visibleWidth("猫a")).toBe(3);
+    expect(visibleWidth("你好，世界")).toBe(10);
+    expect(visibleWidth("abc")).toBe(3);
+  });
+
+  it("renders an empty notice list without invalid box math", () => {
+    const box = renderNoticeBox([], { width: 8 });
+    const lines = box.split("\n");
+    expect(lines[0]).toContain("┌");
+    expect(lines[lines.length - 1]!).toContain("┘");
+    expect(lines[0]!.length).toBe(lines[lines.length - 1]!.length);
+  });
+
+  it("truncates long lines to the available width without splitting ANSI escapes", () => {
+    const long = "abcdefghij";
+    const box = renderNoticeBox(long, { width: 8 });
+    const lines = box.split("\n");
+    const inner = lines[1]!;
+    expect(inner).toContain("…");
+    expect(visibleWidth(inner)).toBe(lines[0]!.length);
+
+    const colored = "\u001b[31mabcdefghij\u001b[0m";
+    const coloredBox = renderNoticeBox(colored, { width: 8 });
+    const coloredInner = coloredBox.split("\n")[1]!;
+    expect(visibleWidth(coloredInner)).toBe(coloredBox.split("\n")[0]!.length);
+    expect(coloredInner).toContain("\u001b[31m");
+  });
+
+  it("keeps notice borders aligned for ANSI and Unicode text", () => {
+    const box = renderNoticeBox("\u001b[31m猫\u001b[0m", { width: 8 });
+    const lines = box.split("\n");
+    expect(lines[1]).toContain("猫");
+    const borderWidth = lines[0]!.length;
+    const innerVisible = visibleWidth(lines[1]!);
+    expect(borderWidth).toBe(innerVisible);
+    expect(borderWidth).toBe(6);
+    expect(lines[0]).toContain("┌");
+  });
+
+  it("supports separate prompt and CLI update status lines", () => {
+    const box = renderNoticeBox([
+      "A newer Moeicons CLI is available. Update with the command below.",
+      "Current 0.1.0 / Latest 0.1.1 / Update: npx --yes @moewolf/moe-icons-cli@0.1.1",
+    ], { width: 120 });
+    expect(box).toContain("A newer Moeicons CLI is available");
+    expect(box).toContain("Current 0.1.0 / Latest 0.1.1 / Update: npx --yes @moewolf/moe-icons-cli@0.1.1");
+    expect(box.split("\n").filter((line) => line.startsWith("│")).length).toBe(2);
   });
 
   it("prints the banner in TTY human wizard mode", async () => {

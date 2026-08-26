@@ -2,8 +2,10 @@ import { CliError } from "../errors/index.js";
 import { parseVersion } from "./update-policy.js";
 
 const LIBRARY_VERSIONS_URL = "https://api.moeicons.com/v1/icon-library/versions";
-const NPM_PACKAGE_URL = "https://registry.npmjs.org/moeicons";
+const NPM_PACKAGE_URL = "https://registry.npmjs.org/@moewolf%2fmoe-icons-cli";
 const SHA256 = /^[a-f0-9]{64}$/;
+const CLI_VERSION_CACHE_TTL_MS = 5 * 60 * 1_000;
+let cliVersionCache: { readonly expiresAt: number; readonly versions: readonly string[] } | undefined;
 
 export interface PublicTierVersion { readonly version: string; readonly releasedAt: string; readonly descriptorSha256: string }
 export interface PublicLibraryVersions { readonly schemaVersion: 1; readonly free: PublicTierVersion | null; readonly pro: PublicTierVersion | null }
@@ -45,6 +47,14 @@ export async function fetchMoeiconsVersions(deps: { fetch?: typeof fetch; signal
   const value = await response.json() as { versions?: unknown };
   if (typeof value.versions !== "object" || value.versions === null || Array.isArray(value.versions)) throw new CliError("VALIDATION_ERROR", "invalid npm package metadata");
   return Object.keys(value.versions).filter((version) => parseVersion(version));
+}
+
+/** Keep the interactive startup check cheap when the wizard is opened repeatedly. */
+export async function fetchMoeiconsVersionsCached(deps: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<readonly string[]> {
+  if (cliVersionCache && cliVersionCache.expiresAt > Date.now()) return cliVersionCache.versions;
+  const versions = await fetchMoeiconsVersions(deps);
+  cliVersionCache = { versions, expiresAt: Date.now() + CLI_VERSION_CACHE_TTL_MS };
+  return versions;
 }
 
 export function latestInChannel(current: string, versions: readonly string[]): string | undefined {

@@ -13,9 +13,10 @@ moeicons login              browser login (PKCE)
 moeicons logout             clear local session
 moeicons account            show account/tier info
 moeicons groups             list available icon groups
-moeicons generate           generate React/Vue proxy components
+ moeicons generate           generate target-specific project files
 moeicons mcp                start the MCP stdio server
-moeicons --version          show version
+ npm install -g @moewolf/moe-icons-cli
+ moeicons --version          show version
 moeicons --help             show help
 ```
 

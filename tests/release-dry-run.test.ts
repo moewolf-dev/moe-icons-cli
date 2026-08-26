@@ -5,9 +5,8 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 /**
- * CLI-17: release dry-run behavior. Proves the dry-run never publishes,
- * defaults to patch, requires explicit --major/--minor, and blocks on a dirty
- * tree. Runs inside a disposable git repo so no real project is touched.
+ * Release dry-run: never publishes, defaults to patch only, refuses --major/
+ * --minor (x/y are human-owned), and blocks on a dirty tree.
  */
 
 let dir: string;
@@ -26,7 +25,7 @@ beforeEach(() => {
   run("git init -q");
   run('git config user.email test@example.com');
   run('git config user.name test');
-  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "moeicons", version: "0.1.0" }));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "@moewolf/moe-icons-cli", version: "0.0.1" }));
   run("git add package.json");
   run('git commit -q -m "init"');
   run("git branch -M main");
@@ -52,25 +51,17 @@ describe("release-dry-run", () => {
     };
     expect(parsed.ok).toBe(true);
     expect(parsed.bump).toBe("patch");
-    expect(parsed.currentVersion).toBe("0.1.0");
-    expect(parsed.proposedVersion).toBe("0.1.1");
+    expect(parsed.currentVersion).toBe("0.0.1");
+    expect(parsed.proposedVersion).toBe("0.0.2");
     expect(parsed.published).toBe(false);
     expect(existsSync(join(dir, "CHANGELOG.md"))).toBe(true);
-    expect(readFileSync(join(dir, "CHANGELOG.md"), "utf8")).toContain("0.1.1");
+    expect(readFileSync(join(dir, "CHANGELOG.md"), "utf8")).toContain("0.0.2");
   });
 
-  it("requires explicit --major/--minor for those bumps", () => {
-    const major = JSON.parse(runScript(["--major"])) as {
-      proposedVersion: string;
-    };
-    expect(major.proposedVersion).toBe("1.0.0");
-    // commit the changelog so the next dry-run sees a clean tree
-    run("git add CHANGELOG.md && git commit -q -m 'changelog major'");
-
-    const minor = JSON.parse(runScript(["--minor"])) as {
-      proposedVersion: string;
-    };
-    expect(minor.proposedVersion).toBe("0.2.0");
+  it("refuses --major/--minor so x/y stay human-owned", () => {
+    expect(() => runScript(["--major"])).toThrow(/major\/minor|manually/i);
+    expect(() => runScript(["--minor"])).toThrow(/major\/minor|manually/i);
+    expect(existsSync(join(dir, "CHANGELOG.md"))).toBe(false);
   });
 
   it("blocks on a dirty working tree", () => {

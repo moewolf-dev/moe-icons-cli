@@ -41,6 +41,11 @@ describe("parseArgs", () => {
     expect(r.yes).toBe(true);
   });
 
+  it("validates and carries the frozen output target", () => {
+    expect(parseArgs(["generate", "--target", "assets"]).target).toBe("assets");
+    expect(() => parseArgs(["generate", "--target", "svelte"])).toThrow("unknown target: svelte");
+  });
+
   it("rejects unknown commands as validation errors", () => {
     expect(() => parseArgs(["frobnicate"])).toThrow(CliError);
     try {
@@ -77,7 +82,7 @@ describe("main", () => {
     const { runtime, out } = makeRuntime();
     const code = await main(["--version"], runtime);
     expect(code).toBe(0);
-    expect(out.join("")).toContain("0.1.0");
+    expect(out.join("")).toContain("0.0.1");
   });
 
   it("returns validation error code for unknown command", async () => {

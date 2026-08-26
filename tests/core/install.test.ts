@@ -11,9 +11,9 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runInstallUseCase } from "../../src/core/install.js";
-import { readInstalledResourceState } from "../../src/project/install-metadata.js";
+import { readInstalledResourceState, parseInstallMetadata } from "../../src/project/install-metadata.js";
 import type { CommandContext, CommandUi } from "../../src/core/context.js";
-import { writeFreeReleaseFixture } from "../helpers/free-release-fixture.js";
+import { writeFreeReleaseFixture, targetSubtreeFiles } from "../helpers/free-release-fixture.js";
 
 function fakeUi(): CommandUi {
   return {
@@ -109,12 +109,65 @@ describe("runInstallUseCase", () => {
   it("routes pro/ent away from the free download path", async () => {
     expect(await runInstallUseCase(context(project), deps(), { group: "pro" })).toEqual({
       ok: false,
-      reason: "pro-not-implemented",
+      reason: "validation",
+      message: "pro install requires the authenticated pro flow",
     });
     expect(await runInstallUseCase(context(project), deps(), { group: "ent" })).toEqual({
       ok: false,
-      reason: "pro-not-implemented",
+      reason: "validation",
+      message: "pro install requires the authenticated pro flow",
     });
+    expect(existsSync(join(project, ".moeicons"))).toBe(false);
+  });
+
+  it("installs only the selected target subtree and records its hash in metadata", async () => {
+    const result = await runInstallUseCase(context(project), deps(), {
+      group: "free",
+      target: "assets",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const expected = targetSubtreeFiles().assets;
+    for (const [rel] of Object.entries(expected)) {
+      expect(existsSync(join(project, ".moeicons", "artifact", "assets", rel))).toBe(true);
+    }
+    expect(existsSync(join(project, ".moeicons", "artifact", "react"))).toBe(false);
+    expect(existsSync(join(project, ".moeicons", "artifact", "vue"))).toBe(false);
+    expect(existsSync(join(project, ".moeicons", "artifact", "vanilla"))).toBe(false);
+    const metadata = parseInstallMetadata(
+      readFileSync(join(project, ".moeicons", "install-metadata.json"), "utf8"),
+    );
+    expect(metadata?.target).toBe("assets");
+    expect(metadata?.targetSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(metadata?.targetFileCount).toBe(Object.keys(expected).length);
+    expect(readInstalledResourceState(project, "free").kind).toBe("ok");
+  });
+
+  it("rejects a target subtree whose descriptor hash does not match the archive", async () => {
+    const tampered = writeFreeReleaseFixture(fixture, { tamperTarget: "assets" });
+    void tampered;
+    const result = await runInstallUseCase(context(project), deps(), {
+      group: "free",
+      target: "assets",
+    });
+    expect(result).toMatchObject({ ok: false, reason: "checksum-mismatch" });
+    if (result.ok === false && result.reason === "checksum-mismatch") {
+      expect(result.message).toContain("target subtree \"assets\"");
+    }
+    expect(existsSync(join(project, ".moeicons"))).toBe(false);
+    expect(existsSync(join(project, "src", "moeicons"))).toBe(false);
+  });
+
+  it("rejects an invalid config instead of defaulting to react", async () => {
+    writeFileSync(
+      join(project, "moeicons.config.json"),
+      JSON.stringify({ schemaVersion: 2, tier: "free", outputDir: "src/moeicons" }),
+    );
+    const result = await runInstallUseCase(context(project), deps(), { group: "free" });
+    expect(result).toMatchObject({ ok: false, reason: "validation" });
+    if (result.ok === false && result.reason === "validation") {
+      expect(result.message).toContain("target is required");
+    }
     expect(existsSync(join(project, ".moeicons"))).toBe(false);
   });
 

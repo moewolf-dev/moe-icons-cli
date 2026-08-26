@@ -7,6 +7,8 @@ import {
   toProxyName,
 } from "../core/icon-names.js";
 import { selectBitmapVariantAssets } from "../core/bitmap-assets.js";
+import { createHash } from "node:crypto";
+import { decodeUtf8 } from "../project/tar-gz.js";
 import { CN_HELPER_SOURCE } from "./cn.js";
 import {
   bitmapWrapperImportName,
@@ -80,7 +82,9 @@ export interface IconProps {
   [key: string]: unknown;
 }
 export type Theme =
-${Object.keys(config.themes).map((theme) => `  | ${JSON.stringify(theme)}`).join("\n")};
+${Object.keys(config.themes)
+  .map((theme) => `  | ${JSON.stringify(theme)}`)
+  .join("\n")};
 `,
   });
 
@@ -216,8 +220,11 @@ export interface IconProps {
   "aria-label"?: string;
   [key: string]: unknown;
 }
+
 export type Theme =
-${Object.keys(config.themes).map((theme) => `  | ${JSON.stringify(theme)}`).join("\n")};
+${Object.keys(config.themes)
+  .map((theme) => `  | ${JSON.stringify(theme)}`)
+  .join("\n")};
 `,
   });
 
@@ -382,6 +389,122 @@ ${config.icons
   });
 }
 
+type SvgNode = { readonly name: string; readonly attrs: readonly [string, string][]; readonly children: readonly SvgNode[]; readonly text?: never } | { readonly text: string };
+
+function parseSvgNodes(source: string): { viewBox: string; children: SvgNode[] } {
+  const root: { children: SvgNode[] } = { children: [] };
+  const stack: Array<{ children: SvgNode[] }> = [root];
+  const svg = source.match(/<svg\b[^>]*>/i);
+  if (!svg) throw new Error("SVG root element is missing");
+  const viewBox = svg[0].match(/\bviewBox\s*=\s*["']([^"']+)["']/i)?.[1] ?? "0 0 24 24";
+  const inner = source.slice((svg.index ?? 0) + svg[0].length).replace(/<\/svg>\s*$/i, "");
+  const tokenRe = /<!--[\s\S]*?-->|<[^>]+>|[^<]+/g;
+  for (const match of inner.matchAll(tokenRe)) {
+    const token = match[0];
+    if (token.startsWith("<!--") || !token.trim()) continue;
+    if (token.startsWith("</")) {
+      if (stack.length > 1) stack.pop();
+      continue;
+    }
+    if (!token.startsWith("<")) {
+      stack[stack.length - 1]?.children.push({ text: token });
+      continue;
+    }
+    const selfClosing = /\/\s*>$/.test(token);
+    const body = token.slice(1, token.length - (selfClosing ? 2 : 1)).trim();
+    const name = body.match(/^[A-Za-z][\w:.-]*/)?.[0];
+    if (!name) continue;
+    const attrs: [string, string][] = [];
+    body.slice(name.length).replace(/([A-Za-z_:][\w:.-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g, (_full, attr: string, doubleValue?: string, singleValue?: string, bareValue?: string) => {
+      attrs.push([attr, doubleValue ?? singleValue ?? bareValue ?? ""]);
+      return "";
+    });
+    const node: { name: string; attrs: [string, string][]; children: SvgNode[] } = { name, attrs, children: [] };
+    stack[stack.length - 1]?.children.push(node);
+    if (!selfClosing) stack.push(node);
+  }
+  return { viewBox, children: root.children };
+}
+
+function vanillaFactorySource(name: string, source: string, strategy: "outline" | "solid" | "mixed"): string {
+  const parsed = parseSvgNodes(source);
+  const paint = strategy === "solid" ? [["fill", "currentColor"]] : strategy === "outline" ? [["stroke", "currentColor"], ["fill", "none"]] : [];
+  const graphic = new Set(["path", "circle", "ellipse", "line", "polyline", "polygon", "rect", "text", "use", "image"]);
+  const lines = [
+    "const SVG_NS = 'http://www.w3.org/2000/svg';", "",
+    "export interface VanillaIconOptions extends Record<string, string | number | undefined> { className?: string; strokeWidth?: number; }", "",
+    `export function create${name}(options: VanillaIconOptions = {}): SVGElement {`,
+    "  const svg = document.createElementNS(SVG_NS, 'svg');",
+    `  svg.setAttribute('viewBox', ${JSON.stringify(parsed.viewBox)});`,
+    "  svg.setAttribute('class', options.className ? `moe-icon ${options.className}` : 'moe-icon');",
+  ];
+  for (const [attr, value] of paint) lines.push(`  svg.setAttribute(${JSON.stringify(attr)}, ${JSON.stringify(value)});`);
+  lines.push("  if (options.strokeWidth !== undefined) svg.setAttribute('stroke-width', String(options.strokeWidth));");
+  lines.push("  for (const [name, value] of Object.entries(options)) if (name !== 'className' && name !== 'strokeWidth' && value !== undefined) svg.setAttribute(name, String(value));");
+  let counter = 0;
+  const emit = (nodes: readonly SvgNode[], parent: string): void => {
+    for (const node of nodes) {
+      if ("text" in node) { lines.push(`  ${parent}.appendChild(document.createTextNode(${JSON.stringify(node.text)}));`); continue; }
+      const variable = `node${counter++}`;
+      lines.push(`  const ${variable} = document.createElementNS(SVG_NS, ${JSON.stringify(node.name)});`);
+      for (const [attr, value] of node.attrs) lines.push(`  ${variable}.setAttribute(${JSON.stringify(attr)}, ${JSON.stringify(value)});`);
+      if (graphic.has(node.name.toLowerCase())) {
+        if (strategy === "outline" && !node.attrs.some(([attr]) => attr.toLowerCase() === "stroke")) lines.push(`  ${variable}.setAttribute('stroke', 'currentColor');`);
+        if (strategy === "outline" && !node.attrs.some(([attr]) => attr.toLowerCase() === "fill")) lines.push(`  ${variable}.setAttribute('fill', 'none');`);
+        if (strategy === "solid" && !node.attrs.some(([attr]) => attr.toLowerCase() === "fill")) lines.push(`  ${variable}.setAttribute('fill', 'currentColor');`);
+      }
+      emit(node.children, variable);
+      lines.push(`  ${parent}.appendChild(${variable});`);
+    }
+  };
+  emit(parsed.children, "svg");
+  lines.push("  return svg;", "}", "", `export default create${name};`, "");
+  return lines.join("\n");
+}
+
+function archiveManifest(archiveFiles: Readonly<Record<string, Uint8Array>>): { path: string; assets: Array<{ path: string; size: number; sha256: string }> } | undefined {
+  const entry = Object.entries(archiveFiles).find(([path]) => /(?:^|\/)assets\/manifest\.json$/.test(path));
+  if (!entry) return undefined;
+  try {
+    const parsed = JSON.parse(decodeUtf8(entry[1])) as { schemaVersion?: unknown; assets?: Array<{ path?: unknown; size?: unknown; sha256?: unknown }> };
+    if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.assets)) return undefined;
+    const assets = parsed.assets.filter((asset): asset is { path: string; size: number; sha256: string } => typeof asset.path === "string" && typeof asset.size === "number" && Number.isSafeInteger(asset.size) && asset.size >= 0 && typeof asset.sha256 === "string");
+    return { path: entry[0], assets };
+  } catch { return undefined; }
+}
+
+function sha256Hex(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function selectRawAssets(archiveFiles: Readonly<Record<string, Uint8Array>>, themes: readonly ResolvedTheme[], icons: readonly string[]): { ok: true; assets: GeneratedFile[] } | { ok: false; errors: string[] } {
+  const manifest = archiveManifest(archiveFiles);
+  if (!manifest) return { ok: false, errors: ["installed artifact assets manifest is missing or invalid"] };
+  const base = manifest.path.slice(0, manifest.path.lastIndexOf("/"));
+  const wanted = new Set(themes.filter((theme) => theme.kind === "svg").flatMap((theme) => icons.map((icon) => `${theme.entry.styleGroup}/${icon}.svg`)));
+  const assets: GeneratedFile[] = [];
+  const errors: string[] = [];
+  for (const path of wanted) {
+    const entry = manifest.assets.find((asset) => asset.path === path);
+    const bytes = entry ? archiveFiles[`${base}/${entry.path}`] ?? archiveFiles[entry.path] : undefined;
+    if (!entry || !bytes) {
+      errors.push(`raw asset missing: ${path}`);
+      continue;
+    }
+    const sizeOk = bytes.byteLength === entry.size;
+    const shaOk = sha256Hex(bytes) === entry.sha256.toLowerCase();
+    if (!sizeOk || !shaOk) {
+      errors.push(
+        `raw asset verification failed for ${path}: expected size ${entry.size}/sha256 ${entry.sha256}, got size ${bytes.byteLength}/sha256 ${sha256Hex(bytes)}`,
+      );
+      continue;
+    }
+    assets.push({ path: `assets/${entry.path}`, content: bytes });
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, assets };
+}
+
 /**
  * Plan generated files for a config. Returns only owned paths under the config
  * output dir. Rejects duplicate PascalCase names and a config with no themes.
@@ -390,7 +513,10 @@ ${config.icons
 export function planGeneratedFiles(
   config: MoeiconsConfigFile,
   outputDir: string,
-  options: { readonly archiveFiles?: Readonly<Record<string, Uint8Array>>; readonly catalog?: IconCatalog } = {},
+  options: {
+    readonly archiveFiles?: Readonly<Record<string, Uint8Array>>;
+    readonly catalog?: IconCatalog;
+  } = {},
 ): GenerationOutcome {
   const errors: string[] = [];
   if (Object.keys(config.themes).length === 0) {
@@ -410,7 +536,9 @@ export function planGeneratedFiles(
     }
     for (const [theme, entry] of Object.entries(config.themes)) {
       if (!catalogIcon.availableIn.includes(entry.styleGroup)) {
-        errors.push(`icon "${iconId}" is not available in style group "${entry.styleGroup}" for theme "${theme}"`);
+        errors.push(
+          `icon "${iconId}" is not available in style group "${entry.styleGroup}" for theme "${theme}"`,
+        );
       }
     }
   }
@@ -422,16 +550,55 @@ export function planGeneratedFiles(
   const files: GeneratedFile[] = [];
   const rel = (p: string) => `${outputDir.replace(/\/$/, "")}/${p}`;
 
-  if (config.framework === "vue") {
+  const target = config.target;
+  if (target === "assets") {
+    // Assets are a raw-resource target; never emit wrapper code for it.
+  } else if (target === "vanilla") {
+    if (resolved.themes.some((theme) => theme.kind === "bitmap")) {
+      return { ok: false, errors: ["vanilla target supports SVG themes only"] };
+    }
+    if (options.archiveFiles === undefined) {
+      return { ok: false, errors: ["vanilla target requires an installed artifact"] };
+    }
+    const raw = selectRawAssets(options.archiveFiles, resolved.themes, config.icons);
+    if (!raw.ok) return raw;
+    const rawByPath = new Map(raw.assets.map((file) => [file.path.replace(/^assets\//, ""), file.content]));
+    const groups = new Set(resolved.themes.map((theme) => theme.entry.styleGroup));
+    files.push({ path: rel("types.ts"), content: "export interface VanillaIconOptions extends Record<string, string | number | undefined> { className?: string; strokeWidth?: number; }\n" });
+    for (const styleGroup of groups) {
+      const exports: string[] = ["// Vanilla factory exports"];
+      for (const iconId of config.icons) {
+        const name = toPascalCase(iconId);
+        const source = rawByPath.get(`${styleGroup}/${iconId}.svg`);
+        if (!source || typeof source === "string") return { ok: false, errors: [`raw asset missing: ${styleGroup}/${iconId}.svg`] };
+        const strategy = styleGroup.endsWith("-outline") ? "outline" : styleGroup.endsWith("-solid") ? "solid" : "mixed";
+        files.push({ path: rel(`${styleGroup}/${name}.ts`), content: vanillaFactorySource(name, decodeUtf8(source), strategy) });
+        exports.push(`export { default as ${toLibraryExportName(iconId)}, create${name} } from './${name}';`);
+      }
+      files.push({ path: rel(`${styleGroup}/index.ts`), content: `${exports.join("\n")}\n` });
+    }
+    files.push({ path: rel("index.ts"), content: `${[...groups].map((group) => `export * from './${group}';`).join("\n")}\n` });
+  } else if (target === "vue") {
     appendVueFiles(files, rel, config, resolved.themes);
   } else {
     appendReactFiles(files, rel, config, resolved.themes);
   }
 
+  if (target === "assets") {
+    if (options.archiveFiles === undefined) {
+      return { ok: false, errors: ["assets target requires an installed artifact"] };
+    }
+    const raw = selectRawAssets(options.archiveFiles, resolved.themes, config.icons);
+    if (!raw.ok) return raw;
+    for (const asset of raw.assets) files.push({ path: rel(asset.path), content: asset.content });
+  }
+
   const bitmapThemes = resolved.themes.filter((theme) => theme.kind === "bitmap" && theme.variant);
   if (bitmapThemes.length > 0) {
     const variants = bitmapThemes.flatMap((theme) => (theme.variant ? [theme.variant] : []));
-    const unique = [...new Map(variants.map((variant) => [variant.resourceVariantId, variant])).values()];
+    const unique = [
+      ...new Map(variants.map((variant) => [variant.resourceVariantId, variant])).values(),
+    ];
     if (options.archiveFiles === undefined) {
       return {
         ok: false,
@@ -445,6 +612,18 @@ export function planGeneratedFiles(
     for (const asset of selected.assets) {
       files.push({ path: rel(asset.destRel), content: asset.bytes });
     }
+  }
+
+  if (target === "assets") {
+    const manifestAssets = files
+      .filter((file) => file.path.startsWith(`${outputDir.replace(/\/$/, "")}/assets/`) && !file.path.endsWith("/manifest.json"))
+      .map((file) => {
+        const path = file.path.slice(`${outputDir.replace(/\/$/, "")}/assets/`.length);
+        const bytes = typeof file.content === "string" ? Buffer.from(file.content, "utf8") : Buffer.from(file.content);
+        return { path, size: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") };
+      })
+      .sort((a, b) => a.path.localeCompare(b.path));
+    files.push({ path: rel("assets/manifest.json"), content: `${JSON.stringify({ schemaVersion: 1, assets: manifestAssets }, null, 2)}\n` });
   }
 
   return { ok: true, files };

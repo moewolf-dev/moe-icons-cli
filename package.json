@@ -1,7 +1,7 @@
 {
-  "name": "moeicons",
-  "version": "0.1.0",
-  "description": "Moeicons CLI: install icon groups, manage login/tokens, generate React/Vue proxy components, and expose an MCP server.",
+  "name": "@moewolf/moe-icons-cli",
+  "version": "0.0.1",
+  "description": "Moeicons CLI: install React, Vue, Vanilla, or Assets icon targets, manage releases and login, and expose an MCP server.",
   "type": "module",
   "main": "./dist/cli.js",
   "types": "./dist/cli.d.ts",
@@ -12,6 +12,9 @@
     }
   },
   "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "moeicons": "bin/moeicons.js"
   },
@@ -26,10 +29,13 @@
   ],
   "scripts": {
     "generate-banner": "node scripts/generate-banner.mjs",
+    "prebuild": "rimraf dist",
     "build": "tsc -p tsconfig.build.json && node scripts/copy-catalog.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src --ext .ts",
     "test": "vitest run",
+    "release:preflight": "node scripts/release-preflight.mjs",
+    "prepublishOnly": "npm run release:preflight",
     "format": "prettier --write src tests"
   },
   "devDependencies": {

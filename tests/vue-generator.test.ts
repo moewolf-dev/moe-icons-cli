@@ -3,9 +3,9 @@ import { planGeneratedFiles, toPascalCase } from "../src/generator/generate.js";
 import type { MoeiconsConfigFile } from "../src/project/config.js";
 
 const vueConfig: MoeiconsConfigFile = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   tier: "free",
-  framework: "vue",
+  target: "vue",
   outputDir: "src/moeicons",
   defaultTheme: "outline",
   themes: { outline: { styleGroup: "moe-outline" }, solid: { styleGroup: "moe-solid" } },

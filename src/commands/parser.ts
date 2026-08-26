@@ -2,7 +2,7 @@ import { Command as Commander, CommanderError } from "commander";
 import { CliError } from "../errors/index.js";
 
 export type Command =
-  | { readonly name: "install"; readonly group?: string }
+  | { readonly name: "install"; readonly group?: string; readonly target?: Target }
   | { readonly name: "login" }
   | { readonly name: "logout" }
   | { readonly name: "account" }
@@ -21,7 +21,10 @@ export interface ParseResult {
   readonly yes: boolean;
   /** Skip Tailwind config auto-integration (H4). */
   readonly noTailwind: boolean;
+  readonly target?: Target;
 }
+
+export type Target = "react" | "vue" | "vanilla" | "assets";
 
 const SIMPLE_COMMANDS = [
   "login",
@@ -81,7 +84,10 @@ function toCliError(error: unknown): never {
     const match = /unknown command ['`]?([^'`\s]+)/.exec(error.message);
     throw new CliError("VALIDATION_ERROR", `unknown command: ${match?.[1] ?? "unknown"}`);
   }
-  if (error instanceof CommanderError && (error.code === "commander.help" || error.code === "commander.helpDisplayed")) {
+  if (
+    error instanceof CommanderError &&
+    (error.code === "commander.help" || error.code === "commander.helpDisplayed")
+  ) {
     throw new CliError("VALIDATION_ERROR", error.message);
   }
   throw error;
@@ -101,12 +107,36 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   const help = argv.includes("--help") || argv.includes("-h");
   const pro = argv.includes("--pro");
   const ent = argv.includes("--ent");
+  const targetIndex = argv.indexOf("--target");
+  const targetValue = targetIndex >= 0 ? argv[targetIndex + 1] : undefined;
+  if (targetIndex >= 0 && !["react", "vue", "vanilla", "assets"].includes(targetValue ?? "")) {
+    throw new CliError("VALIDATION_ERROR", `unknown target: ${targetValue ?? ""}`);
+  }
+  const target = targetValue as Target | undefined;
+  const withTarget = <T extends Command>(command: T): T =>
+    target ? { ...command, target } : command;
 
   // Preserve previous flag precedence: version/help/legacy aliases beat subcommands.
-  if (version) return { command: { name: "version" }, json, yes, noTailwind };
-  if (help) return { command: { name: "help" }, json, yes, noTailwind };
-  if (pro) return { command: { name: "install", group: "pro" }, json, yes, noTailwind };
-  if (ent) return { command: { name: "install", group: "ent" }, json, yes, noTailwind };
+  if (version)
+    return { command: { name: "version" }, json, yes, noTailwind, ...(target ? { target } : {}) };
+  if (help)
+    return { command: { name: "help" }, json, yes, noTailwind, ...(target ? { target } : {}) };
+  if (pro)
+    return {
+      command: withTarget({ name: "install", group: "pro" }),
+      json,
+      yes,
+      noTailwind,
+      ...(target ? { target } : {}),
+    };
+  if (ent)
+    return {
+      command: withTarget({ name: "install", group: "ent" }),
+      json,
+      yes,
+      noTailwind,
+      ...(target ? { target } : {}),
+    };
 
   const positional = argv.filter((arg) => !arg.startsWith("-"));
   const first = positional[0];
@@ -117,13 +147,19 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   let selected: Command | undefined;
   try {
     createProgram((command) => {
-      selected = command;
+      selected = withTarget(command);
     }).parse([...argv], { from: "user" });
   } catch (error) {
     toCliError(error);
   }
 
-  return { command: selected ?? { name: "wizard" }, json, yes, noTailwind };
+  return {
+    command: selected ?? { name: "wizard" },
+    json,
+    yes,
+    noTailwind,
+    ...(target ? { target } : {}),
+  };
 }
 
 export const HELP_TEXT = `moeicons — Moeicons icon library CLI
@@ -144,5 +180,6 @@ Usage:
 Options:
   --json         machine-readable JSON output
   --yes          skip confirmations in noninteractive mode
+  --target       output target: react, vue, vanilla, or assets
   --no-tailwind  skip Tailwind config auto-integration
 `;

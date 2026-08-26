@@ -2,7 +2,16 @@ import { parseArgs, HELP_TEXT, type Command } from "./commands/parser.js";
 import { CliError, isCliError, jsonErrorBody, type CliErrorCode } from "./errors/index.js";
 import { detectProject } from "./project/detect.js";
 import { readMoeiconsConfig } from "./project/config.js";
-import { mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, readdirSync, copyFileSync } from "node:fs";
+import {
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  renameSync,
+  rmSync,
+  readdirSync,
+  copyFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { runInitUseCase } from "./core/init.js";
@@ -11,8 +20,14 @@ import { runInstallUseCase } from "./core/install.js";
 import { runWizardUseCase } from "./core/wizard.js";
 import type { CommandContext } from "./core/context.js";
 import { createCommandUi } from "./ui/create-ui.js";
-import { MOEICONS_BANNER, renderBannerText } from "./ui/banner.js";
-import { runAccountUseCase, runLoginUseCase, runLogoutUseCase, runSessionStatusUseCase, type AuthUseCaseDependencies } from "./core/auth.js";
+import { CLI_VERSION, MOEICONS_BANNER, renderBannerText, renderNoticeBox } from "./ui/banner.js";
+import {
+  runAccountUseCase,
+  runLoginUseCase,
+  runLogoutUseCase,
+  runSessionStatusUseCase,
+  type AuthUseCaseDependencies,
+} from "./core/auth.js";
 import { formatLibraryVersionStatus, getLibraryVersionStatus } from "./core/manage.js";
 import { runCliUpdateCheck } from "./core/cli-update.js";
 import { fetchLibraryVersions } from "./core/version-service.js";
@@ -34,9 +49,13 @@ export interface CliRuntime {
   readonly readLine?: (prompt: string) => Promise<string>;
   readonly readKey?: () => Promise<string>;
   readonly auth?: AuthUseCaseDependencies;
+  readonly fetchVersions?: () => Promise<readonly string[]>;
 }
 
-function commandContext(runtime: CliRuntime, flags: { json: boolean; yes: boolean }): CommandContext {
+function commandContext(
+  runtime: CliRuntime,
+  flags: { json: boolean; yes: boolean },
+): CommandContext {
   const streams =
     runtime.readLine !== undefined && runtime.readKey !== undefined
       ? {
@@ -88,10 +107,7 @@ function reportFailure(runtime: CliRuntime, json: boolean, error: unknown): numb
   return 5;
 }
 
-export async function main(
-  argv: readonly string[],
-  runtime: CliRuntime,
-): Promise<number> {
+export async function main(argv: readonly string[], runtime: CliRuntime): Promise<number> {
   await Promise.resolve();
   const jsonHint = argvRequestsJson(argv);
   let parsed;
@@ -102,7 +118,14 @@ export async function main(
   }
 
   try {
-    return await dispatchSync(parsed.command, runtime, parsed.json, parsed.yes, parsed.noTailwind);
+    return await dispatchSync(
+      parsed.command,
+      runtime,
+      parsed.json,
+      parsed.yes,
+      parsed.noTailwind,
+      parsed.target,
+    );
   } catch (error) {
     return reportFailure(runtime, parsed.json, error);
   }
@@ -114,6 +137,7 @@ async function dispatchSync(
   json: boolean,
   yes: boolean,
   noTailwind: boolean,
+  target?: "react" | "vue" | "vanilla" | "assets",
 ): Promise<number> {
   switch (command.name) {
     case "version":
@@ -126,7 +150,15 @@ async function dispatchSync(
     case "wizard":
       return await runWizard(runtime, json, yes);
     case "install":
-      return await runInstall(command.group, runtime, json, noTailwind);
+      return await runInstall(
+        command.group,
+        runtime,
+        json,
+        noTailwind,
+        undefined,
+        undefined,
+        command.target,
+      );
     case "login":
       return await runLogin(runtime, json, yes);
     case "logout":
@@ -136,9 +168,9 @@ async function dispatchSync(
     case "groups":
       throw new CliError("NOT_IMPLEMENTED", "groups is not implemented yet");
     case "generate":
-      return runGenerate(runtime, json, noTailwind);
+      return await runGenerate(runtime, json, noTailwind, false, target, yes);
     case "init":
-      return runInit(runtime, json);
+      return runInit(runtime, json, target);
     case "mcp":
       void runMcp(runtime);
       return 0;
@@ -146,36 +178,64 @@ async function dispatchSync(
 }
 
 async function runLogin(runtime: CliRuntime, json: boolean, yes: boolean): Promise<number> {
-  const session = await runLoginUseCase(commandContext(runtime, { json, yes }), { ...runtime.auth, fileFallbackAllowed: runtime.isTTY() });
+  const session = await runLoginUseCase(commandContext(runtime, { json, yes }), {
+    ...runtime.auth,
+    fileFallbackAllowed: runtime.isTTY(),
+  });
   if (json) writeJson(runtime, { ok: true, account: session });
   else runtime.stdout(`Logged in as ${session.accountId}\n`);
   return 0;
 }
 
 async function runAccount(runtime: CliRuntime, json: boolean): Promise<number> {
-  const session = await runAccountUseCase(commandContext(runtime, { json, yes: false }), runtime.auth);
+  const session = await runAccountUseCase(
+    commandContext(runtime, { json, yes: false }),
+    runtime.auth,
+  );
   if (json) writeJson(runtime, { ok: true, account: session });
-  else runtime.stdout(`Account: ${session.accountId}\nSession expires: ${new Date(session.expiresAt).toISOString()}\n`);
+  else
+    runtime.stdout(
+      `Account: ${session.accountId}\nSession expires: ${new Date(session.expiresAt).toISOString()}\n`,
+    );
   return 0;
 }
 
 async function runLogout(runtime: CliRuntime, json: boolean): Promise<number> {
-  const result = await runLogoutUseCase(commandContext(runtime, { json, yes: false }), runtime.auth);
+  const result = await runLogoutUseCase(
+    commandContext(runtime, { json, yes: false }),
+    runtime.auth,
+  );
   if (json) writeJson(runtime, { ok: true, ...result });
-  else runtime.stdout(result.revoked ? "Logged out.\n" : "Logged out locally; remote revocation was not confirmed.\n");
+  else
+    runtime.stdout(
+      result.revoked
+        ? "Logged out.\n"
+        : "Logged out locally; remote revocation was not confirmed.\n",
+    );
   return 0;
 }
 
 /** Create moeicons.config.jsonc if absent (never overwrites an existing config). */
-function runInit(runtime: CliRuntime, json: boolean): number {
-  const result = runInitUseCase(commandContext(runtime, { json, yes: false }), { mkdirSync, writeFileSync, existsSync, renameSync, rmSync });
+function runInit(
+  runtime: CliRuntime,
+  json: boolean,
+  target?: "react" | "vue" | "vanilla" | "assets",
+): number {
+  const result = runInitUseCase(
+    commandContext(runtime, { json, yes: false }),
+    { mkdirSync, writeFileSync, existsSync, renameSync, rmSync },
+    target,
+  );
   if (!result.ok && result.reason === "exists") {
     if (json) writeJson(runtime, { ok: true, alreadyExisted: true });
     else runtime.stdout("moeicons.config.jsonc already exists; not overwritten.\n");
     return 0;
   }
   if (!result.ok) {
-    throw new CliError("VALIDATION_ERROR", result.reason === "no-project" ? "no project found" : "init failed");
+    throw new CliError(
+      "VALIDATION_ERROR",
+      result.reason === "no-project" ? "no project found" : "init failed",
+    );
   }
   if (json) writeJson(runtime, { ok: true, created: result.created });
   else runtime.stdout(`Created ${result.created}\n`);
@@ -203,13 +263,39 @@ async function runMcp(runtime: CliRuntime): Promise<void> {
 }
 
 function versionString(): string {
-  return "0.1.0";
+  return CLI_VERSION;
+}
+
+function renderCliUpdateNotice(update: Awaited<ReturnType<typeof runCliUpdateCheck>>): string {
+  const latest = update.latestVersion ?? "unavailable";
+  const instruction = update.instruction ?? (update.status === "current" ? "already up to date" : "unavailable");
+  const prompt = update.status === "update"
+    ? "A newer Moeicons CLI is available. Update with the command below."
+    : "Moeicons CLI version status";
+  return renderNoticeBox([
+    prompt,
+    `Current ${update.currentVersion} / Latest ${latest} / Update: ${instruction}`,
+  ]);
 }
 
 /** Guided flow: Free / Pro / Login, with project-root confirmation before write. */
 async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Promise<number> {
   if (!json && runtime.isTTY()) {
     renderBanner(runtime);
+    runtime.stdout(`CLI ${versionString()}\n`);
+    try {
+      const update = await runCliUpdateCheck({
+        currentVersion: versionString(),
+        cwd: runtime.cwd(),
+        env: runtime.env,
+        fs: { existsSync, readFileSync: (path) => readFileSync(path, "utf8") },
+        timeoutMs: 1_000,
+        ...(runtime.fetchVersions ? { fetchVersions: runtime.fetchVersions } : {}),
+      });
+      runtime.stdout(`${renderCliUpdateNotice(update)}\n`);
+    } catch {
+      runtime.stdout(`${renderNoticeBox(["Moeicons CLI version status", `Current ${versionString()} / Latest unavailable / Update: unavailable`])}\n`);
+    }
   }
   const context = commandContext(runtime, { json, yes });
   const session = await runSessionStatusUseCase(context, runtime.auth).catch((error: unknown) => ({
@@ -220,10 +306,17 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
     const project = detectProject(runtime.cwd());
     if (!project) return "Current: invalid / Latest: unavailable / Status: no project";
     const config = readMoeiconsConfig(project.root);
-    if (config.kind !== "ok") return `Current: invalid / Latest: unavailable / Status: config ${config.kind}`;
-    return formatLibraryVersionStatus(await getLibraryVersionStatus(project.root, config.config.tier));
+    if (config.kind !== "ok")
+      return `Current: invalid / Latest: unavailable / Status: config ${config.kind}`;
+    return formatLibraryVersionStatus(
+      await getLibraryVersionStatus(project.root, config.config.tier),
+    );
   };
-  const result = await runWizardUseCase(context, { json, session: session.kind, getLibraryStatus: getStatus });
+  const result = await runWizardUseCase(context, {
+    json,
+    session: session.kind,
+    getLibraryStatus: getStatus,
+  });
   if (result.ok && result.action === "json-hint") {
     writeJson(runtime, { ok: true, message: result.message });
     return 0;
@@ -234,22 +327,42 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
   if (result.action === "install") {
     const project = detectProject(runtime.cwd());
     if (project) runtime.stdout(`Project root: ${project.root}\n`);
-    return await runInstall("free", runtime, false, false);
+    return await runInstall(
+      result.group,
+      runtime,
+      false,
+      false,
+      undefined,
+      undefined,
+      result.target,
+    );
   }
   if (result.action === "settings") {
     if (result.flow === "logout") return runLogout(runtime, false);
     const update = await runCliUpdateCheck({
-      currentVersion: versionString(), cwd: runtime.cwd(), env: runtime.env,
+      currentVersion: versionString(),
+      cwd: runtime.cwd(),
+      env: runtime.env,
       fs: { existsSync, readFileSync: (path) => readFileSync(path, "utf8") },
       signal: context.signal,
-    });
-    if (update.status === "update") runtime.stdout(`CLI ${update.currentVersion} → ${update.latestVersion}\nRun: ${update.instruction}\n`);
-    else if (update.status === "current") runtime.stdout(`CLI ${update.currentVersion} is up to date.\n`);
+      timeoutMs: 1_000,
+      ...(runtime.fetchVersions ? { fetchVersions: runtime.fetchVersions } : {}),
+    }).catch(() => undefined);
+    if (!update) {
+      runtime.stdout(`${renderNoticeBox(["Moeicons CLI version status", `Current ${versionString()} / Latest unavailable / Update: unavailable`])}\n`);
+      return 0;
+    }
+    if (update.status === "update")
+      runtime.stdout(
+        `CLI ${update.currentVersion} → ${update.latestVersion}\nRun: ${update.instruction}\n`,
+      );
+    else if (update.status === "current")
+      runtime.stdout(`CLI ${update.currentVersion} is up to date.\n`);
     else runtime.stdout(`Unable to find a CLI release in the current channel.\n`);
     return 0;
   }
   if (result.action === "manage") {
-    if (result.flow === "reload") return runGenerate(runtime, false, false, true);
+    if (result.flow === "reload") return await runGenerate(runtime, false, false, true, undefined, yes);
     const project = detectProject(runtime.cwd());
     if (!project) throw new CliError("VALIDATION_ERROR", "no project found");
     const config = readMoeiconsConfig(project.root);
@@ -257,32 +370,64 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
     const status = await getLibraryVersionStatus(project.root, config.config.tier);
     runtime.stdout(`${formatLibraryVersionStatus(status)}\n`);
     if (status.kind !== "update") return 0;
-    return runLibraryUpdate(runtime, status.metadata.tier, status.latestVersion, status.latestDescriptorSha256);
+    return runLibraryUpdate(
+      runtime,
+      status.metadata.tier,
+      status.latestVersion,
+      status.latestDescriptorSha256,
+    );
   }
   if (result.flow === "login") return runLogin(runtime, false, yes);
-  runtime.stdout(`Flow "${result.flow}" requires backend endpoints (pending BE-02/BE-04).\n`);
   return 0;
 }
 
-async function runLibraryUpdate(runtime: CliRuntime, tier: "free" | "pro", version: string, descriptorSha256: string): Promise<number> {
+async function runLibraryUpdate(
+  runtime: CliRuntime,
+  tier: "free" | "pro",
+  version: string,
+  descriptorSha256: string,
+): Promise<number> {
   const context = commandContext(runtime, { json: false, yes: false });
   const progress = context.ui.progress("Downloading icon library update", context.signal);
   try {
-    const result = await runLibraryUpdateUseCase(context, {
-      fs: { mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, readdirSync, copyFileSync },
-      free: {
-        fetchFn: globalThis.fetch.bind(globalThis),
-        readFileSync: (path) => new Uint8Array(readFileSync(path)),
-        writeFileSync: (path, data) => writeFileSync(path, data),
-        mkdirSync: (path) => mkdirSync(path, { recursive: true }), existsSync,
-        ...(runtime.env.MOEICONS_FREE_RELEASE_DIR ? { fixtureDir: runtime.env.MOEICONS_FREE_RELEASE_DIR } : {}),
-        cacheDir: runtime.env.MOEICONS_CACHE_DIR ?? join(homedir(), ".moeicons", "cache"), cliVersion: versionString(),
+    const result = await runLibraryUpdateUseCase(
+      context,
+      {
+        fs: {
+          mkdirSync,
+          writeFileSync,
+          readFileSync,
+          existsSync,
+          renameSync,
+          rmSync,
+          readdirSync,
+          copyFileSync,
+        },
+        free: {
+          fetchFn: globalThis.fetch.bind(globalThis),
+          readFileSync: (path) => new Uint8Array(readFileSync(path)),
+          writeFileSync: (path, data) => writeFileSync(path, data),
+          mkdirSync: (path) => mkdirSync(path, { recursive: true }),
+          existsSync,
+          ...(runtime.env.MOEICONS_FREE_RELEASE_DIR
+            ? { fixtureDir: runtime.env.MOEICONS_FREE_RELEASE_DIR }
+            : {}),
+          cacheDir: runtime.env.MOEICONS_CACHE_DIR ?? join(homedir(), ".moeicons", "cache"),
+          cliVersion: versionString(),
+        },
+        auth: runtime.auth ?? {},
+        fetch: runtime.auth?.fetch ?? globalThis.fetch.bind(globalThis),
+        onProgress: ({ downloadedBytes, totalBytes }) =>
+          progress.update?.(
+            `Downloaded ${downloadedBytes} bytes${totalBytes ? ` of ${totalBytes}` : ""}`,
+          ),
       },
-      auth: runtime.auth ?? {}, fetch: runtime.auth?.fetch ?? globalThis.fetch.bind(globalThis),
-      onProgress: ({ downloadedBytes, totalBytes }) => progress.update?.(`Downloaded ${downloadedBytes} bytes${totalBytes ? ` of ${totalBytes}` : ""}`),
-    }, { tier, version, descriptorSha256 });
+      { tier, version, descriptorSha256 },
+    );
     progress.stop("Icon library update complete");
-    runtime.stdout(`Updated ${tier} artifact to ${result.artifactVersion}; reconciled ${result.files.length} generated files.\n`);
+    runtime.stdout(
+      `Updated ${tier} artifact to ${result.artifactVersion}; reconciled ${result.files.length} generated files.\n`,
+    );
     return 0;
   } catch (error) {
     progress.stop("Icon library update stopped");
@@ -298,27 +443,48 @@ async function runInstall(
   noTailwind: boolean,
   sourceVersion?: string,
   expectedDescriptorSha256?: string,
+  target?: "react" | "vue" | "vanilla" | "assets",
 ): Promise<number> {
   const context = commandContext(runtime, { json, yes: false });
   const progress = context.ui.progress("Downloading icon library", context.signal);
   if (group === "pro" || group === "ent") {
-    const identity = sourceVersion && expectedDescriptorSha256
-      ? { version: sourceVersion, descriptorSha256: expectedDescriptorSha256 }
-      : await fetchLibraryVersions({ signal: context.signal, ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}) }).then((versions) => {
-          if (!versions.pro) throw new CliError("NOT_FOUND", "no pro release is published");
-          return { version: versions.pro.version, descriptorSha256: versions.pro.descriptorSha256 };
-        });
+    const identity =
+      sourceVersion && expectedDescriptorSha256
+        ? { version: sourceVersion, descriptorSha256: expectedDescriptorSha256 }
+        : await fetchLibraryVersions({
+            signal: context.signal,
+            ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
+          }).then((versions) => {
+            if (!versions.pro) throw new CliError("NOT_FOUND", "no pro release is published");
+            return {
+              version: versions.pro.version,
+              descriptorSha256: versions.pro.descriptorSha256,
+            };
+          });
     try {
-      const result = await runProInstallUseCase(context, {
-        fs: { mkdirSync, writeFileSync, existsSync, renameSync, rmSync }, auth: runtime.auth ?? {}, fetch: runtime.auth?.fetch ?? globalThis.fetch.bind(globalThis),
-        onProgress: ({ downloadedBytes, totalBytes }) => {
-          const percent = totalBytes ? ` (${Math.min(100, Math.floor(downloadedBytes / totalBytes * 100))}%)` : "";
-          progress.update?.(`Downloaded ${downloadedBytes} bytes${totalBytes ? ` of ${totalBytes}` : ""}${percent}`);
+      const result = await runProInstallUseCase(
+        context,
+        {
+          fs: { mkdirSync, writeFileSync, existsSync, renameSync, rmSync },
+          auth: runtime.auth ?? {},
+          fetch: runtime.auth?.fetch ?? globalThis.fetch.bind(globalThis),
+          onProgress: ({ downloadedBytes, totalBytes }) => {
+            const percent = totalBytes
+              ? ` (${Math.min(100, Math.floor((downloadedBytes / totalBytes) * 100))}%)`
+              : "";
+            progress.update?.(
+              `Downloaded ${downloadedBytes} bytes${totalBytes ? ` of ${totalBytes}` : ""}${percent}`,
+            );
+          },
         },
-      }, identity);
+        { ...identity, ...(target ? { target } : {}) },
+      );
       progress.stop("Icon library download complete");
       if (json) writeJson(runtime, { ok: true, group: "pro", ...result });
-      else runtime.stdout(`Installed pro artifact ${result.artifactVersion} into ${result.projectRoot}.\n`);
+      else
+        runtime.stdout(
+          `Installed pro artifact ${result.artifactVersion} into ${result.projectRoot}.\n`,
+        );
       return 0;
     } catch (error) {
       progress.stop("Icon library download stopped");
@@ -341,19 +507,28 @@ async function runInstall(
         cacheDir: runtime.env.MOEICONS_CACHE_DIR ?? join(homedir(), ".moeicons", "cache"),
         cliVersion: versionString(),
         onProgress: ({ downloadedBytes, totalBytes }) => {
-          const percent = totalBytes ? ` (${Math.min(100, Math.floor(downloadedBytes / totalBytes * 100))}%)` : "";
-          progress.update?.(`Downloaded ${downloadedBytes} bytes${totalBytes ? ` of ${totalBytes}` : ""}${percent}`);
+          const percent = totalBytes
+            ? ` (${Math.min(100, Math.floor((downloadedBytes / totalBytes) * 100))}%)`
+            : "";
+          progress.update?.(
+            `Downloaded ${downloadedBytes} bytes${totalBytes ? ` of ${totalBytes}` : ""}${percent}`,
+          );
         },
       },
     },
-    { ...(group === undefined ? {} : { group }), ...(sourceVersion ? { sourceVersion } : {}), ...(expectedDescriptorSha256 ? { expectedDescriptorSha256 } : {}) },
+    {
+      ...(group === undefined ? {} : { group }),
+      ...(target ? { target } : {}),
+      ...(sourceVersion ? { sourceVersion } : {}),
+      ...(expectedDescriptorSha256 ? { expectedDescriptorSha256 } : {}),
+    },
   );
   progress.stop(result.ok ? "Icon library download complete" : "Icon library download stopped");
   if (!result.ok && result.reason === "no-project") {
-    throw new CliError("VALIDATION_ERROR", "no package.json found in the current directory or parents; run inside a project");
-  }
-  if (!result.ok && result.reason === "pro-not-implemented") {
-    throw new CliError("NOT_IMPLEMENTED", "pro install is not implemented yet");
+    throw new CliError(
+      "VALIDATION_ERROR",
+      "no package.json found in the current directory or parents; run inside a project",
+    );
   }
   if (!result.ok && result.reason === "cancelled") {
     throw new CliError("CANCELLED", result.message);
@@ -394,12 +569,15 @@ async function runInstall(
     runtime.stdout(`Group: ${result.group}\n`);
     runtime.stdout(`Artifact: ${result.artifactVersion}\n`);
     runtime.stdout(`Config state: ${result.config}\n`);
-    runtime.stdout(`Installed free artifact metadata to .moeicons (cacheHit=${String(result.cacheHit)}).\n`);
+    runtime.stdout(
+      `Installed free artifact metadata to .moeicons (cacheHit=${String(result.cacheHit)}).\n`,
+    );
   }
   return 0;
 }
 
 function generateFailureCode(reason: string): CliErrorCode {
+  if (reason === "cancelled") return "CANCELLED";
   if (reason === "validation" || reason === "no-project" || reason.startsWith("config state:")) {
     return "VALIDATION_ERROR";
   }
@@ -407,9 +585,16 @@ function generateFailureCode(reason: string): CliErrorCode {
 }
 
 /** Generate proxy components from config. */
-function runGenerate(runtime: CliRuntime, json: boolean, noTailwind: boolean, reconcileInstalled = false): number {
-  const result = runGenerateUseCase(
-    commandContext(runtime, { json, yes: false }),
+async function runGenerate(
+  runtime: CliRuntime,
+  json: boolean,
+  noTailwind: boolean,
+  reconcileInstalled = false,
+  target?: "react" | "vue" | "vanilla" | "assets",
+  yes = false,
+): Promise<number> {
+  const result = await runGenerateUseCase(
+    commandContext(runtime, { json, yes }),
     {
       mkdirSync,
       writeFileSync,
@@ -420,7 +605,7 @@ function runGenerate(runtime: CliRuntime, json: boolean, noTailwind: boolean, re
       readdirSync,
       copyFileSync,
     },
-    { noTailwind, reconcileInstalled },
+    { noTailwind, reconcileInstalled, ...(target ? { target } : {}) },
   );
   if (!result.ok) {
     if (result.code === "TAILWIND_VERSION_UNSUPPORTED") {
@@ -443,7 +628,12 @@ function runGenerate(runtime: CliRuntime, json: boolean, noTailwind: boolean, re
     }
     return 1;
   }
-  if (json) writeJson(runtime, { ok: true, generated: result.files, ...(result.warnings ? { warnings: result.warnings } : {}) });
+  if (json)
+    writeJson(runtime, {
+      ok: true,
+      generated: result.files,
+      ...(result.warnings ? { warnings: result.warnings } : {}),
+    });
   else {
     runtime.stdout(`Generated ${result.files.length} files.\n`);
     if (result.warnings) {

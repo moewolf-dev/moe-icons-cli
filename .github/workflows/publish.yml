@@ -1,0 +1,167 @@
+name: Publish CLI
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      clitest_sha:
+        description: "Full commit SHA of moe-icons-clitest to accept against (default: repo variable CLITEST_REF)"
+        required: false
+      code_library_sha:
+        description: "Full commit SHA of moe-icons-code-library to accept against (default: repo variable CODE_LIBRARY_REF)"
+        required: false
+      release_tag:
+        description: "Required for publish: vX.Y.Z tag that must already point at this commit"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      clitest_sha: ${{ steps.resolve.outputs.clitest_sha }}
+      code_library_sha: ${{ steps.resolve.outputs.code_library_sha }}
+    steps:
+      - name: Resolve and validate pinned acceptance refs
+        id: resolve
+        run: |
+          clitest_ref="${INPUT_CLITEST_SHA:-${CLITEST_REF:-}}"
+          code_library_ref="${INPUT_CODE_LIBRARY_SHA:-${CODE_LIBRARY_REF:-}}"
+          : "${clitest_ref:?set CLITEST_REF repo variable (full commit SHA) or clitest_sha input}"
+          : "${code_library_ref:?set CODE_LIBRARY_REF repo variable (full commit SHA) or code_library_sha input}"
+          for ref in "$clitest_ref" "$code_library_ref"; do
+            case "$ref" in
+              [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+              *) echo "ref must be a full 40-hex commit SHA: $ref" >&2; exit 1 ;;
+            esac
+          done
+          echo "clitest_sha=${clitest_ref}" >> "${GITHUB_OUTPUT}"
+          echo "code_library_sha=${code_library_ref}" >> "${GITHUB_OUTPUT}"
+          echo "clitest_sha=${clitest_ref}" >> "${GITHUB_ENV}"
+          echo "code_library_sha=${code_library_ref}" >> "${GITHUB_ENV}"
+          echo "acceptance pinned: clitest=${clitest_ref} code-library=${code_library_ref}"
+        env:
+          CLITEST_REF: ${{ vars.CLITEST_REF }}
+          CODE_LIBRARY_REF: ${{ vars.CODE_LIBRARY_REF }}
+          INPUT_CLITEST_SHA: ${{ inputs.clitest_sha }}
+          INPUT_CODE_LIBRARY_SHA: ${{ inputs.code_library_sha }}
+      - uses: actions/checkout@v4
+        with:
+          path: cli
+      - uses: actions/checkout@v4
+        with:
+          repository: moewolf-dev/moe-icons-clitest
+          ref: ${{ env.clitest_sha }}
+          token: ${{ secrets.CLITEST_READ_TOKEN }}
+          path: clitest
+      - uses: actions/checkout@v4
+        with:
+          repository: moewolf-dev/moe-icons-code-library
+          ref: ${{ env.code_library_sha }}
+          token: ${{ secrets.CODE_LIBRARY_READ_TOKEN }}
+          path: code-library
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install clitest dependencies
+        working-directory: clitest
+        run: npm ci
+      - name: Build code-library candidate
+        working-directory: code-library
+        env:
+          MOE_ICONS_SOURCE_DIR: tests/fixtures/icon-source
+          MOE_ICONS_FREE_STYLE_GROUPS: moe-outline,moe-solid,moe-lite-outline
+        run: |
+          npm ci
+          npm run clean
+          npm run generate
+          npm run build:free
+          npm run build:pro
+          npm run build:ent
+          npm run build:main
+          npm run postbuild
+      - name: Pack exact CLI candidate from this commit
+        working-directory: clitest
+        env:
+          CI: "true"
+          MOEICONS_CLI_REPO: ../cli
+          MOEICONS_EXPECTED_CLI_COMMIT: ${{ github.sha }}
+        run: npm run pack:cli
+      - name: Prime candidate dependency cache
+        working-directory: clitest
+        run: node scripts/prime-candidate-cache.mjs
+      - name: Audit packed package
+        working-directory: clitest
+        run: npm run test:package
+      - name: Deployment sandbox acceptance
+        working-directory: clitest
+        env:
+          MOEICONS_CODE_LIBRARY_REPO: ../code-library
+        run: npm run test:sandbox
+      - name: Record resolved acceptance commits
+        run: |
+          cli_sha="$(git -C cli rev-parse HEAD)"
+          clitest_sha="$(git -C clitest rev-parse HEAD)"
+          code_library_sha="$(git -C code-library rev-parse HEAD)"
+          {
+            echo "## Acceptance pinned commits"
+            echo ""
+            echo "- cli: \`${cli_sha}\`"
+            echo "- clitest: \`${clitest_sha}\`"
+            echo "- code-library: \`${code_library_sha}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "accepted cli=${cli_sha} clitest=${clitest_sha} code-library=${code_library_sha}"
+
+  publish:
+    needs: acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: npm-publish
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - name: Show acceptance evidence
+        run: |
+          echo "acceptance ran against clitest=${{ needs.acceptance.outputs.clitest_sha }} code-library=${{ needs.acceptance.outputs.code_library_sha }}"
+      - name: Validate release tag
+        env:
+          DISPATCH_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          expected="v$(node -p "require('./package.json').version")"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            test "${GITHUB_REF_NAME}" = "${expected}"
+          else
+            : "${DISPATCH_RELEASE_TAG:?workflow_dispatch publish requires release_tag=v<package-version>}"
+            test "${DISPATCH_RELEASE_TAG}" = "${expected}"
+            git fetch --tags --force
+            tagged="$(git rev-list -n 1 "${DISPATCH_RELEASE_TAG}")"
+            test "${tagged}" = "${GITHUB_SHA}"
+          fi
+      - name: Preflight registry idempotency
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if npm view "@moewolf/moe-icons-cli@${version}" version >/dev/null 2>&1; then
+            echo "refusing to publish: @moewolf/moe-icons-cli@${version} already exists on the registry" >&2
+            exit 1
+          fi
+          echo "preflight ok: @moewolf/moe-icons-cli@${version} is not published yet"
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Audit package contents
+        run: npm pack --dry-run
+      - name: Publish package
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

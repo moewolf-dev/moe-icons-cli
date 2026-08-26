@@ -3,7 +3,7 @@ import { formatLibraryVersionStatus, getLibraryVersionStatus } from "../src/core
 import type { InstallMetadata, InstalledResourceState } from "../src/project/install-metadata.js";
 
 const metadata: InstallMetadata = {
-  schemaVersion: 1, artifactVersion: "1.2.3", tier: "free", descriptorSha256: "a".repeat(64), artifactSha256: "b".repeat(64),
+  schemaVersion: 1, artifactVersion: "1.2.3", tier: "free", target: "react", descriptorSha256: "a".repeat(64), artifactSha256: "b".repeat(64),
   catalogSha256: "c".repeat(64), installedAt: "2026-08-24T00:00:00Z", managedFiles: { ".moeicons/catalog.json": "c".repeat(64) },
 };
 const readState = (): InstalledResourceState => ({ kind: "ok", metadata });

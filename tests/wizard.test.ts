@@ -10,7 +10,7 @@ import { writeFreeReleaseFixture } from "./helpers/free-release-fixture.js";
  * free-install path execute against a fake TTY; cancellation exits 0.
  */
 
-function makeTtyRuntime(lines: string[], env: Record<string, string | undefined> = {}) {
+function makeTtyRuntime(lines: string[], env: Record<string, string | undefined> = {}, fetchVersions: () => Promise<readonly string[]> = async () => []) {
   const out: string[] = [];
   const err: string[] = [];
   let cwd = "";
@@ -25,6 +25,7 @@ function makeTtyRuntime(lines: string[], env: Record<string, string | undefined>
       isTTY: () => tty,
       readLine: async () => lines[lineIdx++] ?? "",
       readKey: async () => "",
+      fetchVersions,
     },
     out,
     err,
@@ -57,14 +58,33 @@ describe("wizard TUI (CLI-04)", () => {
     rmSync(releaseDir, { recursive: true, force: true });
   });
 
-  it("selects free install, confirms root, and writes the managed output", async () => {
-    const { runtime, out, setCwd } = makeTtyRuntime(["1", "y"], env);
+  it("selects free install, picks react, confirms root, and writes the managed output", async () => {
+    const { runtime, out, setCwd } = makeTtyRuntime(["2", "1", "y"], env);
     setCwd(dir);
     const code = await main([], runtime);
     expect(code).toBe(0);
     expect(out.join("")).toContain("Install moeicons free");
+    expect(out.join("")).toContain("Choose an output target");
     expect(existsSync(join(dir, "src", "moeicons", ".moeicons-free.marker"))).toBe(true);
     expect(existsSync(join(dir, ".moeicons", "install-metadata.json"))).toBe(true);
+  });
+
+  it("exits 0 with zero writes when the user cancels the target selection", async () => {
+    const { runtime, setCwd } = makeTtyRuntime(["2", "0"], env);
+    setCwd(dir);
+    const code = await main([], runtime);
+    expect(code).toBe(0);
+    expect(existsSync(join(dir, "src", "moeicons"))).toBe(false);
+    expect(existsSync(join(dir, ".moeicons"))).toBe(false);
+  });
+
+  it("shows a nonblocking update notice when the registry is unavailable", async () => {
+    const { runtime, out, setCwd } = makeTtyRuntime(["0"], env, async () => {
+      throw new Error("offline");
+    });
+    setCwd(dir);
+    expect(await main([], runtime)).toBe(0);
+    expect(out.join("")).toContain("Current 0.1.0 / Latest unavailable / Update: unavailable");
   });
 
   it("exits 0 when the user cancels at the menu", async () => {
@@ -76,7 +96,7 @@ describe("wizard TUI (CLI-04)", () => {
   });
 
   it("exits 0 when the user declines the project-root confirmation", async () => {
-    const { runtime, setCwd } = makeTtyRuntime(["1", "n"], env);
+    const { runtime, setCwd } = makeTtyRuntime(["2", "1", "n"], env);
     setCwd(dir);
     const code = await main([], runtime);
     expect(code).toBe(0);
@@ -84,7 +104,7 @@ describe("wizard TUI (CLI-04)", () => {
   });
 
   it("skips the project-root confirmation when --yes is set", async () => {
-    const { runtime, setCwd } = makeTtyRuntime(["1"], env);
+    const { runtime, setCwd } = makeTtyRuntime(["2", "1"], env);
     setCwd(dir);
     const code = await main(["--yes"], runtime);
     expect(code).toBe(0);
