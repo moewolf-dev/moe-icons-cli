@@ -80,7 +80,8 @@ export function targetSubtreeFiles(): Readonly<Record<ReleaseTarget, Readonly<Re
 /**
  * Write a GitHub-Release-shaped free fixture directory for E1/E2 tests. The
  * archive contains `catalog.json` plus the four target subtrees, and the
- * descriptor records per-target subtree `targetMetadata` like the real
+ * descriptor records per-target subtree `targetMetadata` plus a metadata
+ * archive (`metadata/{MANUAL.md,catalog.json,manifest.json}`) like the real
  * code-library release packer. `tamperTarget` swaps one file in the named
  * subtree so its subtree hash no longer matches the recorded metadata while the
  * whole-archive checksum still verifies.
@@ -93,6 +94,9 @@ export function writeFreeReleaseFixture(
     readonly version?: string;
     readonly useBundledCatalog?: boolean;
     readonly tamperTarget?: ReleaseTarget;
+    readonly omitMetadata?: boolean;
+    readonly corruptMetadata?: boolean;
+    readonly tier?: "free" | "pro";
   } = {},
 ): {
   readonly version: string;
@@ -100,6 +104,8 @@ export function writeFreeReleaseFixture(
   readonly descriptorSha: string;
   readonly freeSha: string;
   readonly catalogSha: string;
+  readonly metadataSha: string;
+  readonly metadataName: string;
 } {
   const version = options.version ?? bundledSourceVersion();
   const catalog = options.useBundledCatalog
@@ -140,6 +146,37 @@ export function writeFreeReleaseFixture(
   const tgz = createTarGz(archiveFiles);
   const freeSha = sha256(tgz);
   const freeName = `moe-icons-free-${version}.tgz`;
+
+  const manualMd = "# Moeicons free manual\n\nQuery catalog.json for icons.\n";
+  const tier = options.tier ?? "free";
+  const manifestJson = JSON.stringify(
+    {
+      schemaVersion: 1,
+      tier,
+      libraryVersion: version,
+      manualVersion: version,
+      catalogVersion: version,
+      cliVersion: "0.0.0",
+      generatedAt: { sourceCommit: "a".repeat(40), generatorCommit: "b".repeat(40) },
+      targets: ["react", "vue", "vanilla", "assets"],
+      dependencies: { react: { react: ">=17.0.0" }, vue: { vue: ">=3.2.0" }, vanilla: {}, assets: {} },
+      files: {
+        "MANUAL.md": { size: Buffer.byteLength(manualMd), sha256: sha256(manualMd) },
+        "catalog.json": { size: Buffer.byteLength(catalog), sha256: catalogSha },
+      },
+    },
+    null,
+    2,
+  );
+  const metadataName = `moe-icons-free-metadata-${version}.tgz`;
+  const metadataFiles: Record<string, string> = {
+    "metadata/MANUAL.md": options.corruptMetadata ? "# tampered\n" : manualMd,
+    "metadata/catalog.json": catalog,
+    "metadata/manifest.json": manifestJson,
+  };
+  const metadataTgz = options.omitMetadata ? undefined : createTarGz(metadataFiles);
+  const metadataSha = metadataTgz ? sha256(metadataTgz) : "";
+
   const descriptor = {
     fullVersion: version,
     free: {
@@ -149,6 +186,23 @@ export function writeFreeReleaseFixture(
       styleGroupCount: 1,
       targets: Object.keys(targetMetadata) as ReleaseTarget[],
       targetMetadata,
+      ...(metadataTgz
+        ? {
+            metadata: {
+              filename: metadataName,
+              sha256: metadataSha,
+              size: metadataTgz.byteLength,
+              files: {
+                "MANUAL.md": {
+                  size: Buffer.byteLength(metadataFiles["metadata/MANUAL.md"] ?? ""),
+                  sha256: sha256(metadataFiles["metadata/MANUAL.md"] ?? ""),
+                },
+                "catalog.json": { size: Buffer.byteLength(catalog), sha256: catalogSha },
+                "manifest.json": { size: Buffer.byteLength(manifestJson), sha256: sha256(manifestJson) },
+              },
+            },
+          }
+        : {}),
     },
     catalog: { filename: "catalog.json", sha256: catalogSha, schemaVersion: 1, iconCount: 0, styleGroupCount: 0 },
   };
@@ -160,5 +214,6 @@ export function writeFreeReleaseFixture(
     `${options.wrongDescriptorSha ? "f".repeat(64) : descriptorSha}  ${DESCRIPTOR_NAME}\n`,
   );
   writeFileSync(join(dir, freeName), options.corruptArtifact ? Buffer.from("not-a-tgz") : Buffer.from(tgz));
-  return { version, freeName, descriptorSha, freeSha, catalogSha };
+  if (metadataTgz) writeFileSync(join(dir, metadataName), Buffer.from(metadataTgz));
+  return { version, freeName, descriptorSha, freeSha, catalogSha, metadataSha, metadataName };
 }

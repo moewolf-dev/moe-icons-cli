@@ -15,6 +15,7 @@ describe("CLI error exit map", () => {
       FORBIDDEN: 2,
       NETWORK_ERROR: 3,
       NOT_FOUND: 4,
+      DISK_FULL: 5,
       UNEXPECTED: 5,
     });
     expect(new CliError("NOT_FOUND", "missing").exitCode).toBe(4);

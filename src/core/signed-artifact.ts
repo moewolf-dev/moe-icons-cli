@@ -11,7 +11,11 @@ export interface SignedArtifactDescriptor {
   readonly sha256: string;
 }
 
-function parseDescriptor(value: unknown, now: number): SignedArtifactDescriptor {
+function isLoopback(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
+}
+
+export function parseSignedDescriptor(value: unknown, now: number, options: { readonly allowLoopback?: boolean } = {}): SignedArtifactDescriptor {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new CliError("VALIDATION_ERROR", "invalid signed artifact descriptor");
   const item = value as Record<string, unknown>;
   if (Object.keys(item).some((key) => !["url", "expiresAt", "size", "sha256"].includes(key)) ||
@@ -23,13 +27,19 @@ function parseDescriptor(value: unknown, now: number): SignedArtifactDescriptor 
   let url: URL;
   try { url = new URL(item.url); } catch { throw new CliError("VALIDATION_ERROR", "invalid signed artifact URL"); }
   const expires = Date.parse(item.expiresAt);
-  if (url.protocol !== "https:" || !Number.isFinite(expires) || expires <= now) throw new CliError("VALIDATION_ERROR", "signed artifact descriptor is expired or insecure");
+  const loopbackHttp = options.allowLoopback === true && url.protocol === "http:" && isLoopback(url.hostname);
+  if ((url.protocol !== "https:" && !loopbackHttp) || !Number.isFinite(expires) || expires <= now) {
+    throw new CliError("VALIDATION_ERROR", "signed artifact descriptor is expired or insecure");
+  }
   return item as unknown as SignedArtifactDescriptor;
 }
 
 /**
  * Exchange an access token for a descriptor. The caller supplies only the
- * frozen API path; credentials can never be sent to another origin.
+ * frozen API path; credentials can never be sent to another origin. The
+ * descriptor request uses `redirect: "error"` — an API endpoint must never
+ * bounce us to an untrusted host mid-handshake (unlike the large signed-artifact
+ * download below, which follows a bounded number of CDN redirects).
  */
 export async function fetchSignedArtifactDescriptor(apiPath: string, accessToken: string, deps: {
   readonly fetch?: typeof fetch;
@@ -50,7 +60,7 @@ export async function fetchSignedArtifactDescriptor(apiPath: string, accessToken
       headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
     });
     if (!response.ok) throw new CliError(response.status === 401 ? "AUTH_ERROR" : response.status === 403 ? "FORBIDDEN" : "NETWORK_ERROR", `pro descriptor request failed with ${response.status}`);
-    return parseDescriptor(await response.json(), deps.now ?? Date.now());
+    return parseSignedDescriptor(await response.json(), deps.now ?? Date.now());
   } catch (error) {
     if (error instanceof CliError) throw error;
     throw new CliError(deps.signal?.aborted ? "CANCELLED" : "NETWORK_ERROR", deps.signal?.aborted ? "pro descriptor request cancelled" : "pro descriptor request failed");
@@ -68,14 +78,16 @@ export async function downloadSignedArtifact(descriptor: SignedArtifactDescripto
   readonly timeoutMs?: number;
   readonly maxRedirects?: number;
   readonly now?: number;
+  readonly allowLoopback?: boolean;
   readonly onProgress?: (event: { readonly downloadedBytes: number; readonly totalBytes?: number }) => void;
 }): Promise<Uint8Array> {
-  const checked = parseDescriptor(descriptor, options.now ?? Date.now());
+  const checked = parseSignedDescriptor(descriptor, options.now ?? Date.now(), options);
   const result = await downloadArtifact(checked.url, {
     maxBytes: checked.size,
     timeoutMs: options.timeoutMs ?? 30_000,
     maxRedirects: options.maxRedirects ?? 5,
     allowedHosts: options.allowedHosts,
+    ...(options.allowLoopback ? { allowHttpLoopback: true } : {}),
     ...(options.onProgress ? { onProgress: options.onProgress } : {}),
   }, {
     ...(options.fetch ? { fetchFn: options.fetch } : {}),

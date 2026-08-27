@@ -11,6 +11,7 @@ export type WizardResult =
       readonly target: "react" | "vue" | "vanilla" | "assets";
     }
   | { readonly ok: true; readonly action: "pending"; readonly flow: "login" }
+  | { readonly ok: true; readonly action: "pro-resources" }
   | { readonly ok: true; readonly action: "manage"; readonly flow: "reload" | "library-update" }
   | { readonly ok: true; readonly action: "settings"; readonly flow: "logout" | "cli-update" }
   | { readonly ok: false; readonly reason: "cancelled" };
@@ -20,10 +21,13 @@ const JSON_HINT =
 
 export type WizardSessionState = "authenticated" | "signed-out" | "unknown";
 
-export function homeChoices(session: WizardSessionState) {
+export function homeChoices(session: WizardSessionState, proResourcesLabel?: string) {
   return [
     { value: "pro", label: "Install moeicons pro" },
     { value: "free", label: "Install moeicons free" },
+    ...(session === "authenticated" && proResourcesLabel
+      ? [{ value: "pro-resources", label: proResourcesLabel }]
+      : []),
     { value: "manage", label: "Manage project icons" },
     ...(session === "authenticated"
       ? []
@@ -44,20 +48,24 @@ export async function runWizardUseCase(
     readonly json: boolean;
     readonly session?: WizardSessionState;
     readonly getLibraryStatus?: () => Promise<string>;
+    readonly getProResourceLabel?: () => Promise<string | undefined>;
   },
 ): Promise<WizardResult> {
   if (options.json) {
     return { ok: true, action: "json-hint", message: JSON_HINT };
   }
 
+  const proLabel =
+    options.session === "authenticated" ? await options.getProResourceLabel?.().catch(() => undefined) : undefined;
   const choice = await context.ui.select(
     "Choose an option",
-    homeChoices(options.session ?? "signed-out"),
+    homeChoices(options.session ?? "signed-out", proLabel),
     context.signal,
   );
   if (choice === undefined) return { ok: false, reason: "cancelled" };
 
   if (choice === "login") return { ok: true, action: "pending", flow: "login" };
+  if (choice === "pro-resources") return { ok: true, action: "pro-resources" };
   if (choice === "settings") {
     const setting = await context.ui.select(
       "Settings",

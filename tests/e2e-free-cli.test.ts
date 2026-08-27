@@ -107,8 +107,9 @@ describe("E2E-03 free CLI flow", () => {
   });
 
   it("installs pro through authenticated descriptor and signed bytes", async () => {
-    const meta = writeFreeReleaseFixture(releaseDir);
+    const meta = writeFreeReleaseFixture(releaseDir, { tier: "pro" });
     const archive = new Uint8Array(readFileSync(join(releaseDir, meta.freeName)));
+    const metadataArchive = new Uint8Array(readFileSync(join(releaseDir, meta.metadataName)));
     const session: StoredSession = { accountId: "auth0|user", accessToken: "access", refreshToken: "refresh", expiresAt: Date.now() + 60_000, scope: "openid", storedAt: 1 };
     const tokenStore: TokenStore = { get: () => session, getActive: () => session, set() {}, delete() {}, clear() {} };
     const fetch = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
@@ -116,10 +117,10 @@ describe("E2E-03 free CLI flow", () => {
       if (url.endsWith("/v1/icon-library/versions")) return Response.json({ schemaVersion: 1, free: null, pro: { version: meta.version, releasedAt: "2026-08-24T00:00:00Z", descriptorSha256: meta.descriptorSha } });
       if (url.includes("artifact-descriptor")) {
         expect(new Headers(init?.headers).get("authorization")).toBe("Bearer access");
-        return Response.json({ ok: true, tier: "pro", version: meta.version, descriptorSha256: meta.descriptorSha, catalogFilename: "catalog.json", catalogSha256: meta.catalogSha, url: "https://06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com/pro.tgz", expiresAt: "2099-01-01T00:00:00Z", size: archive.byteLength, sha256: meta.freeSha });
+        return Response.json({ ok: true, tier: "pro", version: meta.version, descriptorSha256: meta.descriptorSha, catalogFilename: "catalog.json", catalogSha256: meta.catalogSha, url: "https://06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com/pro.tgz", expiresAt: "2099-01-01T00:00:00Z", size: archive.byteLength, sha256: meta.freeSha, metadata: { url: "https://06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com/pro-meta.tgz", expiresAt: "2099-01-01T00:00:00Z", size: metadataArchive.byteLength, sha256: meta.metadataSha } });
       }
       expect(new Headers(init?.headers).has("authorization")).toBe(false);
-      return new Response(archive);
+      return new Response(url.includes("pro-meta") ? metadataArchive : archive);
     };
     const config = { schemaVersion: 1, tier: "pro", framework: "react", outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"] };
     writeFileSync(join(dir, "moeicons.config.jsonc"), JSON.stringify(config));

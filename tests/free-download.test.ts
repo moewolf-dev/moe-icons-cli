@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -96,6 +96,8 @@ describe("downloadFreeRelease", () => {
       },
       mkdirSync: (path: string) => mkdirSync(path, { recursive: true }),
       existsSync,
+      renameSync,
+      rmSync,
       fixtureDir: overrides.fixtureDir ?? fixture,
       cacheDir: cache,
       cliVersion: "0.1.0",
@@ -141,12 +143,23 @@ describe("downloadFreeRelease", () => {
     expect(result).toMatchObject({ ok: false, reason: "cancelled" });
   });
 
+  it("fails closed with disk-full when statfs reports insufficient space", async () => {
+    const meta = writeFreeReleaseFixture(fixture);
+    const base = io();
+    const result = await downloadFreeRelease(
+      { ...base, statfs: () => ({ availableBytes: 1 }) },
+      meta.version,
+    );
+    expect(result).toMatchObject({ ok: false, reason: "disk-full" });
+  });
+
   it("uses injected fetch against GitHub release URLs without guessing the archive name", async () => {
     const meta = writeFreeReleaseFixture(fixture);
     const served = new Map<string, Uint8Array>([
       [githubReleaseAssetUrl(`v${meta.version}`, "release-descriptor.json.sha256"), new Uint8Array(readFileSync(join(fixture, "release-descriptor.json.sha256")))],
       [githubReleaseAssetUrl(`v${meta.version}`, "release-descriptor.json"), new Uint8Array(readFileSync(join(fixture, "release-descriptor.json")))],
       [githubReleaseAssetUrl(`v${meta.version}`, meta.freeName), new Uint8Array(readFileSync(join(fixture, meta.freeName)))],
+      [githubReleaseAssetUrl(`v${meta.version}`, meta.metadataName), new Uint8Array(readFileSync(join(fixture, meta.metadataName)))],
     ]);
     const requested: string[] = [];
     const base = io();
@@ -162,6 +175,8 @@ describe("downloadFreeRelease", () => {
         writeFileSync: base.writeFileSync,
         mkdirSync: base.mkdirSync,
         existsSync: base.existsSync,
+        renameSync: base.renameSync,
+        rmSync: base.rmSync,
         cacheDir: base.cacheDir,
         cliVersion: base.cliVersion,
         signal: base.signal,
@@ -169,8 +184,13 @@ describe("downloadFreeRelease", () => {
       meta.version,
     );
     expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifestJson).toContain('"tier": "free"');
+      expect(result.manualMd.length).toBeGreaterThan(0);
+      expect(result.metadataSha256).toBe(meta.metadataSha);
+    }
     expect(requested).toContain(githubReleaseAssetUrl(`v${meta.version}`, meta.freeName));
-    expect(requested.some((url) => /moe-icons-free-/.test(url) && !url.endsWith(meta.freeName))).toBe(false);
+    expect(requested.some((url) => /moe-icons-free-/.test(url) && !url.endsWith(meta.freeName) && !url.includes("metadata"))).toBe(false);
   });
 
   it("uses a loopback HTTP fixture for success, 404, timeout and checksum failure", async () => {
@@ -194,6 +214,10 @@ describe("downloadFreeRelease", () => {
       mode = "missing"; expect(await downloadFreeRelease(remote(), meta.version)).toMatchObject({ ok: false, reason: "not-found" });
       mode = "slow"; expect(await downloadFreeRelease(remote(5), meta.version)).toMatchObject({ ok: false, reason: "offline-no-cache" });
       mode = "corrupt"; expect(await downloadFreeRelease(remote(), meta.version)).toMatchObject({ ok: false, reason: "checksum-mismatch" });
-    } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+    } finally {
+      const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+      server.closeAllConnections();
+      await closed;
+    }
   });
 });

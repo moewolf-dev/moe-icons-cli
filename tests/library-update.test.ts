@@ -22,7 +22,7 @@ describe("atomic library update", () => {
     writeFileSync(join(project, "moeicons.config.json"), JSON.stringify({ schemaVersion: 1, tier: "free", framework: "react", outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"] }));
   });
   afterEach(() => { for (const path of [project, oldFixture, nextFixture, cache]) rmSync(path, { recursive: true, force: true }); });
-  function download(fixtureDir: string) { return { fetchFn: globalThis.fetch.bind(globalThis), readFileSync: (path: string) => new Uint8Array(readFileSync(path)), writeFileSync: (path: string, data: Uint8Array) => writeFileSync(path, data), mkdirSync: (path: string) => mkdirSync(path, { recursive: true }), existsSync, fixtureDir, cacheDir: cache, cliVersion: "0.1.0" }; }
+  function download(fixtureDir: string) { return { fetchFn: globalThis.fetch.bind(globalThis), readFileSync: (path: string) => new Uint8Array(readFileSync(path)), writeFileSync: (path: string, data: Uint8Array) => writeFileSync(path, data), mkdirSync: (path: string) => mkdirSync(path, { recursive: true }), existsSync, renameSync, rmSync, fixtureDir, cacheDir: cache, cliVersion: "0.1.0" }; }
   function deps(fixtureDir: string, fs = realFs) { return { fs, free: download(fixtureDir), auth: {} }; }
 
   it("commits candidate catalog, generated files and metadata together", async () => {

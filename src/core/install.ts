@@ -22,6 +22,7 @@ export type InstallResult =
       readonly artifactVersion: string;
       readonly descriptorSha256: string;
       readonly catalogSha256: string;
+      readonly metadataSha256: string;
       readonly cacheHit: boolean;
     }
   | { readonly ok: false; readonly reason: "no-project" }
@@ -30,6 +31,7 @@ export type InstallResult =
   | { readonly ok: false; readonly reason: "network"; readonly message: string }
   | { readonly ok: false; readonly reason: "not-found"; readonly message: string }
   | { readonly ok: false; readonly reason: "offline-no-cache"; readonly message: string }
+  | { readonly ok: false; readonly reason: "disk-full"; readonly message: string }
   | { readonly ok: false; readonly reason: "validation"; readonly message: string }
   | { readonly ok: false; readonly reason: "write-failed"; readonly message: string };
 
@@ -117,6 +119,8 @@ export async function runInstallUseCase(
   const catalogJson = downloaded.catalogJson;
   const files: Record<string, string | Uint8Array> = {
     ".moeicons/catalog.json": catalogJson,
+    ".moeicons/manifest.json": downloaded.manifestJson,
+    ".moeicons/MANUAL.md": downloaded.manualMd,
     "src/moeicons/types.ts": `export type { ReactIconProps } from "moe-icons";\n`,
     "src/moeicons/.moeicons-free.marker": "free\n",
   };
@@ -164,6 +168,7 @@ export async function runInstallUseCase(
     artifactVersion: downloaded.descriptor.fullVersion,
     descriptorSha256: downloaded.descriptorSha256,
     catalogSha256: downloaded.descriptor.catalog.sha256,
+    metadataSha256: downloaded.metadataSha256,
     cacheHit: downloaded.cacheHit,
   };
 }

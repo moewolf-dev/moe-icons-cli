@@ -7,6 +7,27 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const CLI_VERSION_CACHE_TTL_MS = 5 * 60 * 1_000;
 let cliVersionCache: { readonly expiresAt: number; readonly versions: readonly string[] } | undefined;
 
+/**
+ * Test seam (candidate acceptance): `MOEICONS_LIBRARY_VERSIONS_URL` overrides
+ * the public versions endpoint. Only an https URL or a loopback http URL is
+ * accepted, so production behavior is unchanged.
+ */
+export function resolveVersionsEndpoint(env: Readonly<Record<string, string | undefined>>): string {
+  const override = env.MOEICONS_LIBRARY_VERSIONS_URL;
+  if (!override) return LIBRARY_VERSIONS_URL;
+  let parsed: URL;
+  try {
+    parsed = new URL(override);
+  } catch {
+    throw new CliError("VALIDATION_ERROR", "MOEICONS_LIBRARY_VERSIONS_URL is not a valid URL");
+  }
+  const loopback = parsed.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(parsed.hostname);
+  if (parsed.protocol !== "https:" && !loopback) {
+    throw new CliError("VALIDATION_ERROR", "MOEICONS_LIBRARY_VERSIONS_URL must be https or loopback http");
+  }
+  return override;
+}
+
 export interface PublicTierVersion { readonly version: string; readonly releasedAt: string; readonly descriptorSha256: string }
 export interface PublicLibraryVersions { readonly schemaVersion: 1; readonly free: PublicTierVersion | null; readonly pro: PublicTierVersion | null }
 
@@ -30,8 +51,9 @@ function tier(value: unknown): PublicTierVersion | null | undefined {
     ? item as unknown as PublicTierVersion : undefined;
 }
 
-export async function fetchLibraryVersions(deps: { fetch?: typeof fetch; signal?: AbortSignal; timeoutMs?: number } = {}): Promise<PublicLibraryVersions> {
-  const response = await fixedFetch(LIBRARY_VERSIONS_URL, deps.fetch ?? fetch, deps.signal, deps.timeoutMs);
+export async function fetchLibraryVersions(deps: { fetch?: typeof fetch; signal?: AbortSignal; timeoutMs?: number; env?: Readonly<Record<string, string | undefined>> } = {}): Promise<PublicLibraryVersions> {
+  const url = resolveVersionsEndpoint(deps.env ?? {});
+  const response = await fixedFetch(url, deps.fetch ?? fetch, deps.signal, deps.timeoutMs);
   if (!response.ok) throw new CliError("NETWORK_ERROR", `version check failed with ${response.status}`);
   const value = await response.json() as Record<string, unknown>;
   const free = tier(value.free); const pro = tier(value.pro);

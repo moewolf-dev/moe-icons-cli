@@ -11,6 +11,7 @@ import {
   rmSync,
   readdirSync,
   copyFileSync,
+  statfsSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -33,6 +34,12 @@ import { runCliUpdateCheck } from "./core/cli-update.js";
 import { fetchLibraryVersions } from "./core/version-service.js";
 import { runProInstallUseCase } from "./core/pro-install.js";
 import { runLibraryUpdateUseCase } from "./core/library-update.js";
+import { runMetadataSyncUseCase } from "./core/metadata-sync.js";
+import { runBootstrapUseCase } from "./core/bootstrap.js";
+import { fetchProDescriptor } from "./core/pro-download.js";
+import { proResourceState, runProPredownloadUseCase } from "./core/pro-resources.js";
+import { formatBytes } from "./metadata/version.js";
+import type { FreeDownloadIo } from "./core/free-download.js";
 
 /**
  * main(argv, runtime): parse args, select command/default wizard, catch typed
@@ -79,6 +86,31 @@ function commandContext(
   };
 }
 
+function freeDownloadDeps(runtime: CliRuntime): Omit<FreeDownloadIo, "signal"> {
+  return {
+    fetchFn: globalThis.fetch.bind(globalThis),
+    readFileSync: (path) => new Uint8Array(readFileSync(path)),
+    writeFileSync: (path, data) => writeFileSync(path, data),
+    mkdirSync: (path) => mkdirSync(path, { recursive: true }),
+    existsSync,
+    renameSync,
+    rmSync,
+    statfs: (dir) => {
+      try {
+        const stats = statfsSync(dir);
+        return { availableBytes: stats.bavail * stats.bsize };
+      } catch {
+        return undefined;
+      }
+    },
+    ...(runtime.env.MOEICONS_FREE_RELEASE_DIR
+      ? { fixtureDir: runtime.env.MOEICONS_FREE_RELEASE_DIR }
+      : {}),
+    cacheDir: runtime.env.MOEICONS_CACHE_DIR ?? join(homedir(), ".moeicons", "cache"),
+    cliVersion: versionString(),
+  };
+}
+
 export { MOEICONS_BANNER };
 export const BANNER = MOEICONS_BANNER;
 
@@ -117,6 +149,10 @@ export async function main(argv: readonly string[], runtime: CliRuntime): Promis
     return reportFailure(runtime, jsonHint, error);
   }
 
+  if (parsed.command.name === "wizard" && !parsed.json && runtime.isTTY() && runtime.readLine === undefined) {
+    await runBootstrap(runtime);
+  }
+
   try {
     return await dispatchSync(
       parsed.command,
@@ -128,6 +164,30 @@ export async function main(argv: readonly string[], runtime: CliRuntime): Promis
     );
   } catch (error) {
     return reportFailure(runtime, parsed.json, error);
+  }
+}
+
+async function runBootstrap(runtime: CliRuntime): Promise<void> {
+  const context = commandContext(runtime, { json: false, yes: false });
+  try {
+    const result = await runBootstrapUseCase(context, {
+      fs: {
+        existsSync,
+        readFileSync: (path) => readFileSync(path, "utf8"),
+        writeFileSync: (path, content) => writeFileSync(path, content),
+        mkdirSync: (path) => mkdirSync(path, { recursive: true }),
+      },
+      installFs: { mkdirSync, writeFileSync, existsSync, renameSync, rmSync },
+      free: freeDownloadDeps(runtime),
+      cliVersion: versionString(),
+    });
+    if (result.kind === "installed") {
+      runtime.stdout(`Installed moeicons Free v${result.version} with metadata into the current project.\n`);
+    } else if (result.kind === "failed") {
+      runtime.stderr(`warning: automatic Free setup failed: ${result.message}\nRun: ${result.retry}\n`);
+    }
+  } catch {
+    // Bootstrap must never block the wizard.
   }
 }
 
@@ -174,6 +234,8 @@ async function dispatchSync(
     case "mcp":
       void runMcp(runtime);
       return 0;
+    case "update":
+      return await runUpdate(runtime, json, yes, command.metadata === true);
   }
 }
 
@@ -184,7 +246,122 @@ async function runLogin(runtime: CliRuntime, json: boolean, yes: boolean): Promi
   });
   if (json) writeJson(runtime, { ok: true, account: session });
   else runtime.stdout(`Logged in as ${session.accountId}\n`);
+  if (!json && runtime.isTTY()) await offerProPredownload(runtime);
   return 0;
+}
+
+/**
+ * After a successful interactive login, offer to pre-download the full Pro
+ * code + metadata. Cancelling or a failed probe never logs the user out.
+ */
+async function offerProPredownload(runtime: CliRuntime): Promise<void> {
+  const context = commandContext(runtime, { json: false, yes: false });
+  try {
+    const versions = await fetchLibraryVersions({
+      ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
+      signal: context.signal,
+      env: runtime.env,
+    });
+    if (!versions.pro) {
+      runtime.stdout("No Pro release is published yet.\n");
+      return;
+    }
+    const descriptor = await fetchProDescriptor(
+      context,
+      runtime.auth ?? {},
+      { version: versions.pro.version, descriptorSha256: versions.pro.descriptorSha256 },
+      runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {},
+    );
+    const sizes = `${formatBytes(descriptor.size)} code + ${
+      descriptor.metadata ? formatBytes(descriptor.metadata.size) : "0 B"
+    } metadata`;
+    runtime.stdout(`Pro ${versions.pro.version} available (${sizes}).\n`);
+    const accepted = await context.ui.confirm("Download Pro resources now? (code + metadata)", context.signal);
+    if (accepted !== true) {
+      runtime.stdout("Skipped Pro download; you can download it later from the home screen.\n");
+      return;
+    }
+    const progress = context.ui.progress("Downloading Pro resources", context.signal);
+    try {
+      const result = await runProPredownloadUseCase(context, runtime.auth ?? {}, {
+        ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
+        onProgress: ({ downloadedBytes, totalBytes }) =>
+          progress.update?.(
+            `Downloaded ${downloadedBytes} bytes${totalBytes ? ` of ${totalBytes}` : ""}`,
+          ),
+      });
+      progress.stop("Pro resources downloaded");
+      runtime.stdout(`Cached Pro ${result.version} code + metadata.\n`);
+    } catch (error) {
+      progress.stop("Pro download stopped");
+      runtime.stderr(
+        `warning: Pro download failed (${error instanceof Error ? error.message : String(error)}). You can retry from the home screen.\n`,
+      );
+    }
+  } catch {
+    // A failed probe must not make login fail.
+  }
+}
+
+/**
+ * Home-screen Pro resources flow: show the current cache state and drive the
+ * matching action (download / update / repair / verify). Requires auth.
+ */
+async function runProResources(runtime: CliRuntime, yes: boolean): Promise<number> {
+  const context = commandContext(runtime, { json: false, yes });
+  const fetchDeps = runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {};
+  const state = await proResourceState(context, runtime.auth ?? {}, fetchDeps);
+  if (state.kind === "unavailable") {
+    runtime.stdout(`Pro resources unavailable: ${state.reason}\n`);
+    return 0;
+  }
+  let action = "";
+  if (state.kind === "current") {
+    runtime.stdout(`Pro resources are up to date (v${state.version}).\n`);
+    return 0;
+  }
+  if (state.kind === "not-cached") {
+    runtime.stdout(
+      `Pro ${state.version}: ${formatBytes(state.codeBytes)} code + ${formatBytes(state.metadataBytes)} metadata.\n`,
+    );
+    action = "Download";
+  } else if (state.kind === "outdated") {
+    runtime.stdout(
+      `Pro ${state.version} → ${state.latestVersion}: ${formatBytes(state.codeBytes)} code + ${formatBytes(state.metadataBytes)} metadata.\n`,
+    );
+    action = "Update";
+  } else {
+    runtime.stdout(`Pro ${state.version} cache is corrupt; re-downloading.\n`);
+    action = "Repair";
+  }
+  const confirmed = await context.ui.confirm(`${action} Pro resources now? (code + metadata)`, context.signal);
+  if (confirmed !== true) {
+    runtime.stdout("Cancelled; Pro resources were not downloaded.\n");
+    return 0;
+  }
+  const progress = context.ui.progress("Downloading Pro resources", context.signal);
+  try {
+    const result = await runProPredownloadUseCase(context, runtime.auth ?? {}, {
+      ...fetchDeps,
+      force: state.kind === "corrupt",
+      onProgress: ({ downloadedBytes, totalBytes }) =>
+        progress.update?.(
+          `Downloaded ${downloadedBytes} bytes${totalBytes ? ` of ${totalBytes}` : ""}`,
+        ),
+    });
+    progress.stop("Pro resources downloaded");
+    runtime.stdout(`Cached Pro ${result.version} code + metadata.\n`);
+    return 0;
+  } catch (error) {
+    progress.stop("Pro download stopped");
+    if (error instanceof CliError && (error.code === "FORBIDDEN" || error.code === "AUTH_ERROR")) {
+      throw error;
+    }
+    runtime.stderr(
+      `warning: Pro download failed (${error instanceof Error ? error.message : String(error)}). Retry from this menu.\n`,
+    );
+    return 0;
+  }
 }
 
 async function runAccount(runtime: CliRuntime, json: boolean): Promise<number> {
@@ -316,6 +493,18 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
     json,
     session: session.kind,
     getLibraryStatus: getStatus,
+    getProResourceLabel: async () => {
+      if (session.kind !== "authenticated") return undefined;
+      const state = await proResourceState(context, runtime.auth ?? {}, {
+        ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
+      }).catch(() => undefined);
+      if (!state || state.kind === "unavailable") return undefined;
+      if (state.kind === "not-cached") return "Download Pro resources";
+      if (state.kind === "outdated")
+        return `Update Pro resources (${state.version} → ${state.latestVersion})`;
+      if (state.kind === "corrupt") return "Repair Pro resources";
+      return "Pro resources are up to date";
+    },
   });
   if (result.ok && result.action === "json-hint") {
     writeJson(runtime, { ok: true, message: result.message });
@@ -323,6 +512,9 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
   }
   if (!result.ok) {
     throw new CliError("CANCELLED", "cancelled");
+  }
+  if (result.action === "pro-resources") {
+    return await runProResources(runtime, yes);
   }
   if (result.action === "install") {
     const project = detectProject(runtime.cwd());
@@ -403,18 +595,7 @@ async function runLibraryUpdate(
           readdirSync,
           copyFileSync,
         },
-        free: {
-          fetchFn: globalThis.fetch.bind(globalThis),
-          readFileSync: (path) => new Uint8Array(readFileSync(path)),
-          writeFileSync: (path, data) => writeFileSync(path, data),
-          mkdirSync: (path) => mkdirSync(path, { recursive: true }),
-          existsSync,
-          ...(runtime.env.MOEICONS_FREE_RELEASE_DIR
-            ? { fixtureDir: runtime.env.MOEICONS_FREE_RELEASE_DIR }
-            : {}),
-          cacheDir: runtime.env.MOEICONS_CACHE_DIR ?? join(homedir(), ".moeicons", "cache"),
-          cliVersion: versionString(),
-        },
+        free: freeDownloadDeps(runtime),
         auth: runtime.auth ?? {},
         fetch: runtime.auth?.fetch ?? globalThis.fetch.bind(globalThis),
         onProgress: ({ downloadedBytes, totalBytes }) =>
@@ -435,6 +616,62 @@ async function runLibraryUpdate(
   }
 }
 
+/**
+ * `update` command: `update metadata` syncs only the small metadata archive for
+ * the installed version; `update` performs a full code + metadata update.
+ */
+async function runUpdate(
+  runtime: CliRuntime,
+  json: boolean,
+  yes: boolean,
+  metadataOnly: boolean,
+): Promise<number> {
+  const context = commandContext(runtime, { json, yes });
+  if (metadataOnly) {
+    try {
+      const result = await runMetadataSyncUseCase(
+        context,
+        {
+          fs: {
+            mkdirSync,
+            writeFileSync,
+            readFileSync,
+            existsSync,
+            renameSync,
+            rmSync,
+            readdirSync,
+            copyFileSync,
+          },
+          free: freeDownloadDeps(runtime),
+          auth: runtime.auth ?? {},
+          ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
+        },
+        {},
+      );
+      if (json) writeJson(runtime, { ok: true, ...result });
+      else
+        runtime.stdout(
+          `Synced ${result.tier} metadata ${result.artifactVersion} into ${result.projectRoot}.\n`,
+        );
+      return 0;
+    } catch (error) {
+      if (json) return reportFailure(runtime, true, error);
+      throw error;
+    }
+  }
+  const project = detectProject(runtime.cwd());
+  if (!project) throw new CliError("VALIDATION_ERROR", "no project found; run install first");
+  const config = readMoeiconsConfig(project.root);
+  if (config.kind !== "ok") throw new CliError("VALIDATION_ERROR", `config ${config.kind}`);
+  const status = await getLibraryVersionStatus(project.root, config.config.tier);
+  if (status.kind !== "update") {
+    if (json) writeJson(runtime, { ok: true, status: status.kind });
+    else runtime.stdout(`${formatLibraryVersionStatus(status)}\n`);
+    return 0;
+  }
+  return runLibraryUpdate(runtime, status.metadata.tier, status.latestVersion, status.latestDescriptorSha256);
+}
+
 /** Free install orchestration: download/verify then map to JSON/human output. */
 async function runInstall(
   group: string | undefined,
@@ -453,6 +690,7 @@ async function runInstall(
         ? { version: sourceVersion, descriptorSha256: expectedDescriptorSha256 }
         : await fetchLibraryVersions({
             signal: context.signal,
+            env: runtime.env,
             ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
           }).then((versions) => {
             if (!versions.pro) throw new CliError("NOT_FOUND", "no pro release is published");
@@ -496,16 +734,7 @@ async function runInstall(
     {
       fs: { mkdirSync, writeFileSync, existsSync, renameSync, rmSync },
       download: {
-        fetchFn: globalThis.fetch.bind(globalThis),
-        readFileSync: (path) => new Uint8Array(readFileSync(path)),
-        writeFileSync: (path, data) => writeFileSync(path, data),
-        mkdirSync: (path) => mkdirSync(path, { recursive: true }),
-        existsSync,
-        ...(runtime.env.MOEICONS_FREE_RELEASE_DIR
-          ? { fixtureDir: runtime.env.MOEICONS_FREE_RELEASE_DIR }
-          : {}),
-        cacheDir: runtime.env.MOEICONS_CACHE_DIR ?? join(homedir(), ".moeicons", "cache"),
-        cliVersion: versionString(),
+        ...freeDownloadDeps(runtime),
         onProgress: ({ downloadedBytes, totalBytes }) => {
           const percent = totalBytes
             ? ` (${Math.min(100, Math.floor((downloadedBytes / totalBytes) * 100))}%)`
@@ -542,6 +771,9 @@ async function runInstall(
   if (!result.ok && result.reason === "not-found") {
     throw new CliError("NOT_FOUND", result.message);
   }
+  if (!result.ok && result.reason === "disk-full") {
+    throw new CliError("DISK_FULL", result.message);
+  }
   if (!result.ok && result.reason === "validation") {
     throw new CliError("VALIDATION_ERROR", result.message);
   }
@@ -562,6 +794,7 @@ async function runInstall(
       artifactVersion: result.artifactVersion,
       descriptorSha256: result.descriptorSha256,
       catalogSha256: result.catalogSha256,
+      metadataSha256: result.metadataSha256,
       cacheHit: result.cacheHit,
     });
   } else {

@@ -489,6 +489,12 @@ export type DownloadResult =
  * Download an artifact. HTTPS only, optional host allowlist, bounded redirects,
  * timeout, byte limit. Abort and temporary-file cleanup are handled by the
  * caller via the injected fetch/signal.
+ *
+ * Redirect policy: unlike the API descriptor handshake (which uses
+ * `redirect: "error"`), payload downloads intentionally follow a bounded number
+ * of redirects because code/metadata archives are served from CDNs that 3xx to
+ * a signed object host; the destination host is re-checked against the
+ * allowlist on every hop.
  */
 export async function downloadArtifact(
   url: string,

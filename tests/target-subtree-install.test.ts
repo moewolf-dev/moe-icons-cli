@@ -99,6 +99,8 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
         },
         mkdirSync: (path: string) => mkdirSync(path, { recursive: true }),
         existsSync,
+        renameSync,
+        rmSync,
         fixtureDir: fixture,
         cacheDir: cache,
         cliVersion: "0.1.0",
@@ -132,11 +134,11 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
   });
 
   it("routes pro installs for all four targets through the authenticated flow with a local mock", async () => {
-    writeFreeReleaseFixture(fixture);
     writeConfig({ schemaVersion: 2, tier: "pro", target: "react", outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"] });
     for (const target of TARGETS) {
-      const meta = writeFreeReleaseFixture(fixture);
+      const meta = writeFreeReleaseFixture(fixture, { tier: "pro" });
       const archive = new Uint8Array(readFileSync(join(fixture, meta.freeName)));
+      const metadataArchive = new Uint8Array(readFileSync(join(fixture, meta.metadataName)));
       const descriptor = JSON.parse(readFileSync(join(fixture, DESCRIPTOR_NAME), "utf8")) as {
         free: { targetMetadata: Record<string, unknown> };
       };
@@ -155,9 +157,10 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
             size: archive.byteLength,
             sha256: meta.freeSha,
             targetMetadata: descriptor.free.targetMetadata,
+            metadata: { url: "https://06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com/pro-meta.tgz", expiresAt: "2099-01-01T00:00:00Z", size: metadataArchive.byteLength, sha256: meta.metadataSha },
           });
         }
-        return new Response(archive);
+        return new Response(url.includes("pro-meta") ? metadataArchive : archive);
       });
       const result = await runProInstallUseCase(
         context(project),
@@ -184,10 +187,10 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
   });
 
   it("never forwards API credentials to the signed pro host while landing the subtree", async () => {
-    writeFreeReleaseFixture(fixture);
     writeConfig({ schemaVersion: 2, tier: "pro", target: "assets", outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"] });
-    const meta = writeFreeReleaseFixture(fixture);
+    const meta = writeFreeReleaseFixture(fixture, { tier: "pro" });
     const archive = new Uint8Array(readFileSync(join(fixture, meta.freeName)));
+    const metadataArchive = new Uint8Array(readFileSync(join(fixture, meta.metadataName)));
     const descriptor = JSON.parse(readFileSync(join(fixture, DESCRIPTOR_NAME), "utf8")) as {
       free: { targetMetadata: Record<string, unknown> };
     };
@@ -201,9 +204,10 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
           catalogFilename: "catalog.json", catalogSha256: meta.catalogSha,
           url: "https://signed.example/pro.tgz", expiresAt: "2099-01-01T00:00:00Z",
           size: archive.byteLength, sha256: meta.freeSha, targetMetadata: descriptor.free.targetMetadata,
+          metadata: { url: "https://signed.example/pro-meta.tgz", expiresAt: "2099-01-01T00:00:00Z", size: metadataArchive.byteLength, sha256: meta.metadataSha },
         });
       }
-      return new Response(archive);
+      return new Response(url.includes("pro-meta") ? metadataArchive : archive);
     });
     await runProInstallUseCase(
       context(project),
@@ -246,6 +250,8 @@ describe("B7: failure and rollback contracts", () => {
         },
         mkdirSync: (path: string) => mkdirSync(path, { recursive: true }),
         existsSync,
+        renameSync,
+        rmSync,
         fixtureDir: fixture,
         cacheDir: cache,
         cliVersion: "0.1.0",
@@ -327,6 +333,8 @@ describe("B7: v1->v2 migration, update preservation and dependency isolation", (
       },
       mkdirSync: (path: string) => mkdirSync(path, { recursive: true }),
       existsSync,
+      renameSync,
+      rmSync,
       fixtureDir,
       cacheDir: cache,
       cliVersion: "0.1.0",

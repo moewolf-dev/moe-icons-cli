@@ -13,6 +13,24 @@ export interface ReleaseTargetMetadata {
   readonly byteCount: number;
 }
 
+/** Per-file digest inside a metadata archive. */
+export interface ReleaseFileDigest {
+  readonly size: number;
+  readonly sha256: string;
+}
+
+/** Reference to a tier's metadata archive (MANUAL.md / catalog.json / manifest.json). */
+export interface ReleaseMetadataRef {
+  readonly filename: string;
+  readonly sha256: string;
+  readonly size: number;
+  readonly files: {
+    readonly "MANUAL.md": ReleaseFileDigest;
+    readonly "catalog.json": ReleaseFileDigest;
+    readonly "manifest.json": ReleaseFileDigest;
+  };
+}
+
 export interface ReleaseTierArtifact {
   readonly filename: string;
   readonly sha256: string;
@@ -20,6 +38,7 @@ export interface ReleaseTierArtifact {
   readonly styleGroupCount?: number;
   readonly targets?: readonly ReleaseTarget[];
   readonly targetMetadata?: Readonly<Partial<Record<ReleaseTarget, ReleaseTargetMetadata>>>;
+  readonly metadata?: ReleaseMetadataRef;
 }
 
 export interface ReleaseCatalogRef {
@@ -89,6 +108,33 @@ function parseTargetMetadata(
   return result;
 }
 
+function parseFileDigest(value: unknown, field: string): ReleaseFileDigest {
+  if (!isRecord(value)) throw new Error(`${field} must be an object`);
+  if (typeof value.size !== "number" || !Number.isSafeInteger(value.size) || value.size < 1) {
+    throw new Error(`${field}.size must be a positive integer`);
+  }
+  return { size: value.size, sha256: requireSha(value.sha256, `${field}.sha256`) };
+}
+
+function parseMetadataRef(value: unknown, field: string): ReleaseMetadataRef {
+  if (!isRecord(value)) throw new Error(`${field} must be an object`);
+  if (!isRecord(value.files)) throw new Error(`${field}.files must be an object`);
+  const files: ReleaseMetadataRef["files"] = {
+    "MANUAL.md": parseFileDigest(value.files["MANUAL.md"], `${field}.files.MANUAL.md`),
+    "catalog.json": parseFileDigest(value.files["catalog.json"], `${field}.files.catalog.json`),
+    "manifest.json": parseFileDigest(value.files["manifest.json"], `${field}.files.manifest.json`),
+  };
+  if (typeof value.size !== "number" || !Number.isSafeInteger(value.size) || value.size < 1) {
+    throw new Error(`${field}.size must be a positive integer`);
+  }
+  return {
+    filename: requireFilename(value.filename, `${field}.filename`),
+    sha256: requireSha(value.sha256, `${field}.sha256`),
+    size: value.size,
+    files,
+  };
+}
+
 function parseTier(value: unknown, field: string): ReleaseTierArtifact {
   if (!isRecord(value)) throw new Error(`${field} must be an object`);
   return {
@@ -103,6 +149,9 @@ function parseTier(value: unknown, field: string): ReleaseTierArtifact {
       : {}),
     ...(value.targetMetadata !== undefined
       ? { targetMetadata: parseTargetMetadata(value.targetMetadata, `${field}.targetMetadata`) }
+      : {}),
+    ...(value.metadata !== undefined
+      ? { metadata: parseMetadataRef(value.metadata, `${field}.metadata`) }
       : {}),
   };
 }

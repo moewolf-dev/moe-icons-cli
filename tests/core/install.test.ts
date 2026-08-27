@@ -80,6 +80,8 @@ describe("runInstallUseCase", () => {
         },
         mkdirSync: (path: string) => mkdirSync(path, { recursive: true }),
         existsSync,
+        renameSync,
+        rmSync,
         fixtureDir: fixture,
         cacheDir: cache,
         cliVersion: "0.1.0",

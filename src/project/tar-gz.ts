@@ -56,7 +56,13 @@ function readOctal(buf: Buffer, offset: number, length: number): number {
   return Number.parseInt(raw, 8);
 }
 
-/** Gunzip + unpack tar; reject absolute paths, `..`, and oversized archives. */
+/**
+ * Gunzip + unpack tar. Rejects absolute paths, `..`, symlinks and oversized
+ * archives. Path safety uses POSIX `/` separators (the tar format mandates `/`);
+ * a Windows-style separator would appear literally inside a name and never be
+ * treated as a path separator, so `..\evil` is inert (no traversal), which is
+ * the documented known assumption.
+ */
 export function extractTarGz(
   bytes: Uint8Array,
   limits: { maxEntries: number; maxExpandedBytes: number },
@@ -83,6 +89,12 @@ export function extractTarGz(
     const padded = Math.ceil(size / BLOCK) * BLOCK;
     const content = data.subarray(offset, offset + size);
     offset += padded;
+    if (type === 0x31 || type === 0x32) {
+      // Hard-link (typeflag '1') and symlink (typeflag '2') entries are
+      // rejected with an explicit error, never silently skipped.
+      errors.push(`link entries are not allowed: ${name || "<unnamed>"}`);
+      continue;
+    }
     if (type !== 0 && type !== 0x30) continue;
     if (!name || name.endsWith("/")) continue;
     entries += 1;
@@ -92,6 +104,10 @@ export function extractTarGz(
     }
     if (name.startsWith("/") || name.split("/").includes("..")) {
       errors.push(`unsafe path "${name}"`);
+      continue;
+    }
+    if (name in files) {
+      errors.push(`duplicate entry "${name}"`);
       continue;
     }
     expanded += content.byteLength;

@@ -14,8 +14,13 @@ export interface CatalogStyleGroup {
 
 export interface CatalogIcon {
   readonly id: string;
+  readonly name?: string;
   readonly prefix: string;
   readonly label: string;
+  readonly keywords?: readonly string[];
+  readonly categories?: readonly string[];
+  readonly variants?: readonly string[];
+  readonly targets?: readonly string[];
   readonly aliases: readonly string[];
   readonly deprecatedAt?: string;
   readonly replacedBy?: string;
@@ -87,10 +92,24 @@ export function parseCatalog(value: unknown): IconCatalog {
     if (!isStringArray(icon.aliases) || !isStringArray(icon.availableIn) || !icon.availableIn.every((id) => groupIds.has(id))) {
       throw new Error(`catalog icon ${icon.id} has invalid availability`);
     }
+    const stringArray = (field: unknown, name: string): readonly string[] | undefined => {
+      if (field === undefined) return undefined;
+      if (!isStringArray(field)) throw new Error(`catalog icon ${String(icon.id)} has invalid ${name}`);
+      return field;
+    };
+    const keywords = stringArray(icon.keywords, "keywords");
+    const categories = stringArray(icon.categories, "categories");
+    const variants = stringArray(icon.variants, "variants");
+    const targets = stringArray(icon.targets, "targets");
     return {
       id: icon.id,
+      ...(typeof icon.name === "string" ? { name: icon.name } : {}),
       prefix: icon.prefix,
       label: icon.label,
+      ...(keywords ? { keywords } : {}),
+      ...(categories ? { categories } : {}),
+      ...(variants ? { variants } : {}),
+      ...(targets ? { targets } : {}),
       aliases: icon.aliases,
       ...(typeof icon.deprecatedAt === "string" ? { deprecatedAt: icon.deprecatedAt } : {}),
       ...(typeof icon.replacedBy === "string" ? { replacedBy: icon.replacedBy } : {}),

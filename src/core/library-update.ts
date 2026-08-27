@@ -17,7 +17,7 @@ import { ensureClassMergeDependencies, planTailwindIntegration } from "../projec
 import { extractTarGz } from "../project/tar-gz.js";
 import type { AuthUseCaseDependencies } from "./auth.js";
 import type { CommandContext } from "./context.js";
-import { artifactCachePath, downloadFreeRelease, type FreeDownloadIo } from "./free-download.js";
+import { artifactCachePath, downloadFreeRelease, metadataCachePath, type FreeDownloadIo } from "./free-download.js";
 import { downloadProArtifact } from "./pro-download.js";
 import { selectTargetSubtree, type TargetSubtreeSource } from "./target-subtree.js";
 
@@ -57,6 +57,8 @@ export async function runLibraryUpdateUseCase(
   let archiveBytes: Uint8Array;
   let artifactSha256: string;
   let catalogSha256: string;
+  let manifestJson: string;
+  let manualMd: string;
   let tierSource: TargetSubtreeSource;
   if (expected.tier === "free") {
     const downloaded = await downloadFreeRelease(
@@ -85,6 +87,8 @@ export async function runLibraryUpdateUseCase(
     archiveBytes = downloaded.artifactBytes;
     artifactSha256 = downloaded.descriptor.free.sha256;
     catalogSha256 = downloaded.descriptor.catalog.sha256;
+    manifestJson = downloaded.manifestJson;
+    manualMd = downloaded.manualMd;
     tierSource = downloaded.descriptor.free;
   } else {
     const downloaded = await downloadProArtifact(context, deps.auth, expected, {
@@ -96,12 +100,21 @@ export async function runLibraryUpdateUseCase(
     archiveBytes = downloaded.artifactBytes;
     artifactSha256 = downloaded.descriptor.sha256;
     catalogSha256 = downloaded.descriptor.catalogSha256;
+    manifestJson = downloaded.manifestJson;
+    manualMd = downloaded.manualMd;
     tierSource = downloaded.descriptor;
     const cacheDir = context.env.MOEICONS_CACHE_DIR ?? join(homedir(), ".moeicons", "cache");
     const cached = artifactCachePath(cacheDir, downloaded.descriptor.version, downloaded.descriptor.sha256);
     if (!deps.fs.existsSync(cached)) {
       deps.fs.mkdirSync(join(cached, ".."), { recursive: true });
       deps.fs.writeFileSync(cached, downloaded.artifactBytes);
+    }
+    if (downloaded.metadataBytes && downloaded.descriptor.metadata) {
+      const metaCached = metadataCachePath(cacheDir, downloaded.descriptor.version, downloaded.descriptor.metadata.sha256);
+      if (!deps.fs.existsSync(metaCached)) {
+        deps.fs.mkdirSync(join(metaCached, ".."), { recursive: true });
+        deps.fs.writeFileSync(metaCached, downloaded.metadataBytes);
+      }
     }
   }
 
@@ -141,6 +154,8 @@ export async function runLibraryUpdateUseCase(
 
   const writes: Record<string, string | Uint8Array> = {
     ".moeicons/catalog.json": catalogJson,
+    ".moeicons/manifest.json": manifestJson,
+    ".moeicons/MANUAL.md": manualMd,
     [`${loaded.config.outputDir.replace(/\\/g, "/").replace(/\/$/, "")}/.moeicons-${expected.tier}.marker`]: `${expected.tier}\n`,
   };
   for (const file of generated.files) writes[file.path.replace(/\\/g, "/")] = file.content;

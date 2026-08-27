@@ -95,6 +95,8 @@ describe("CLI output compatibility contract", () => {
         moeicons groups               list available icon groups
         moeicons generate             generate React/Vue proxy components
         moeicons init                 create moeicons.config.json
+        moeicons update metadata      sync MANUAL.md/catalog.json/manifest.json only
+        moeicons update               full code + metadata update
         moeicons mcp                  start the MCP stdio server
         moeicons --version            show version
         moeicons --help               show help
@@ -102,8 +104,8 @@ describe("CLI output compatibility contract", () => {
       Options:
         --json         machine-readable JSON output
         --yes          skip confirmations in noninteractive mode
-  --target       output target: react, vue, vanilla, or assets
-  --no-tailwind  skip Tailwind config auto-integration
+        --target       output target: react, vue, vanilla, or assets
+        --no-tailwind  skip Tailwind config auto-integration
       ",
       }
     `);

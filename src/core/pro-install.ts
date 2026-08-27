@@ -6,7 +6,7 @@ import { withProjectLock } from "../project/project-lock.js";
 import type { AuthUseCaseDependencies } from "./auth.js";
 import type { CommandContext } from "./context.js";
 import { downloadProArtifact } from "./pro-download.js";
-import { artifactCachePath } from "./free-download.js";
+import { artifactCachePath, metadataCachePath } from "./free-download.js";
 import { selectTargetSubtree } from "./target-subtree.js";
 import { CliError } from "../errors/index.js";
 import type { Target } from "../commands/parser.js";
@@ -24,8 +24,12 @@ function cacheVerifiedArtifact(
   version: string,
   sha256: string,
   bytes: Uint8Array,
+  kind: "code" | "metadata" = "code",
 ): void {
-  const cached = artifactCachePath(cacheDir, version, sha256);
+  const cached =
+    kind === "metadata"
+      ? metadataCachePath(cacheDir, version, sha256)
+      : artifactCachePath(cacheDir, version, sha256);
   if (fs_.existsSync(cached)) return;
   fs_.mkdirSync(join(cached, ".."), { recursive: true });
   fs_.writeFileSync(cached, bytes);
@@ -81,8 +85,20 @@ export async function runProInstallUseCase(
     downloaded.descriptor.sha256,
     downloaded.artifactBytes,
   );
+  if (downloaded.metadataBytes && downloaded.descriptor.metadata) {
+    cacheVerifiedArtifact(
+      deps.fs,
+      resolveCacheDir(context.env),
+      downloaded.descriptor.version,
+      downloaded.descriptor.metadata.sha256,
+      downloaded.metadataBytes,
+      "metadata",
+    );
+  }
   const files: Record<string, string | Uint8Array> = {
     ".moeicons/catalog.json": downloaded.catalogJson,
+    ".moeicons/manifest.json": downloaded.manifestJson,
+    ".moeicons/MANUAL.md": downloaded.manualMd,
     "src/moeicons/types.ts": `export type { ReactIconProps } from "moe-icons";\n`,
     "src/moeicons/.moeicons-pro.marker": "pro\n",
   };

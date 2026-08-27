@@ -16,6 +16,7 @@ export type CliErrorCode =
   | "FORBIDDEN"
   | "NOT_TTY"
   | "NOT_IMPLEMENTED"
+  | "DISK_FULL"
   | "UNEXPECTED";
 
 /** Frozen CliErrorCode → process exit code. Register new codes here before use. */
@@ -31,6 +32,7 @@ export const CLI_ERROR_EXIT_MAP = {
   FORBIDDEN: 2,
   NETWORK_ERROR: 3,
   NOT_FOUND: 4,
+  DISK_FULL: 5,
   UNEXPECTED: 5,
 } as const satisfies Record<CliErrorCode, number>;
 

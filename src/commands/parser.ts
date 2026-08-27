@@ -10,6 +10,7 @@ export type Command =
   | { readonly name: "generate" }
   | { readonly name: "init" }
   | { readonly name: "mcp" }
+  | { readonly name: "update"; readonly metadata?: boolean }
   | { readonly name: "help" }
   | { readonly name: "version" }
   | { readonly name: "wizard" };
@@ -35,9 +36,7 @@ const SIMPLE_COMMANDS = [
   "init",
   "mcp",
   "help",
-] as const;
-
-function addSharedOptions(command: Commander): Commander {
+] as const;function addSharedOptions(command: Commander): Commander {
   return command
     .allowUnknownOption(true)
     .allowExcessArguments(true)
@@ -71,6 +70,9 @@ function createProgram(onSelect: (command: Command) => void): Commander {
   addSharedOptions(program.command("install").argument("[group]")).action((group?: string) => {
     onSelect(group ? { name: "install", group } : { name: "install" });
   });
+  addSharedOptions(program.command("update").argument("[sub]")).action((sub?: string) => {
+    onSelect({ name: "update", metadata: sub === "metadata" });
+  });
   for (const name of SIMPLE_COMMANDS) {
     addSharedOptions(program.command(name)).action(() => {
       onSelect({ name });
@@ -93,7 +95,7 @@ function toCliError(error: unknown): never {
   throw error;
 }
 
-const KNOWN_COMMANDS = new Set<string>(["install", ...SIMPLE_COMMANDS]);
+const KNOWN_COMMANDS = new Set<string>(["install", "update", ...SIMPLE_COMMANDS]);
 
 /**
  * Parse argv into a Command via Commander. Never calls `process.exit()`.
@@ -173,6 +175,8 @@ Usage:
   moeicons groups               list available icon groups
   moeicons generate             generate React/Vue proxy components
   moeicons init                 create moeicons.config.json
+  moeicons update metadata      sync MANUAL.md/catalog.json/manifest.json only
+  moeicons update               full code + metadata update
   moeicons mcp                  start the MCP stdio server
   moeicons --version            show version
   moeicons --help               show help
