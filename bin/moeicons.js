@@ -1,5 +1,15 @@
 #!/usr/bin/env node
-import { main } from "../dist/cli.js";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+const { assertSupportedNode } = require("./check-node.cjs");
+const checked = assertSupportedNode(process.version);
+if (!checked.ok) {
+  process.stderr.write(checked.message);
+  process.exit(1);
+}
+
+const { main } = await import("../dist/cli.js");
 
 const runtime = {
   cwd: () => process.cwd(),

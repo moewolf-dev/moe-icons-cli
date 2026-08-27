@@ -37,6 +37,7 @@ describe("npm pack inspection", () => {
       const listing = execSync(`tar -tzf "${tarPath}"`, { encoding: "utf8" });
       const files = listing.split("\n").filter(Boolean);
       expect(files.some((f) => f.includes("package/bin/moeicons.js"))).toBe(true);
+      expect(files.some((f) => f.includes("package/bin/check-node.cjs"))).toBe(true);
       expect(files.some((f) => f.includes("package/dist/cli.js"))).toBe(true);
       // no source, test, or secret files
       expect(files.some((f) => f.includes("tests/"))).toBe(false);

@@ -27,7 +27,7 @@
     "moeicons": "bin/moeicons.js"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "files": [
     "bin",
@@ -47,7 +47,7 @@
     "format": "prettier --write src tests"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^22.0.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "@vue/server-renderer": "^3.5.41",
@@ -58,7 +58,7 @@
     "happy-dom": "^20.11.1",
     "prettier": "^3.2.0",
     "typescript": "^5.5.0",
-    "vitest": "^2.0.0",
+    "vitest": "^4.1.11",
     "vue": "^3.5.41"
   },
   "dependencies": {

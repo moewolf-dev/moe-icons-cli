@@ -24,7 +24,7 @@ const PACKAGE_NAME = "@moewolf/moe-icons-cli";
 
 /**
  * Query the npm package document for an exact version. Dependency-free: takes
- * an injectable fetch (defaults to the Node 20+ global) so unit tests can mock
+ * an injectable fetch (defaults to the Node 22+ global) so unit tests can mock
  * the network.
  */
 export async function checkVersionPublished({

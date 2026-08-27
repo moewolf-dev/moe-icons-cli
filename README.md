@@ -22,6 +22,14 @@ moeicons --version          show version
 moeicons --help             show help
 ```
 
+## Requirements
+
+Node.js **22 or later**. Node 20 reached end-of-life on 2026-03-24 and is not
+on the supported line (no security patches). The CLI fails fast with an install
+link instead of a `SyntaxError` if the runtime is too old.
+
+Primary development and CI use Node 24. See https://nodejs.org/en/about/eol
+
 ## First run
 
 On the first interactive start inside a project, the CLI offers to install the
