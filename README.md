@@ -30,6 +30,11 @@ link instead of a `SyntaxError` if the runtime is too old.
 
 Primary development and CI use Node 24. See https://nodejs.org/en/about/eol
 
+**Platforms (first release candidate):** Linux x64 and macOS ARM64 are covered
+by CI on Node 22/24. **Windows is not certified** yet (explicit release
+exception); do not assume Windows package/bin/PATH works until a dedicated
+runner validates it.
+
 ## First run
 
 On the first interactive start inside a project, the CLI offers to install the

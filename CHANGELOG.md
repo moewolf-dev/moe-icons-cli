@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Supported platforms (first release candidate)
+
+- Officially tested: Linux x64 and macOS ARM64 on Node 22 and Node 24.
+- **Windows is not certified** for this first release candidate (CLI-OPT-0827
+  release exception). Package/bin/PATH behavior on Windows is unverified; do
+  not treat Linux/macOS CI as Windows coverage. A dedicated Windows runner
+  follow-up is required before claiming Windows support.
+
 ### Tooling
 
 - Upgraded Vitest to 4.1.11 (Vite 8) so `npm audit` reports 0 vulnerabilities
