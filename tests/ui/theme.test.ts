@@ -31,7 +31,6 @@ describe("theme", () => {
     expect(theme.blue("Yes")).toBe(`${BLUE}Yes${ANSI_FG_RESET}`);
     expect(theme.red("No")).toBe(`${RED}No${ANSI_FG_RESET}`);
     expect(theme.blue("")).toBe(`${BLUE}${ANSI_FG_RESET}`);
-    expect(theme.blue(theme.red("x"))).toBe(`${BLUE}${RED}x${ANSI_FG_RESET}${ANSI_FG_RESET}`);
   });
 
   it("leaves characters unchanged when color is disabled", () => {

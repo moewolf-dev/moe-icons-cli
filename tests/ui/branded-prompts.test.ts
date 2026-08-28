@@ -150,10 +150,10 @@ describe("confirm renderer", () => {
     expect(stripAnsi(frame)).toBe("Install here?\nYes  ● No");
   });
 
-  it("submits Yes as Confirmed and No or cancel as Cancelled", () => {
+  it("submits Yes as Confirmed, No as No, and Esc as Cancelled", () => {
     expect(stripAnsi(renderConfirmFrame({ state: "submit", value: true }, "m", theme))).toBe("◆ Confirmed");
     expect(renderConfirmFrame({ state: "submit", value: true }, "m", theme)).toContain("\x1b[38;2;59;130;246m");
-    expect(stripAnsi(renderConfirmFrame({ state: "submit", value: false }, "m", theme))).toBe("■ Cancelled");
+    expect(stripAnsi(renderConfirmFrame({ state: "submit", value: false }, "m", theme))).toBe("■ No");
     expect(renderConfirmFrame({ state: "submit", value: false }, "m", theme)).toContain("\x1b[38;2;239;68;68m");
     expect(stripAnsi(renderConfirmFrame({ state: "cancel", value: true }, "m", theme))).toBe("■ Cancelled");
   });
@@ -173,7 +173,8 @@ describe("confirm prompt keys", () => {
     const pending = brandedConfirm({ message: "Install here?", theme, input: io.input, output: io.output });
     await writeKeys(io.input, ["\x1b[C", "\r"]);
     await expect(pending).resolves.toBe(false);
-    expect(stripAnsi(io.text)).toContain("■ Cancelled");
+    expect(stripAnsi(io.text)).toContain("■ No");
+    expect(stripAnsi(io.text)).not.toContain("■ Cancelled");
   });
 
   it("cancels with Esc and Ctrl+C", async () => {

@@ -23,6 +23,7 @@ export interface ConfirmFrameState {
   readonly value: boolean;
 }
 
+/** Renders every option. Current wizard menus stay at or below 10 items; a longer list needs a viewport. */
 export function renderSelectFrame(prompt: SelectFrameState, message: string, theme: UiTheme): string {
   const { pointer, submit, cancel } = theme.symbols;
   if (prompt.state === "cancel") return theme.red(`${cancel} Cancelled`);
@@ -42,7 +43,7 @@ export function renderConfirmFrame(prompt: ConfirmFrameState, message: string, t
   const { radio, submit, cancel } = theme.symbols;
   if (prompt.state === "cancel") return theme.red(`${cancel} Cancelled`);
   if (prompt.state === "submit") {
-    return prompt.value ? theme.blue(`${submit} Confirmed`) : theme.red(`${cancel} Cancelled`);
+    return prompt.value ? theme.blue(`${submit} Confirmed`) : theme.red(`${cancel} No`);
   }
   const yes = prompt.value ? theme.blue(`${radio} Yes`) : theme.blue("Yes");
   const no = prompt.value ? theme.red("No") : theme.red(`${radio} No`);

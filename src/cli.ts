@@ -157,10 +157,6 @@ export async function main(argv: readonly string[], runtime: CliRuntime): Promis
     return reportFailure(runtime, jsonHint, error);
   }
 
-  if (parsed.command.name === "wizard" && !parsed.json && runtime.isTTY() && runtime.readLine === undefined) {
-    await runBootstrap(runtime);
-  }
-
   try {
     return await dispatchSync(
       parsed.command,
@@ -481,6 +477,7 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
     } catch {
       runtime.stdout(`${renderNoticeBox(["Moeicons CLI version status", `Current ${versionString()} / Latest unavailable / Update: unavailable`])}\n`);
     }
+    if (runtime.readLine === undefined) await runBootstrap(runtime);
   }
   const context = commandContext(runtime, { json, yes });
   const session = await runSessionStatusUseCase(context, runtime.auth).catch((error: unknown) => ({

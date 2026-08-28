@@ -3,8 +3,8 @@
  * Dev-only: rasterize an SVG logo to a 36x18 ASCII constant.
  * Runtime CLI never imports sharp. Output must not contain absolute paths.
  */
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -154,10 +154,34 @@ export async function generateLogoAscii(options) {
     throw new LogoGenerateError("generated output contained an absolute path");
   }
   mkdirSync(dirname(options.output), { recursive: true });
-  const tempPath = `${options.output}.tmp`;
-  writeFileSync(tempPath, source);
-  renameSync(tempPath, options.output);
+  const tempPath = `${options.output}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    writeFileSync(tempPath, source);
+    replaceFile(tempPath, options.output);
+  } finally {
+    if (existsSync(tempPath)) {
+      try {
+        rmSync(tempPath, { force: true });
+      } catch {
+        // Best-effort leftover cleanup.
+      }
+    }
+  }
   return { lines, source };
+}
+
+/**
+ * POSIX rename is atomic on the same filesystem. Windows overwrite is attempted
+ * by removing the destination first; that path is not a certified release target.
+ */
+function replaceFile(tempPath, output) {
+  try {
+    renameSync(tempPath, output);
+  } catch (error) {
+    if (process.platform !== "win32") throw error;
+    rmSync(output, { force: true });
+    renameSync(tempPath, output);
+  }
 }
 
 async function main() {

@@ -140,6 +140,8 @@ describe("runWizardUseCase", () => {
     expect(homeChoices("unknown").find((choice) => choice.value === "login")?.label).toContain(
       "unknown",
     );
+    expect(homeChoices("signed-out").length).toBeLessThanOrEqual(10);
+    expect(homeChoices("authenticated", "Download Pro resources").length).toBeLessThanOrEqual(10);
   });
 
   it("shows management status in the update action and returns both management flows", async () => {

@@ -187,7 +187,7 @@ describe("MOEICONS banner", () => {
     expect(nonTty.out.join("")).not.toContain(MOEICONS_LOGO_ASCII.split("\n")[0]);
   });
 
-  it("omits ANSI from the TTY banner when NO_COLOR is set", async () => {
+  it("omits ANSI from the banner and branded theme when NO_COLOR=1", async () => {
     const fixture = makeRuntime({ isTTY: true, columns: 80, env: { NO_COLOR: "1" } });
     fixture.runtime.readLine = async () => "0";
     await main([], fixture.runtime);

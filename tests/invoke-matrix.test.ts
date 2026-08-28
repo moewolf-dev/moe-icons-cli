@@ -56,7 +56,7 @@ afterEach(() => {
   rmSync(fixture, { recursive: true, force: true });
 });
 
-describe("CLI-16 packed-tarball invocation matrix", () => {
+describe.sequential("CLI-16 packed-tarball invocation matrix", () => {
   it("npm pack produces a tarball the npm install step can consume", () => {
     const packDir = mkdtempSync(join(fixture, "pack-"));
     try {

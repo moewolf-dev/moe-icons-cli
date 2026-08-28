@@ -20,12 +20,13 @@ function ansiFg(r: number, g: number, b: number): string {
   return `\x1b[38;2;${r};${g};${b}m`;
 }
 
+/** Do not nest `theme.blue`/`theme.red`: reset returns to the default foreground, not an outer color. */
 function paint(enabled: boolean, r: number, g: number, b: number): (text: string) => string {
   const open = ansiFg(r, g, b);
   return (text: string) => (enabled ? `${open}${text}${ANSI_FG_RESET}` : text);
 }
 
-/** Color is on only for human TTY output when TERM is not dumb and NO_COLOR is unset. */
+/** Banner and branded prompts only. Does not control leftover Clack text/note/spinner colors. */
 export function isThemeEnabled(
   env: Readonly<Record<string, string | undefined>>,
   isTTY: boolean,
