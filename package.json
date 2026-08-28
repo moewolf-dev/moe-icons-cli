@@ -37,6 +37,7 @@
   ],
   "scripts": {
     "generate-banner": "node scripts/generate-banner.mjs",
+    "generate:logo": "node scripts/generate-logo-ascii.mjs",
     "prebuild": "rimraf dist",
     "build": "tsc -p tsconfig.build.json && node scripts/copy-catalog.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -57,11 +58,13 @@
     "figlet": "^1.11.4",
     "happy-dom": "^20.11.1",
     "prettier": "^3.2.0",
+    "sharp": "^0.34.5",
     "typescript": "^5.5.0",
     "vitest": "^4.1.11",
     "vue": "^3.5.41"
   },
   "dependencies": {
+    "@clack/core": "^0.4.2",
     "@clack/prompts": "^0.10.1",
     "commander": "^12.1.0",
     "fflate": "^0.8.2",

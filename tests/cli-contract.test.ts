@@ -120,6 +120,8 @@ describe("CLI output compatibility contract", () => {
     expect(json.out.join("")).toBe('{"ok":true,"version":"0.0.1"}');
     expect(text.err).toEqual([]);
     expect(json.err).toEqual([]);
+    expect(text.out.join("")).not.toContain("\x1b[");
+    expect(json.out.join("")).not.toContain("\x1b[");
   });
 
   it("keeps the current json wizard fallback stable", async () => {

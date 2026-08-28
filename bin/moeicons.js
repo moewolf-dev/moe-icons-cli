@@ -17,6 +17,7 @@ const runtime = {
   stderr: (text) => process.stderr.write(text),
   env: process.env,
   isTTY: () => Boolean(process.stdin.isTTY && process.stdout.isTTY),
+  columns: () => process.stdout.columns,
 };
 
 main(process.argv.slice(2), runtime).then(

@@ -1,0 +1,7 @@
+MOEICONS
+┌─────────────────────────────────────────────────┐
+│ Run moeicons from your project root.            │
+│ React/Vue targets require the matching framewo… │
+│ Automatic Tailwind integration supports v3 onl… │
+│ Vanilla and Assets do not require React or Vue. │
+└─────────────────────────────────────────────────┘

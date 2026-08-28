@@ -22,6 +22,7 @@ import { runWizardUseCase } from "./core/wizard.js";
 import type { CommandContext } from "./core/context.js";
 import { createCommandUi } from "./ui/create-ui.js";
 import { CLI_VERSION, MOEICONS_BANNER, renderBannerText, renderNoticeBox } from "./ui/banner.js";
+import { createTheme, isThemeEnabled } from "./ui/theme.js";
 import {
   runAccountUseCase,
   runLoginUseCase,
@@ -53,6 +54,7 @@ export interface CliRuntime {
   readonly stderr: (text: string) => void;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly isTTY: () => boolean;
+  readonly columns?: () => number | undefined;
   readonly readLine?: (prompt: string) => Promise<string>;
   readonly readKey?: () => Promise<string>;
   readonly auth?: AuthUseCaseDependencies;
@@ -77,6 +79,7 @@ function commandContext(
       json: flags.json,
       yes: flags.yes,
       isTTY: runtime.isTTY(),
+      env: runtime.env,
       ...(streams ? { streams } : {}),
     }),
     cwd: runtime.cwd(),
@@ -116,7 +119,12 @@ export const BANNER = MOEICONS_BANNER;
 
 /** Banner rendered as plain ASCII (fallback for narrow terminals). */
 export function renderBanner(runtime: CliRuntime): void {
-  runtime.stdout(renderBannerText());
+  runtime.stdout(
+    renderBannerText({
+      columns: runtime.columns?.() ?? 80,
+      color: createTheme(isThemeEnabled(runtime.env, runtime.isTTY())).enabled,
+    }),
+  );
 }
 
 function argvRequestsJson(argv: readonly string[]): boolean {
@@ -511,7 +519,7 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
     return 0;
   }
   if (!result.ok) {
-    throw new CliError("CANCELLED", "cancelled");
+    return 0;
   }
   if (result.action === "pro-resources") {
     return await runProResources(runtime, yes);

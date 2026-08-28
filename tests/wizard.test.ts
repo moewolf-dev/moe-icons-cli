@@ -70,12 +70,13 @@ describe("wizard TUI (CLI-04)", () => {
   });
 
   it("exits 0 with zero writes when the user cancels the target selection", async () => {
-    const { runtime, setCwd } = makeTtyRuntime(["2", "0"], env);
+    const { runtime, err, setCwd } = makeTtyRuntime(["2", "0"], env);
     setCwd(dir);
     const code = await main([], runtime);
     expect(code).toBe(0);
     expect(existsSync(join(dir, "src", "moeicons"))).toBe(false);
     expect(existsSync(join(dir, ".moeicons"))).toBe(false);
+    expect(err.join("")).not.toContain("error: cancelled");
   });
 
   it("shows a nonblocking update notice when the registry is unavailable", async () => {
@@ -88,19 +89,21 @@ describe("wizard TUI (CLI-04)", () => {
   });
 
   it("exits 0 when the user cancels at the menu", async () => {
-    const { runtime, setCwd } = makeTtyRuntime(["0"], env);
+    const { runtime, err, setCwd } = makeTtyRuntime(["0"], env);
     setCwd(dir);
     const code = await main([], runtime);
     expect(code).toBe(0);
     expect(existsSync(join(dir, "src", "moeicons"))).toBe(false);
+    expect(err.join("")).not.toContain("error: cancelled");
   });
 
   it("exits 0 when the user declines the project-root confirmation", async () => {
-    const { runtime, setCwd } = makeTtyRuntime(["2", "1", "n"], env);
+    const { runtime, err, setCwd } = makeTtyRuntime(["2", "1", "n"], env);
     setCwd(dir);
     const code = await main([], runtime);
     expect(code).toBe(0);
     expect(existsSync(join(dir, "src", "moeicons"))).toBe(false);
+    expect(err.join("")).not.toContain("error: cancelled");
   });
 
   it("skips the project-root confirmation when --yes is set", async () => {

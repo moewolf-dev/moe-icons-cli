@@ -2,6 +2,7 @@ import type { CommandUi } from "../core/context.js";
 import { createClackUi } from "./clack.js";
 import { createNonInteractiveUi } from "./non-interactive.js";
 import { createStreamUi, type StreamUiRuntime } from "./stream.js";
+import { createTheme, isThemeEnabled } from "./theme.js";
 
 export interface CreateUiOptions {
   readonly json: boolean;
@@ -9,6 +10,7 @@ export interface CreateUiOptions {
   readonly isTTY: boolean;
   /** Present in tests (and optional in production). When set, skip Clack so prompts are injectable. */
   readonly streams?: StreamUiRuntime;
+  readonly env: Readonly<Record<string, string | undefined>>;
 }
 
 /**
@@ -22,5 +24,8 @@ export function createCommandUi(options: CreateUiOptions): CommandUi {
   if (options.streams?.readLine) {
     return createStreamUi(options.streams, { yes: options.yes });
   }
-  return createClackUi({ yes: options.yes });
+  return createClackUi({
+    yes: options.yes,
+    theme: createTheme(isThemeEnabled(options.env, options.isTTY)),
+  });
 }

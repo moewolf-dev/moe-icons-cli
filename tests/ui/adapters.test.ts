@@ -22,7 +22,7 @@ describe("non-interactive UI", () => {
 
 describe("createCommandUi", () => {
   it("uses the non-interactive adapter for --json even on a TTY", async () => {
-    const ui = createCommandUi({ json: true, yes: false, isTTY: true });
+    const ui = createCommandUi({ json: true, yes: false, isTTY: true, env: {} });
     await expect(ui.select("Choose", [{ value: "free", label: "Free" }], signal)).rejects.toBeInstanceOf(CliError);
   });
 });
