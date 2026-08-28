@@ -1,0 +1,4 @@
+Choose an option
+  Install moeicons pro
+[38;2;59;130;246m› Install moeicons free[39m
+  Manage project icons
