@@ -1,6 +1,6 @@
 import { detectProject } from "../project/detect.js";
 import { CliError } from "../errors/index.js";
-import type { CommandContext } from "./context.js";
+import type { CommandContext, UiChoice } from "./context.js";
 
 export type WizardResult =
   | { readonly ok: true; readonly action: "json-hint"; readonly message: string }
@@ -14,6 +14,8 @@ export type WizardResult =
   | { readonly ok: true; readonly action: "pro-resources" }
   | { readonly ok: true; readonly action: "manage"; readonly flow: "reload" | "library-update" }
   | { readonly ok: true; readonly action: "settings"; readonly flow: "logout" | "cli-update" }
+  | { readonly ok: true; readonly action: "back" }
+  | { readonly ok: true; readonly action: "exit"; readonly via: "menu" | "cancel" }
   | { readonly ok: false; readonly reason: "cancelled" };
 
 const JSON_HINT =
@@ -21,7 +23,10 @@ const JSON_HINT =
 
 export type WizardSessionState = "authenticated" | "signed-out" | "unknown";
 
-export function homeChoices(session: WizardSessionState, proResourcesLabel?: string) {
+const BACK: UiChoice = { value: "back", label: "Back", separatorBefore: true };
+const EXIT: UiChoice = { value: "exit", label: "Exit" };
+
+export function homeChoices(session: WizardSessionState, proResourcesLabel?: string): UiChoice[] {
   return [
     { value: "pro", label: "Install moeicons pro" },
     { value: "free", label: "Install moeicons free" },
@@ -38,7 +43,44 @@ export function homeChoices(session: WizardSessionState, proResourcesLabel?: str
           },
         ]),
     { value: "settings", label: "Settings" },
-  ] as const;
+    EXIT,
+  ];
+}
+
+export function settingsChoices(session: WizardSessionState): UiChoice[] {
+  return [
+    ...(session === "authenticated" ? [{ value: "logout", label: "Log out" }] : []),
+    { value: "cli-update", label: "Check for CLI updates" },
+    BACK,
+  ];
+}
+
+export function manageChoices(status?: string): UiChoice[] {
+  return [
+    { value: "reload", label: "Update project resources" },
+    {
+      value: "library-update",
+      label: `Update icon library version${status ? ` — ${status}` : ""}`,
+    },
+    BACK,
+  ];
+}
+
+export function targetChoices(): UiChoice[] {
+  return [
+    { value: "react", label: "React" },
+    { value: "vue", label: "Vue" },
+    { value: "vanilla", label: "Vanilla" },
+    { value: "assets", label: "Static assets" },
+    BACK,
+  ];
+}
+
+export function loginRecoveryChoices(): UiChoice[] {
+  return [
+    { value: "retry", label: "Retry login" },
+    BACK,
+  ];
 }
 
 /** Wizard state machine. No Clack/Commander/process imports. */
@@ -55,73 +97,56 @@ export async function runWizardUseCase(
     return { ok: true, action: "json-hint", message: JSON_HINT };
   }
 
+  const session = options.session ?? "signed-out";
   const proLabel =
-    options.session === "authenticated" ? await options.getProResourceLabel?.().catch(() => undefined) : undefined;
-  const choice = await context.ui.select(
-    "Choose an option",
-    homeChoices(options.session ?? "signed-out", proLabel),
-    context.signal,
-  );
-  if (choice === undefined) return { ok: false, reason: "cancelled" };
+    session === "authenticated" ? await options.getProResourceLabel?.().catch(() => undefined) : undefined;
+  const choice = await context.ui.select("Choose an option", homeChoices(session, proLabel), context.signal);
+  // Esc on home == Exit (cancel path); explicit Exit menu item uses via=menu.
+  if (choice === undefined) return { ok: true, action: "exit", via: "cancel" };
+  if (choice === "exit") return { ok: true, action: "exit", via: "menu" };
 
   if (choice === "login") return { ok: true, action: "pending", flow: "login" };
   if (choice === "pro-resources") return { ok: true, action: "pro-resources" };
+
   if (choice === "settings") {
-    const setting = await context.ui.select(
-      "Settings",
-      [
-        ...(options.session === "authenticated" ? [{ value: "logout", label: "Log out" }] : []),
-        { value: "cli-update", label: "Check for CLI updates" },
-      ],
-      context.signal,
-    );
-    return setting === undefined
-      ? { ok: false, reason: "cancelled" }
-      : { ok: true, action: "settings", flow: setting as "logout" | "cli-update" };
+    const setting = await context.ui.select("Settings", settingsChoices(session), context.signal);
+    if (setting === undefined || setting === "back") return { ok: true, action: "back" };
+    return { ok: true, action: "settings", flow: setting as "logout" | "cli-update" };
   }
+
   const project = detectProject(context.cwd);
   if (!project)
     throw new CliError(
       "VALIDATION_ERROR",
       "no package.json found in the current directory or parents; run inside a project",
     );
+
   if (choice === "manage") {
     const status = await options.getLibraryStatus?.();
     const management = await context.ui.select(
       "Manage project icons",
-      [
-        { value: "reload", label: "Update project resources" },
-        {
-          value: "library-update",
-          label: `Update icon library version${status ? ` — ${status}` : ""}`,
-        },
-      ],
+      manageChoices(status),
       context.signal,
     );
-    return management === undefined
-      ? { ok: false, reason: "cancelled" }
-      : { ok: true, action: "manage", flow: management as "reload" | "library-update" };
+    if (management === undefined || management === "back") return { ok: true, action: "back" };
+    return { ok: true, action: "manage", flow: management as "reload" | "library-update" };
   }
+
   if (choice === "free" || choice === "pro") {
-    const target = await context.ui.select(
-      "Choose an output target",
-      [
-        { value: "react", label: "React" },
-        { value: "vue", label: "Vue" },
-        { value: "vanilla", label: "Vanilla" },
-        { value: "assets", label: "Static assets" },
-      ],
-      context.signal,
-    );
+    const target = await context.ui.select("Choose an output target", targetChoices(), context.signal);
+    if (target === undefined || target === "back") return { ok: true, action: "back" };
     if (target !== "react" && target !== "vue" && target !== "vanilla" && target !== "assets") {
-      return { ok: false, reason: "cancelled" };
+      return { ok: true, action: "back" };
     }
     const confirmed = await context.ui.confirm(
       `Install ${choice} ${target} into ${project.root}?`,
       context.signal,
     );
-    if (confirmed !== true) return { ok: false, reason: "cancelled" };
+    // Esc / Ctrl+C on confirm exits; No returns to home (back)
+    if (confirmed === undefined) return { ok: false, reason: "cancelled" };
+    if (confirmed !== true) return { ok: true, action: "back" };
     return { ok: true, action: "install", group: choice, target };
   }
+
   throw new CliError("VALIDATION_ERROR", `unknown wizard choice: ${choice}`);
 }

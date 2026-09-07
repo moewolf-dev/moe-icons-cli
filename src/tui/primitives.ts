@@ -20,7 +20,11 @@ export interface TuiDeps {
   readonly yes?: boolean;
 }
 
-export type Choice<T> = { readonly value: T; readonly label: string };
+export type Choice<T> = {
+  readonly value: T;
+  readonly label: string;
+  readonly separatorBefore?: boolean;
+};
 
 export interface SelectOptions<T> {
   readonly choices: readonly Choice<T>[];
@@ -44,6 +48,11 @@ export function renderBanner(deps: TuiDeps, banner: string): void {
   deps.streams.write("\n");
 }
 
+function formatIndexedLabel(index: number, total: number, label: string): string {
+  const width = String(Math.max(total, 1)).length;
+  return `${String(index + 1).padStart(width, " ")}. ${label}`;
+}
+
 /** Interactive single-choice selection; non-TTY rejects with guidance. */
 export async function select<T>(deps: TuiDeps, prompt: string, options: SelectOptions<T>): Promise<T> {
   assertNotAborted(deps);
@@ -51,8 +60,10 @@ export async function select<T>(deps: TuiDeps, prompt: string, options: SelectOp
     throw new CliError("NOT_TTY", "interactive selection requires a TTY; use a specific command or --json");
   }
   deps.streams.write(`${prompt}\n`);
+  const total = options.choices.length;
   options.choices.forEach((choice, i) => {
-    deps.streams.write(`  ${i + 1}) ${choice.label}\n`);
+    if (choice.separatorBefore) deps.streams.write("\n");
+    deps.streams.write(`  ${formatIndexedLabel(i, total, choice.label)}\n`);
   });
   if (options.canCancel) deps.streams.write("  0) Cancel\n");
 

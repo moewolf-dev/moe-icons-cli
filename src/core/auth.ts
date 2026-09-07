@@ -75,7 +75,14 @@ function auth0Config(context: CommandContext) {
 
 export async function runLoginUseCase(context: CommandContext, deps: AuthUseCaseDependencies = {}): Promise<ReturnType<typeof redactSession>> {
   const tokenStore = await selectStore(context, deps);
-  const request = deps.request ?? ((path, options) => requestJson({ baseUrl: API_BASE_URL }, path, { ...options, retries: options.method === "GET" ? 3 : 0 }));
+  const request =
+    deps.request ??
+    ((path, options) =>
+      requestJson({ baseUrl: API_BASE_URL }, path, {
+        ...options,
+        retries: options.method === "GET" ? 3 : 0,
+        ...(options.stage ? { stage: `login ${options.stage}` } : {}),
+      }));
   const session = await loginWithDeviceSession(auth0Config(context), {
     request,
     openBrowser: deps.openBrowser ?? openBrowser,

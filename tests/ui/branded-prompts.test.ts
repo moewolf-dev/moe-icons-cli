@@ -6,6 +6,7 @@ import {
   brandedSelect,
   renderConfirmFrame,
   renderSelectFrame,
+  type SelectFrameOption,
 } from "../../src/ui/branded-prompts.js";
 import { ANSI_FG_RESET, createTheme } from "../../src/ui/theme.js";
 
@@ -51,7 +52,7 @@ async function writeKeys(input: PassThrough, keys: string[], delayMs = 30): Prom
 }
 
 describe("select renderer", () => {
-  it("keeps label order and paints only the active row blue", () => {
+  it("keeps label order, numbers options, and paints only the active row blue", () => {
     const frame = renderSelectFrame(
       { state: "active", cursor: 1, options: CHOICES },
       "Choose an option",
@@ -59,9 +60,9 @@ describe("select renderer", () => {
     );
     const lines = frame.split("\n");
     expect(lines[0]).toBe("Choose an option");
-    expect(stripAnsi(lines[1] ?? "")).toBe("  Install moeicons pro");
-    expect(stripAnsi(lines[2] ?? "")).toBe("› Install moeicons free");
-    expect(stripAnsi(lines[3] ?? "")).toBe("  Manage project icons");
+    expect(stripAnsi(lines[1] ?? "")).toBe("  1. Install moeicons pro");
+    expect(stripAnsi(lines[2] ?? "")).toBe("› 2. Install moeicons free");
+    expect(stripAnsi(lines[3] ?? "")).toBe("  3. Manage project icons");
     expect(lines[1]).not.toContain("\x1b[38;2;59;130;246m");
     expect(lines[2]).toContain("\x1b[38;2;59;130;246m");
     expect(lines[2]).toContain(ANSI_FG_RESET);
@@ -71,7 +72,7 @@ describe("select renderer", () => {
 
   it("renders a one-line blue submit state and a red cancel state", () => {
     expect(stripAnsi(renderSelectFrame({ state: "submit", cursor: 0, options: CHOICES }, "m", theme))).toBe(
-      "◆ Install moeicons pro",
+      "◆ 1. Install moeicons pro",
     );
     expect(renderSelectFrame({ state: "submit", cursor: 0, options: CHOICES }, "m", theme)).toContain(
       "\x1b[38;2;59;130;246m",
@@ -84,10 +85,33 @@ describe("select renderer", () => {
 
   it("keeps the same symbols without ANSI when color is off", () => {
     expect(renderSelectFrame({ state: "active", cursor: 0, options: CHOICES }, "m", plain)).toContain(
-      "› Install moeicons pro",
+      "› 1. Install moeicons pro",
     );
     expect(renderSelectFrame({ state: "cancel", cursor: 0, options: CHOICES }, "m", plain)).toBe("■ Cancelled");
     expect(renderSelectFrame({ state: "active", cursor: 0, options: CHOICES }, "m", plain)).not.toContain("\x1b[");
+  });
+  it("aligns double-digit numbers and inserts a blank line before Back", () => {
+    const options: SelectFrameOption[] = [
+      ...Array.from({ length: 11 }, (_, index) => ({
+        value: `v${index + 1}`,
+        label: `Item ${index + 1}`,
+      })),
+      { value: "back", label: "Back", separatorBefore: true },
+    ];
+    const frame = renderSelectFrame(
+      { state: "active", cursor: 11, options },
+      "Menu",
+      plain,
+    );
+    const lines = frame.split("\n");
+    expect(lines[1]).toBe("   1. Item 1");
+    expect(lines[10]).toBe("  10. Item 10");
+    expect(lines[11]).toBe("  11. Item 11");
+    expect(lines[12]).toBe("");
+    expect(lines[13]).toBe("› 12. Back");
+    expect(stripAnsi(renderSelectFrame({ state: "submit", cursor: 11, options }, "Menu", plain))).toBe(
+      "◆ 12. Back",
+    );
   });
 });
 

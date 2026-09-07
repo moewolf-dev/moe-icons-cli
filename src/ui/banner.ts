@@ -1,34 +1,46 @@
 import packageJson from "../../package.json" with { type: "json" };
-import { MOEICONS_LOGO_ASCII } from "./generated/logo-ascii.js";
 import { MOEICONS_BANNER } from "./generated/wordmark.js";
-import { createTheme } from "./theme.js";
+import {
+  MOEICONS_WORDMARK_LARGE,
+  WORDMARK_LARGE_GLYPHS,
+  WORDMARK_LARGE_WIDTH,
+} from "./generated/wordmark-large.js";
+import { ANSI_FG_RESET, createTheme, type UiTheme } from "./theme.js";
 
 export { MOEICONS_BANNER };
+export {
+  MOEICONS_WORDMARK_LARGE,
+  WORDMARK_LARGE_GLYPHS,
+  WORDMARK_LARGE_WIDTH,
+} from "./generated/wordmark-large.js";
 
 const CANVAS_WIDTH = 47;
-const MIN_FULL_COLUMNS = 52;
+/** Figlet / mid tier when columns are in [52, 101). */
+export const MIN_FIGLET_COLUMNS = 52;
+/** Large Unicode wordmark when columns >= 101. */
+export const MIN_LARGE_COLUMNS = WORDMARK_LARGE_WIDTH;
 
 const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
 const COMBINING_MARK = /\p{Mark}/u;
 const CONTROL = /[\p{Cc}\p{Cf}]/u;
 const WIDE_CODEPOINT =
   "[" +
-  "\u1100-\u115f" + // Hangul jamo
-  "\u2e80-\u303e" + // CJK radicals, Kangxi, punctuation
-  "\u3041-\u33ff" + // Hiragana/Katakana, CJK symbols, enclosed
-  "\u3400-\u4dbf" + // CJK ext A
-  "\u4e00-\u9fff" + // CJK unified
-  "\ua000-\ua4cf" + // Yi
-  "\uac00-\ud7a3" + // Hangul syllables
-  "\uf900-\ufaff" + // CJK compat
-  "\ufe30-\ufe4f" + // CJK compat forms
-  "\uff00-\uff60" + // fullwidth forms
-  "\uffe0-\uffe6" + // fullwidth signs
+  "\u1100-\u115f" +
+  "\u2e80-\u303e" +
+  "\u3041-\u33ff" +
+  "\u3400-\u4dbf" +
+  "\u4e00-\u9fff" +
+  "\ua000-\ua4cf" +
+  "\uac00-\ud7a3" +
+  "\uf900-\ufaff" +
+  "\ufe30-\ufe4f" +
+  "\uff00-\uff60" +
+  "\uffe0-\uffe6" +
   "]";
 const WIDE_CHAR = new RegExp(WIDE_CODEPOINT, "u");
 
 export const CLI_NOTICE_LINES = [
-  "Run moeicons from your project root.",
+  "Run `moeicons` from your project root.",
   "React/Vue targets require the matching framework.",
   "Automatic Tailwind integration supports v3 only.",
   "Vanilla and Assets do not require React or Vue.",
@@ -110,6 +122,8 @@ export interface RenderBannerOptions {
   readonly color: boolean;
 }
 
+export type WordmarkTier = "large" | "figlet" | "single";
+
 function normalizeColumns(columns: number): number {
   if (!Number.isFinite(columns) || columns <= 0) return 80;
   return columns;
@@ -130,16 +144,79 @@ export function centerLines(lines: readonly string[], width = CANVAS_WIDTH): str
   });
 }
 
+export function selectWordmarkTier(columns: number): WordmarkTier {
+  const normalized = normalizeColumns(columns);
+  if (normalized >= MIN_LARGE_COLUMNS) return "large";
+  if (normalized >= MIN_FIGLET_COLUMNS) return "figlet";
+  return "single";
+}
+
+function glyphShadeAt(column: number): "blue" | "red" | undefined {
+  for (const glyph of WORDMARK_LARGE_GLYPHS) {
+    if (column >= glyph.start && column < glyph.end) return glyph.shade;
+  }
+  return undefined;
+}
+
+/**
+ * Paint ░ runs with brand blue/red by frozen glyph intervals.
+ * ██ keep the default foreground. Disable color with theme.enabled=false.
+ */
+export function paintWordmarkLarge(lines: readonly string[], theme: UiTheme): string[] {
+  const openBlue = "\x1b[38;2;59;130;246m";
+  const openRed = "\x1b[38;2;239;68;68m";
+  return lines.map((line) => {
+    const padded = line.padEnd(WORDMARK_LARGE_WIDTH, " ");
+    if (!theme.enabled) return padded.replace(/ +$/u, "");
+    let result = "";
+    let active: "blue" | "red" | undefined;
+    for (let column = 0; column < WORDMARK_LARGE_WIDTH; column += 1) {
+      const character = padded[column] ?? " ";
+      if (character === "░") {
+        const shade = glyphShadeAt(column) ?? "blue";
+        if (active !== shade) {
+          if (active !== undefined) result += ANSI_FG_RESET;
+          result += shade === "blue" ? openBlue : openRed;
+          active = shade;
+        }
+        result += character;
+      } else {
+        if (active !== undefined) {
+          result += ANSI_FG_RESET;
+          active = undefined;
+        }
+        result += character;
+      }
+    }
+    if (active !== undefined) result += ANSI_FG_RESET;
+    return result.replace(/ +$/u, "");
+  });
+}
+
+/** Wordmark only (no notices). Used by wizard startup ordering. */
+export function renderWordmarkText(options: RenderBannerOptions): string {
+  const columns = normalizeColumns(options.columns);
+  const tier = selectWordmarkTier(columns);
+  if (tier === "single") return "MOEICONS";
+  if (tier === "figlet") return centerLines(contentLines(MOEICONS_BANNER)).join("\n");
+  const theme = createTheme(options.color);
+  return paintWordmarkLarge([...MOEICONS_WORDMARK_LARGE], theme).join("\n");
+}
+
+/** Project-root / dependency notice box for the current terminal width. */
+export function renderProjectNotice(columns: number): string {
+  return renderNoticeBox(CLI_NOTICE_LINES, { width: Math.max(20, normalizeColumns(columns)) });
+}
+
+/**
+ * Combined wordmark + project notice.
+ * Wizard prefers renderWordmarkText then version/update then renderProjectNotice.
+ */
 export function renderBannerText(options: RenderBannerOptions): string {
   const columns = normalizeColumns(options.columns);
-  const notice = renderNoticeBox(CLI_NOTICE_LINES, { width: Math.max(20, columns) });
-  if (columns < MIN_FULL_COLUMNS) {
-    return `MOEICONS\n${notice}\n`;
-  }
-  const theme = createTheme(options.color);
-  const logo = centerLines(contentLines(MOEICONS_LOGO_ASCII)).map((line) => theme.blue(line));
-  const wordmark = centerLines(contentLines(MOEICONS_BANNER));
-  return `${logo.join("\n")}\n\n${wordmark.join("\n")}\n${notice}\n`;
+  const wordmark = renderWordmarkText(options);
+  const notice = renderProjectNotice(columns);
+  return `${wordmark}\n${notice}\n`;
 }
 
 export const CLI_VERSION = packageJson.version;

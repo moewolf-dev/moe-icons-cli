@@ -60,7 +60,7 @@ describe('device-style Auth0 login', () => {
       request, openBrowser: async () => undefined, sleep: async () => undefined,
       tokenStore: memory.store, now: () => Date.parse('2026-08-24T00:00:00Z'),
     }, controller.signal)).rejects.toThrow('cancelled');
-    expect(request).toHaveBeenLastCalledWith('/v1/cli-login-sessions/id', { method: 'DELETE', auth: 'Bearer poll' });
+    expect(request).toHaveBeenLastCalledWith('/v1/cli-login-sessions/id', { method: 'DELETE', auth: 'Bearer poll', stage: 'cleanup' });
     expect(memory.get()).toBeUndefined();
   });
 

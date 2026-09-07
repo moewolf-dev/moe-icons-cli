@@ -36,9 +36,8 @@
     "LICENSE"
   ],
   "scripts": {
+    "dev:prepare": "npm --prefix ../moe-icons-clitest run dev:prepare",
     "generate-banner": "node scripts/generate-banner.mjs",
-    "generate:logo": "node scripts/generate-logo-ascii.mjs",
-    "verify:brand-source": "node scripts/verify-brand-source.mjs",
     "prebuild": "rimraf dist",
     "build": "tsc -p tsconfig.build.json && node scripts/copy-catalog.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",

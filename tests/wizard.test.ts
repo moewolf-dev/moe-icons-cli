@@ -70,7 +70,8 @@ describe("wizard TUI (CLI-04)", () => {
   });
 
   it("exits 0 with zero writes when the user cancels the target selection", async () => {
-    const { runtime, err, setCwd } = makeTtyRuntime(["2", "0"], env);
+    // free → cancel target (Back) → cancel home (Exit)
+    const { runtime, err, setCwd } = makeTtyRuntime(["2", "0", "0"], env);
     setCwd(dir);
     const code = await main([], runtime);
     expect(code).toBe(0);
@@ -98,12 +99,23 @@ describe("wizard TUI (CLI-04)", () => {
   });
 
   it("exits 0 when the user declines the project-root confirmation", async () => {
-    const { runtime, err, setCwd } = makeTtyRuntime(["2", "1", "n"], env);
+    // free → react → No → Exit home
+    const { runtime, err, setCwd } = makeTtyRuntime(["2", "1", "n", "0"], env);
     setCwd(dir);
     const code = await main([], runtime);
     expect(code).toBe(0);
     expect(existsSync(join(dir, "src", "moeicons"))).toBe(false);
     expect(err.join("")).not.toContain("error: cancelled");
+  });
+
+  it("returns to home via explicit Back on the target menu", async () => {
+    const { runtime, out, setCwd } = makeTtyRuntime(["2", "5", "6"], env);
+    setCwd(dir);
+    const code = await main([], runtime);
+    expect(code).toBe(0);
+    expect(out.join("")).toContain("Back");
+    expect(out.join("")).toContain("Exit");
+    expect(existsSync(join(dir, "src", "moeicons"))).toBe(false);
   });
 
   it("skips the project-root confirmation when --yes is set", async () => {

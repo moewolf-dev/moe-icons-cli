@@ -18,10 +18,10 @@ import { join } from "node:path";
 import { runInitUseCase } from "./core/init.js";
 import { runGenerateUseCase } from "./core/generate.js";
 import { runInstallUseCase } from "./core/install.js";
-import { runWizardUseCase } from "./core/wizard.js";
+import { runWizardUseCase, loginRecoveryChoices } from "./core/wizard.js";
 import type { CommandContext } from "./core/context.js";
 import { createCommandUi } from "./ui/create-ui.js";
-import { CLI_VERSION, MOEICONS_BANNER, renderBannerText, renderNoticeBox } from "./ui/banner.js";
+import { CLI_VERSION, MOEICONS_BANNER, renderNoticeBox, renderProjectNotice, renderWordmarkText } from "./ui/banner.js";
 import { createTheme, isThemeEnabled } from "./ui/theme.js";
 import {
   runAccountUseCase,
@@ -117,13 +117,13 @@ function freeDownloadDeps(runtime: CliRuntime): Omit<FreeDownloadIo, "signal"> {
 export { MOEICONS_BANNER };
 export const BANNER = MOEICONS_BANNER;
 
-/** Banner rendered as plain ASCII (fallback for narrow terminals). */
+/** Wordmark rendered for interactive wizard startup (notices come later). */
 export function renderBanner(runtime: CliRuntime): void {
   runtime.stdout(
-    renderBannerText({
+    `${renderWordmarkText({
       columns: runtime.columns?.() ?? 80,
       color: createTheme(isThemeEnabled(runtime.env, runtime.isTTY())).enabled,
-    }),
+    })}\n`,
   );
 }
 
@@ -137,6 +137,11 @@ function writeJson(runtime: CliRuntime, value: unknown): void {
 
 function reportFailure(runtime: CliRuntime, json: boolean, error: unknown): number {
   if (isCliError(error)) {
+    if (error.code === "CANCELLED") {
+      if (json) writeJson(runtime, jsonErrorBody(error.code, error.message));
+      else runtime.stderr("Cancelled\n");
+      return 0;
+    }
     if (json) writeJson(runtime, jsonErrorBody(error.code, error.message));
     else runtime.stderr(`error: ${error.message}\n`);
     return error.exitCode;
@@ -461,7 +466,16 @@ function renderCliUpdateNotice(update: Awaited<ReturnType<typeof runCliUpdateChe
 
 /** Guided flow: Free / Pro / Login, with project-root confirmation before write. */
 async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Promise<number> {
-  if (!json && runtime.isTTY()) {
+  if (json) {
+    const context = commandContext(runtime, { json, yes });
+    const result = await runWizardUseCase(context, { json: true });
+    if (result.ok && result.action === "json-hint") {
+      writeJson(runtime, { ok: true, message: result.message });
+    }
+    return 0;
+  }
+
+  if (runtime.isTTY()) {
     renderBanner(runtime);
     runtime.stdout(`CLI ${versionString()}\n`);
     try {
@@ -475,15 +489,17 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
       });
       runtime.stdout(`${renderCliUpdateNotice(update)}\n`);
     } catch {
-      runtime.stdout(`${renderNoticeBox(["Moeicons CLI version status", `Current ${versionString()} / Latest unavailable / Update: unavailable`])}\n`);
+      runtime.stdout(
+        `${renderNoticeBox([
+          "Moeicons CLI version status",
+          `Current ${versionString()} / Latest unavailable / Update: unavailable`,
+        ])}\n`,
+      );
     }
+    runtime.stdout(`${renderProjectNotice(runtime.columns?.() ?? 80)}\n`);
     if (runtime.readLine === undefined) await runBootstrap(runtime);
   }
-  const context = commandContext(runtime, { json, yes });
-  const session = await runSessionStatusUseCase(context, runtime.auth).catch((error: unknown) => ({
-    kind: "unknown" as const,
-    reason: error instanceof Error ? error.message : "session status unavailable",
-  }));
+
   const getStatus = async () => {
     const project = detectProject(runtime.cwd());
     if (!project) return "Current: invalid / Latest: unavailable / Status: no project";
@@ -494,88 +510,165 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
       await getLibraryVersionStatus(project.root, config.config.tier),
     );
   };
-  const result = await runWizardUseCase(context, {
-    json,
-    session: session.kind,
-    getLibraryStatus: getStatus,
-    getProResourceLabel: async () => {
-      if (session.kind !== "authenticated") return undefined;
-      const state = await proResourceState(context, runtime.auth ?? {}, {
-        ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
-      }).catch(() => undefined);
-      if (!state || state.kind === "unavailable") return undefined;
-      if (state.kind === "not-cached") return "Download Pro resources";
-      if (state.kind === "outdated")
-        return `Update Pro resources (${state.version} → ${state.latestVersion})`;
-      if (state.kind === "corrupt") return "Repair Pro resources";
-      return "Pro resources are up to date";
-    },
-  });
-  if (result.ok && result.action === "json-hint") {
-    writeJson(runtime, { ok: true, message: result.message });
-    return 0;
-  }
-  if (!result.ok) {
-    return 0;
-  }
-  if (result.action === "pro-resources") {
-    return await runProResources(runtime, yes);
-  }
-  if (result.action === "install") {
-    const project = detectProject(runtime.cwd());
-    if (project) runtime.stdout(`Project root: ${project.root}\n`);
-    return await runInstall(
-      result.group,
-      runtime,
-      false,
-      false,
-      undefined,
-      undefined,
-      result.target,
-    );
-  }
-  if (result.action === "settings") {
-    if (result.flow === "logout") return runLogout(runtime, false);
-    const update = await runCliUpdateCheck({
-      currentVersion: versionString(),
-      cwd: runtime.cwd(),
-      env: runtime.env,
-      fs: { existsSync, readFileSync: (path) => readFileSync(path, "utf8") },
-      signal: context.signal,
-      timeoutMs: 1_000,
-      ...(runtime.fetchVersions ? { fetchVersions: runtime.fetchVersions } : {}),
-    }).catch(() => undefined);
-    if (!update) {
-      runtime.stdout(`${renderNoticeBox(["Moeicons CLI version status", `Current ${versionString()} / Latest unavailable / Update: unavailable`])}\n`);
+
+  // Single-level loop: never recurse runWizard; banner/bootstrap once per process.
+  for (;;) {
+    const context = commandContext(runtime, { json: false, yes });
+    const session = await runSessionStatusUseCase(context, runtime.auth).catch((error: unknown) => ({
+      kind: "unknown" as const,
+      reason: error instanceof Error ? error.message : "session status unavailable",
+    }));
+
+    const result = await runWizardUseCase(context, {
+      json: false,
+      session: session.kind,
+      getLibraryStatus: getStatus,
+      getProResourceLabel: async () => {
+        if (session.kind !== "authenticated") return undefined;
+        const state = await proResourceState(context, runtime.auth ?? {}, {
+          ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
+        }).catch(() => undefined);
+        if (!state || state.kind === "unavailable") return undefined;
+        if (state.kind === "not-cached") return "Download Pro resources";
+        if (state.kind === "outdated")
+          return `Update Pro resources (${state.version} → ${state.latestVersion})`;
+        if (state.kind === "corrupt") return "Repair Pro resources";
+        return "Pro resources are up to date";
+      },
+    });
+
+    if (!result.ok) {
+      // Select/confirm cancel frames already render "■ Cancelled"; do not duplicate.
       return 0;
     }
-    if (update.status === "update")
-      runtime.stdout(
-        `CLI ${update.currentVersion} → ${update.latestVersion}\nRun: ${update.instruction}\n`,
+    if (result.action === "exit") {
+      if (result.via === "menu") runtime.stdout("Exited\n");
+      return 0;
+    }
+    if (result.action === "back") continue;
+
+    if (result.action === "pro-resources") {
+      await runProResources(runtime, yes);
+      continue;
+    }
+
+    if (result.action === "install") {
+      const project = detectProject(runtime.cwd());
+      if (project) runtime.stdout(`Project root: ${project.root}\n`);
+      return await runInstall(
+        result.group,
+        runtime,
+        false,
+        false,
+        undefined,
+        undefined,
+        result.target,
       );
-    else if (update.status === "current")
-      runtime.stdout(`CLI ${update.currentVersion} is up to date.\n`);
-    else runtime.stdout(`Unable to find a CLI release in the current channel.\n`);
+    }
+
+    if (result.action === "settings") {
+      if (result.flow === "logout") {
+        await runLogout(runtime, false);
+        continue;
+      }
+      const update = await runCliUpdateCheck({
+        currentVersion: versionString(),
+        cwd: runtime.cwd(),
+        env: runtime.env,
+        fs: { existsSync, readFileSync: (path) => readFileSync(path, "utf8") },
+        signal: context.signal,
+        timeoutMs: 1_000,
+        ...(runtime.fetchVersions ? { fetchVersions: runtime.fetchVersions } : {}),
+      }).catch(() => undefined);
+      if (!update) {
+        runtime.stdout(
+          `${renderNoticeBox([
+            "Moeicons CLI version status",
+            `Current ${versionString()} / Latest unavailable / Update: unavailable`,
+          ])}\n`,
+        );
+      } else if (update.status === "update") {
+        runtime.stdout(
+          `CLI ${update.currentVersion} → ${update.latestVersion}\nRun: ${update.instruction}\n`,
+        );
+      } else if (update.status === "current") {
+        runtime.stdout(`CLI ${update.currentVersion} is up to date.\n`);
+      } else {
+        runtime.stdout(`Unable to find a CLI release in the current channel.\n`);
+      }
+      continue;
+    }
+
+    if (result.action === "manage") {
+      if (result.flow === "reload") {
+        await runGenerate(runtime, false, false, true, undefined, yes);
+        continue;
+      }
+      const project = detectProject(runtime.cwd());
+      if (!project) throw new CliError("VALIDATION_ERROR", "no project found");
+      const config = readMoeiconsConfig(project.root);
+      if (config.kind !== "ok") throw new CliError("VALIDATION_ERROR", `config ${config.kind}`);
+      const status = await getLibraryVersionStatus(project.root, config.config.tier);
+      runtime.stdout(`${formatLibraryVersionStatus(status)}\n`);
+      if (status.kind === "update") {
+        await runLibraryUpdate(
+          runtime,
+          status.metadata.tier,
+          status.latestVersion,
+          status.latestDescriptorSha256,
+        );
+      }
+      continue;
+    }
+
+    if (result.action === "pending" && result.flow === "login") {
+      const loginOutcome = await runWizardLogin(runtime, yes);
+      if (loginOutcome === "exit") return 0;
+      continue;
+    }
+
     return 0;
   }
-  if (result.action === "manage") {
-    if (result.flow === "reload") return await runGenerate(runtime, false, false, true, undefined, yes);
-    const project = detectProject(runtime.cwd());
-    if (!project) throw new CliError("VALIDATION_ERROR", "no project found");
-    const config = readMoeiconsConfig(project.root);
-    if (config.kind !== "ok") throw new CliError("VALIDATION_ERROR", `config ${config.kind}`);
-    const status = await getLibraryVersionStatus(project.root, config.config.tier);
-    runtime.stdout(`${formatLibraryVersionStatus(status)}\n`);
-    if (status.kind !== "update") return 0;
-    return runLibraryUpdate(
-      runtime,
-      status.metadata.tier,
-      status.latestVersion,
-      status.latestDescriptorSha256,
-    );
+}
+
+/**
+ * Wizard-local login with Retry/Back. Explicit `moeicons login` still uses runLogin.
+ * Returns "home" to resume the wizard loop, or "exit" on cancel/Ctrl+C.
+ */
+async function runWizardLogin(runtime: CliRuntime, yes: boolean): Promise<"home" | "exit"> {
+  for (;;) {
+    try {
+      const code = await runLogin(runtime, false, yes);
+      if (code !== 0) {
+        // runLogin only returns non-zero via thrown errors normally; keep home on soft failure.
+        return "home";
+      }
+      return "home";
+    } catch (error) {
+      if (isCliError(error) && error.code === "CANCELLED") {
+        runtime.stderr("Cancelled\n");
+        return "exit";
+      }
+      const message = isCliError(error)
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : String(error);
+      runtime.stderr(`Login failed: ${message}\n`);
+      const context = commandContext(runtime, { json: false, yes });
+      const choice = await context.ui.select(
+        "Login",
+        loginRecoveryChoices(),
+        context.signal,
+      );
+      if (choice === undefined) {
+        runtime.stderr("Cancelled\n");
+        return "exit";
+      }
+      if (choice === "back") return "home";
+      // retry → loop with a fresh session
+    }
   }
-  if (result.flow === "login") return runLogin(runtime, false, yes);
-  return 0;
 }
 
 async function runLibraryUpdate(

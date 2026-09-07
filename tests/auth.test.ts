@@ -94,7 +94,7 @@ describe("requestJson", () => {
     try {
       await expect(
         requestJson({ baseUrl: "https://api.example.com" }, "/x"),
-      ).rejects.toThrow("unauthorized");
+      ).rejects.toThrow(/unauthorized/);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -108,6 +108,41 @@ describe("requestJson", () => {
       const result = await requestJson<{ ok: boolean }>({ baseUrl: "https://api.example.com" }, "/x");
       expect(result.data.ok).toBe(true);
       expect(result.requestId).toMatch(/^req-/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("diagnoses HTML and plain-text non-JSON bodies with stage context", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response("<html>Not Found</html>", {
+        status: 404,
+        headers: { "content-type": "text/html" },
+      })) as unknown as typeof fetch;
+    try {
+      await expect(
+        requestJson({ baseUrl: "https://api.example.com" }, "/v1/cli-login-sessions", {
+          method: "POST",
+          stage: "login create",
+        }),
+      ).rejects.toMatchObject({
+        code: "NOT_FOUND",
+        message: expect.stringMatching(/login create:.*not valid JSON.*text\/html.*html/i),
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("diagnoses empty error bodies", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response("", { status: 500, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+    try {
+      await expect(requestJson({ baseUrl: "https://api.example.com" }, "/x")).rejects.toMatchObject({
+        message: expect.stringMatching(/empty error response/),
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -66,11 +66,11 @@ describe("runWizardUseCase", () => {
     expect(result).toMatchObject({ ok: true, action: "json-hint" });
   });
 
-  it("returns cancelled when select is cancelled", async () => {
+  it("returns exit when home select is cancelled (Esc)", async () => {
     const result = await runWizardUseCase(context(dir, fakeUi({ select: async () => undefined })), {
       json: false,
     });
-    expect(result).toEqual({ ok: false, reason: "cancelled" });
+    expect(result).toEqual({ ok: true, action: "exit", via: "cancel" });
   });
 
   it("installs free after a confirmed selection", async () => {
@@ -78,20 +78,28 @@ describe("runWizardUseCase", () => {
     expect(result).toEqual({ ok: true, action: "install", group: "free", target: "react" });
   });
 
-  it("returns cancelled when the target selection is cancelled", async () => {
+  it("returns back when the target selection is cancelled", async () => {
     const result = await runWizardUseCase(
       context(dir, fakeUi({ select: selectSequence(["free", undefined]) })),
       { json: false },
     );
-    expect(result).toEqual({ ok: false, reason: "cancelled" });
+    expect(result).toEqual({ ok: true, action: "back" });
   });
 
-  it("returns cancelled when confirm is declined", async () => {
+  it("returns cancelled when confirm is aborted", async () => {
     const result = await runWizardUseCase(
       context(dir, fakeUi({ confirm: async () => undefined })),
       { json: false },
     );
     expect(result).toEqual({ ok: false, reason: "cancelled" });
+  });
+
+  it("returns back when confirm is declined with No", async () => {
+    const result = await runWizardUseCase(
+      context(dir, fakeUi({ confirm: async () => false })),
+      { json: false },
+    );
+    expect(result).toEqual({ ok: true, action: "back" });
   });
 
   it("surfaces abort via CANCELLED when select rejects", async () => {
@@ -123,12 +131,14 @@ describe("runWizardUseCase", () => {
       "manage",
       "login",
       "settings",
+      "exit",
     ]);
     expect(homeChoices("authenticated").map((choice) => choice.value)).toEqual([
       "pro",
       "free",
       "manage",
       "settings",
+      "exit",
     ]);
     expect(homeChoices("unknown").map((choice) => choice.value)).toEqual([
       "pro",
@@ -136,10 +146,12 @@ describe("runWizardUseCase", () => {
       "manage",
       "login",
       "settings",
+      "exit",
     ]);
     expect(homeChoices("unknown").find((choice) => choice.value === "login")?.label).toContain(
       "unknown",
     );
+    expect(homeChoices("signed-out").at(-1)).toMatchObject({ value: "exit", label: "Exit" });
     expect(homeChoices("signed-out").length).toBeLessThanOrEqual(10);
     expect(homeChoices("authenticated", "Download Pro resources").length).toBeLessThanOrEqual(10);
   });
@@ -177,9 +189,9 @@ describe("runWizardUseCase", () => {
       },
     });
     await runWizardUseCase(context(dir, ui), { json: false, session: "signed-out" });
-    expect(values[1]).toEqual(["cli-update"]);
+    expect(values[1]).toEqual(["cli-update", "back"]);
     values.length = 0;
     await runWizardUseCase(context(dir, ui), { json: false, session: "authenticated" });
-    expect(values[1]).toEqual(["logout", "cli-update"]);
+    expect(values[1]).toEqual(["logout", "cli-update", "back"]);
   });
 });
