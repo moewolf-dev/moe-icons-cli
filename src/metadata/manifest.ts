@@ -2,6 +2,7 @@ import type { ReleaseTarget } from "../core/release-descriptor.js";
 
 const SHA256_HEX = /^[a-f0-9]{64}$/;
 const VERSION = /^\d+\.\d+\.\d+(?:-(?:alpha|beta))?$/;
+const LOCAL_TEST_VERSION = /^\d+\.\d+\.\d+-test$/;
 const COMMIT = /^[0-9a-f]{40}$/;
 const RELEASE_TARGETS = ["react", "vue", "vanilla", "assets"] as const;
 
@@ -27,6 +28,9 @@ export interface MetadataManifest {
     readonly "MANUAL.md": MetadataFileDigest;
     readonly "catalog.json": MetadataFileDigest;
   };
+  /** ICON-E2E-0907 / E2E-E2: local-test candidates only. */
+  readonly channel?: "local-test";
+  readonly publishable?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -48,7 +52,7 @@ function parseFileDigest(value: unknown, field: string): MetadataFileDigest {
  * Strict parse of a metadata manifest. Unknown fields, unknown schemaVersion,
  * a tier/version/hash mismatch or malformed file digests are hard errors.
  */
-export function parseMetadataManifest(raw: string | Uint8Array): MetadataManifest {
+export function parseMetadataManifest(raw: string | Uint8Array, opts: { readonly allowLocalTest?: boolean } = {}): MetadataManifest {
   let parsed: unknown;
   try {
     parsed = JSON.parse(Buffer.from(raw).toString("utf8"));
@@ -57,6 +61,7 @@ export function parseMetadataManifest(raw: string | Uint8Array): MetadataManifes
   }
   if (!isRecord(parsed)) throw new Error("manifest.json must be an object");
 
+  const allowLocalTest = opts.allowLocalTest === true;
   const allowed = new Set([
     "schemaVersion",
     "tier",
@@ -68,6 +73,8 @@ export function parseMetadataManifest(raw: string | Uint8Array): MetadataManifes
     "targets",
     "dependencies",
     "files",
+    "channel",
+    "publishable",
   ]);
   for (const key of Object.keys(parsed)) {
     if (!allowed.has(key)) throw new Error(`manifest.json has an unknown field: ${key}`);
@@ -76,8 +83,21 @@ export function parseMetadataManifest(raw: string | Uint8Array): MetadataManifes
   if (parsed.tier !== "free" && parsed.tier !== "pro") {
     throw new Error(`manifest.json has an invalid tier: ${String(parsed.tier)}`);
   }
+  const channel = parsed.channel === "local-test" ? ("local-test" as const) : undefined;
+  const publishable = parsed.publishable === true || parsed.publishable === false
+    ? parsed.publishable
+    : undefined;
+  const localTestMarked = channel === "local-test" && publishable === false;
+  if (allowLocalTest && !localTestMarked && parsed.channel !== undefined) {
+    throw new Error("manifest.json local context requires channel local-test and publishable: false");
+  }
+  const versionAllowed = (value: unknown): boolean => {
+    if (typeof value !== "string") return false;
+    if (VERSION.test(value)) return true;
+    return allowLocalTest && localTestMarked && LOCAL_TEST_VERSION.test(value);
+  };
   for (const field of ["libraryVersion", "manualVersion", "catalogVersion", "cliVersion"]) {
-    if (typeof parsed[field] !== "string" || !VERSION.test(parsed[field])) {
+    if (!versionAllowed(parsed[field])) {
       throw new Error(`manifest.json ${field} must be a valid semver string`);
     }
   }
@@ -136,5 +156,7 @@ export function parseMetadataManifest(raw: string | Uint8Array): MetadataManifes
     targets,
     dependencies,
     files,
+    ...(channel ? { channel } : {}),
+    ...(publishable !== undefined ? { publishable } : {}),
   };
 }

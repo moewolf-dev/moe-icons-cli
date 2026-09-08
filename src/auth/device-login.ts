@@ -1,4 +1,9 @@
 import { createLoginState, createPkcePair } from "./pkce.js";
+import {
+  parseCreateLoginResponse,
+  parseExchangeLoginResponse,
+  parsePollLoginResponse,
+} from "./login-schemas.js";
 import type { StoredSession, TokenStore } from "./token-store.js";
 import { CliError } from "../errors/index.js";
 
@@ -7,26 +12,6 @@ export interface DeviceLoginConfig {
   readonly websiteOrigin: string;
   readonly auth0Issuer: string;
   readonly auth0ClientId: string;
-}
-
-interface CreateResponse {
-  readonly loginId: string;
-  readonly pollingToken: string;
-  readonly browserUrl: string;
-  readonly intervalSeconds: number;
-  readonly expiresAt: string;
-}
-
-interface PollResponse {
-  readonly status: "pending" | "complete";
-  readonly exchangeCode?: string;
-}
-
-interface ExchangeResponse {
-  readonly accountId: string;
-  readonly accessToken: string;
-  readonly refreshToken: string;
-  readonly expiresIn: number;
 }
 
 export type LoginRequestStage = "create" | "poll" | "exchange" | "cleanup";
@@ -64,56 +49,52 @@ export async function loginWithDeviceSession(
 ): Promise<StoredSession> {
   const pkce = createPkcePair();
   const state = createLoginState();
-  const created = await deps.request<CreateResponse>("/v1/cli-login-sessions", {
+  const createdRaw = await deps.request<unknown>("/v1/cli-login-sessions", {
     method: "POST",
     body: { codeChallenge: pkce.challenge, clientNonce: state.nonce, state: state.state },
     stage: "create",
     ...(signal ? { signal } : {}),
   });
-  assertBrowserUrl(created.data.browserUrl, config.websiteOrigin);
-  if (
-    !Number.isSafeInteger(created.data.intervalSeconds) ||
-    created.data.intervalSeconds < 1 ||
-    created.data.intervalSeconds > 60
-  ) {
-    throw new CliError("AUTH_ERROR", "backend returned an invalid polling interval");
-  }
-  await deps.openBrowser(created.data.browserUrl);
-  const auth = `Bearer ${created.data.pollingToken}`;
-  const sessionPath = `/v1/cli-login-sessions/${encodeURIComponent(created.data.loginId)}`;
+  const created = parseCreateLoginResponse(createdRaw.data);
+  assertBrowserUrl(created.browserUrl, config.websiteOrigin);
+  await deps.openBrowser(created.browserUrl);
+  const auth = `Bearer ${created.pollingToken}`;
+  const sessionPath = `/v1/cli-login-sessions/${encodeURIComponent(created.loginId)}`;
   try {
-    while (deps.now() < Date.parse(created.data.expiresAt)) {
+    while (deps.now() < Date.parse(created.expiresAt)) {
       if (signal?.aborted) throw new CliError("CANCELLED", "login cancelled");
-      const polled = await deps.request<PollResponse>(sessionPath, {
+      const polledRaw = await deps.request<unknown>(sessionPath, {
         method: "GET",
         auth,
         stage: "poll",
         ...(signal ? { signal } : {}),
       });
-      if (polled.status === 200 && polled.data.status === "complete" && polled.data.exchangeCode) {
-        const exchanged = await deps.request<ExchangeResponse>(`${sessionPath}/exchange`, {
+      const polled = parsePollLoginResponse(polledRaw.data);
+      if (polledRaw.status === 200 && polled.status === "complete" && polled.exchangeCode) {
+        const exchangedRaw = await deps.request<unknown>(`${sessionPath}/exchange`, {
           method: "POST",
           auth,
           stage: "exchange",
           body: {
-            exchangeCode: polled.data.exchangeCode,
+            exchangeCode: polled.exchangeCode,
             clientNonce: state.nonce,
             codeVerifier: pkce.verifier,
           },
           ...(signal ? { signal } : {}),
         });
+        const exchanged = parseExchangeLoginResponse(exchangedRaw.data);
         const stored: StoredSession = {
-          accountId: exchanged.data.accountId,
-          accessToken: exchanged.data.accessToken,
-          refreshToken: exchanged.data.refreshToken,
-          expiresAt: deps.now() + exchanged.data.expiresIn * 1000,
+          accountId: exchanged.accountId,
+          accessToken: exchanged.accessToken,
+          refreshToken: exchanged.refreshToken,
+          expiresAt: deps.now() + exchanged.expiresIn * 1000,
           scope: "openid profile email offline_access",
           storedAt: deps.now(),
         };
         deps.tokenStore.set(stored);
         return stored;
       }
-      await deps.sleep(created.data.intervalSeconds * 1000, signal);
+      await deps.sleep(created.intervalSeconds * 1000, signal);
     }
     throw new CliError("AUTH_ERROR", "login session expired");
   } catch (error) {

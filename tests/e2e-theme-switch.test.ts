@@ -46,15 +46,41 @@ describe("E2E-07 theme-switch contract", () => {
     expect(registry).toContain("UserAccountCircle");
   });
 
-  it("generates proxy components that resolve the current theme at runtime", () => {
+  it("proxy resolves theme from provider and falls back to defaultTheme", () => {
     const plan = planGeneratedFiles(config, "src/moeicons");
     expect(plan.ok).toBe(true);
     if (!plan.ok) return;
     const proxy = plan.files.find((f) => f.path.endsWith("icons/ArrowBoldRight.tsx"))?.content ?? "";
     expect(proxy).toContain("useMoeiconsTheme");
-    expect(proxy).toContain('registry[theme]?.ArrowBoldRight');
-    // proxy accepts user props (className/size/strokeWidth) passthrough
-    expect(proxy).toContain("props");
+    expect(proxy).toMatch(
+      /registry\[theme\]\?\.ArrowBoldRight\s*\?\?\s*registry\["outline"\]\.ArrowBoldRight/,
+    );
+    // User call sites must use logical theme keys, never style group ids.
+    expect(proxy).not.toContain("moe-outline");
+    expect(proxy).not.toContain("moe-solid");
+  });
+
+  it("proxy types and runtime passthrough keep className, size, and aria-label", () => {
+    const plan = planGeneratedFiles(config, "src/moeicons");
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    const types = plan.files.find((f) => f.path.endsWith("types.ts"))?.content ?? "";
+    const proxy = plan.files.find((f) => f.path.endsWith("icons/ArrowBoldRight.tsx"))?.content ?? "";
+    expect(types).toContain("className?: string");
+    expect(types).toContain('"aria-label"?: string');
+    expect(proxy).toContain("...rest");
+    expect(proxy).toContain("className={cn(");
+  });
+
+  it("illegal theme selection falls back to defaultTheme in generated provider usage", () => {
+    const plan = planGeneratedFiles(config, "src/moeicons");
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    const provider = plan.files.find((f) => f.path.endsWith("provider.tsx"))?.content ?? "";
+    expect(provider).toContain('useState<Theme>(props.theme ?? "outline")');
+    const proxy = plan.files.find((f) => f.path.endsWith("icons/ArrowBoldRight.tsx"))?.content ?? "";
+    // Unknown theme key → registry miss → defaultTheme component (locked C2 decision).
+    expect(proxy).toContain('registry["outline"].ArrowBoldRight');
   });
 
   it("missing icons follow the configured fallback policy", () => {

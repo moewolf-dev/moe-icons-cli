@@ -31,6 +31,8 @@ describe("theme", () => {
     expect(theme.blue("Yes")).toBe(`${BLUE}Yes${ANSI_FG_RESET}`);
     expect(theme.red("No")).toBe(`${RED}No${ANSI_FG_RESET}`);
     expect(theme.blue("")).toBe(`${BLUE}${ANSI_FG_RESET}`);
+    expect(theme.openBlue).toBe(BLUE);
+    expect(theme.openRed).toBe(RED);
   });
 
   it("leaves characters unchanged when color is disabled", () => {
@@ -38,5 +40,7 @@ describe("theme", () => {
     expect(theme.blue("Yes")).toBe("Yes");
     expect(theme.red("No")).toBe("No");
     expect(theme.blue("")).toBe("");
+    expect(theme.openBlue).toBe("");
+    expect(theme.openRed).toBe("");
   });
 });

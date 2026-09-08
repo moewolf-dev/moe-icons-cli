@@ -38,12 +38,14 @@
   "scripts": {
     "dev:prepare": "npm --prefix ../moe-icons-clitest run dev:prepare",
     "generate-banner": "node scripts/generate-banner.mjs",
+    "sync:config-package": "node scripts/sync-config-package.mjs",
     "prebuild": "rimraf dist",
-    "build": "tsc -p tsconfig.build.json && node scripts/copy-catalog.mjs",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-catalog.mjs && node scripts/copy-config-package.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src --ext .ts",
     "test": "vitest run",
     "release:preflight": "node scripts/release-preflight.mjs",
+    "release:bump": "node scripts/release-bump.mjs",
     "prepublishOnly": "npm run release:preflight",
     "format": "prettier --write src tests"
   },
@@ -64,6 +66,7 @@
     "vue": "^3.5.41"
   },
   "dependencies": {
+    "@babel/parser": "^7.29.8",
     "@clack/core": "^0.4.2",
     "@clack/prompts": "^0.10.1",
     "commander": "^12.1.0",

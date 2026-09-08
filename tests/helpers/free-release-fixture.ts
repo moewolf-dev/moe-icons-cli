@@ -97,6 +97,7 @@ export function writeFreeReleaseFixture(
     readonly omitMetadata?: boolean;
     readonly corruptMetadata?: boolean;
     readonly tier?: "free" | "pro";
+    readonly localTest?: boolean;
   } = {},
 ): {
   readonly version: string;
@@ -152,6 +153,7 @@ export function writeFreeReleaseFixture(
   const manifestJson = JSON.stringify(
     {
       schemaVersion: 1,
+      ...(options.localTest ? { channel: "local-test", publishable: false } : {}),
       tier,
       libraryVersion: version,
       manualVersion: version,
@@ -178,6 +180,14 @@ export function writeFreeReleaseFixture(
   const metadataSha = metadataTgz ? sha256(metadataTgz) : "";
 
   const descriptor = {
+    ...(options.localTest
+      ? {
+          schemaVersion: 2,
+          channel: "local-test",
+          publishable: false,
+          baseVersion: version.replace(/-test$/, ""),
+        }
+      : {}),
     fullVersion: version,
     free: {
       filename: freeName,

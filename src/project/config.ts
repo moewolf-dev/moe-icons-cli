@@ -7,6 +7,7 @@ import {
   findCatalogStyleGroup,
   type IconCatalog,
 } from "../catalog/catalog.js";
+import { loadGeneratedConfigPackage } from "../config-package/generated-config.js";
 import type { Target } from "../commands/parser.js";
 
 export interface MoeiconsThemeConfig {
@@ -19,14 +20,29 @@ export interface MoeiconsThemeConfig {
   readonly className?: string;
 }
 
+/** User-confirmed project integration anchors (config schema v3). */
+export interface MoeiconsIntegration {
+  readonly adapter:
+    | "vite-react"
+    | "next-app"
+    | "next-pages"
+    | "vite-vue"
+    | "nuxt"
+    | "vanilla"
+    | "assets-only";
+  readonly entry?: string;
+  readonly style?: string;
+}
+
 /**
  * Normalized config: schema version 2 with a REQUIRED `target`. Core code must
  * never see an optional or missing target — v1 files are migrated by
  * `readMoeiconsConfig` and invalid v2 files fail with a validation error
- * instead of silently defaulting to React.
+ * instead of silently defaulting to React. Schema v3 files add an optional
+ * `integration` block that is preserved in memory.
  */
 export interface MoeiconsConfigFile {
-  readonly schemaVersion: 2;
+  readonly schemaVersion: 2 | 3;
   readonly tier: "free" | "pro";
   readonly target: Target;
   readonly outputDir: string;
@@ -34,6 +50,7 @@ export interface MoeiconsConfigFile {
   readonly themes: Readonly<Record<string, MoeiconsThemeConfig>>;
   readonly icons: readonly string[];
   readonly missingIconPolicy?: "fallback" | "error";
+  readonly integration?: MoeiconsIntegration;
 }
 
 /**
@@ -60,6 +77,18 @@ export type ConfigLoadResult =
       readonly config: MoeiconsConfigFile;
       readonly warnings: readonly string[];
     };
+
+/** Adapter enum for schema v3 `integration`. */
+export const INTEGRATION_ADAPTERS = [
+  "vite-react",
+  "next-app",
+  "next-pages",
+  "vite-vue",
+  "nuxt",
+  "vanilla",
+  "assets-only",
+] as const;
+export type IntegrationAdapter = (typeof INTEGRATION_ADAPTERS)[number];
 
 export const SUPPORTED_FILENAMES = [
   "moeicons.config.jsonc",
@@ -104,11 +133,13 @@ function flattenIcons(value: unknown): readonly string[] {
 const ALLOWED_COMMON_KEYS = new Set([
   "schemaVersion",
   "tier",
+  "target",
   "outputDir",
   "defaultTheme",
   "themes",
   "icons",
   "missingIconPolicy",
+  "integration",
 ]);
 
 const ALLOWED_THEME_KEYS = new Set([
@@ -244,13 +275,17 @@ function normalizeTarget(value: unknown): Target {
   throw new Error("target must be react, vue, vanilla, or assets");
 }
 
-/** Validate a schema version 2 config: target is required, framework is rejected. */
-function validateV2Config(raw: unknown, sourceCatalog: IconCatalog): ValidatedConfig {
+/** Validate a `target`-based config (schema v2 or v3). Framework is rejected. */
+function validateV2Config(
+  raw: unknown,
+  sourceCatalog: IconCatalog,
+  schemaVersion: 2 | 3 = 2,
+): ValidatedConfig {
   const obj = asRecord(raw);
   if (obj.framework !== undefined)
     throw new Error('framework is only supported in schemaVersion 1; use target');
   for (const key of Object.keys(obj)) {
-    if (!ALLOWED_COMMON_KEYS.has(key) && key !== "target") {
+    if (!ALLOWED_COMMON_KEYS.has(key)) {
       throw new Error(`unknown config field "${key}"`);
     }
   }
@@ -259,7 +294,7 @@ function validateV2Config(raw: unknown, sourceCatalog: IconCatalog): ValidatedCo
   const common = requireCommonConfigFields(obj, sourceCatalog);
   return {
     config: {
-      schemaVersion: 2,
+      schemaVersion,
       tier: common.tier,
       target,
       outputDir: common.outputDir,
@@ -269,8 +304,43 @@ function validateV2Config(raw: unknown, sourceCatalog: IconCatalog): ValidatedCo
       ...(common.missingIconPolicy !== undefined
         ? { missingIconPolicy: common.missingIconPolicy }
         : {}),
+      ...(obj.integration !== undefined
+        ? { integration: validateIntegration(obj.integration) }
+        : {}),
     },
     warnings: common.warnings,
+  };
+}
+
+const POSIX_RELATIVE_OK = /^(?!\.{1,2}(?:$|\/))(?![A-Za-z]:[\\/])(?!\/)(?!.*\\)[^\0]+$/;
+
+function validateIntegration(value: unknown): MoeiconsIntegration {
+  const record = asRecord(value);
+  for (const key of Object.keys(record)) {
+    if (!["adapter", "entry", "style"].includes(key)) {
+      throw new Error(`unknown integration field "${key}"`);
+    }
+  }
+  if (!INTEGRATION_ADAPTERS.includes(record.adapter as IntegrationAdapter)) {
+    throw new Error(`integration.adapter is not a supported adapter`);
+  }
+  const adapter = record.adapter as IntegrationAdapter;
+  const checkRel = (field: unknown, name: string): string | undefined => {
+    if (field === undefined) return undefined;
+    if (typeof field !== "string" || !POSIX_RELATIVE_OK.test(field)) {
+      throw new Error(`${name} must be a POSIX-relative path without .. or escapes`);
+    }
+    return field;
+  };
+  const entry = checkRel(record.entry, "integration.entry");
+  const style = checkRel(record.style, "integration.style");
+  if (adapter !== "assets-only" && entry === undefined) {
+    throw new Error(`integration.entry is required for adapter ${adapter}`);
+  }
+  return {
+    adapter,
+    ...(entry !== undefined ? { entry } : {}),
+    ...(style !== undefined ? { style } : {}),
   };
 }
 
@@ -282,8 +352,8 @@ function validateV1Config(raw: unknown, sourceCatalog: IconCatalog): ValidatedCo
       throw new Error(`unknown config field "${key}"`);
     }
   }
-  if (obj.target !== undefined)
-    throw new Error("v1 config cannot set target; migrate to schemaVersion 2");
+  if (obj.target !== undefined || obj.integration !== undefined)
+    throw new Error("v1 config cannot set target or integration; migrate to schema v2/v3");
   if (obj.framework !== "react" && obj.framework !== "vue")
     throw new Error("framework must be react or vue");
   const common = requireCommonConfigFields(obj, sourceCatalog);
@@ -324,16 +394,16 @@ export function readMoeiconsConfig(
       ? (parsed.value as Record<string, unknown>).schemaVersion
       : undefined;
   if (typeof version !== "number") {
-    return { kind: "invalid", message: "schemaVersion must be 1 or 2" };
+    return { kind: "invalid", message: "schemaVersion must be 1, 2, or 3" };
   }
-  if (version !== 1 && version !== 2) return { kind: "unsupported", version };
+  if (version !== 1 && version !== 2 && version !== 3) return { kind: "unsupported", version };
   try {
     if (version === 1) {
       const validated = validateV1Config(parsed.value, sourceCatalog);
       validated.warnings.unshift('config schema v1 migrated "framework" to "target"');
       return { kind: "ok", config: validated.config, warnings: validated.warnings };
     }
-    const validated = validateV2Config(parsed.value, sourceCatalog);
+    const validated = validateV2Config(parsed.value, sourceCatalog, version);
     return { kind: "ok", config: validated.config, warnings: validated.warnings };
   } catch (error) {
     return { kind: "invalid", message: error instanceof Error ? error.message : String(error) };
@@ -390,90 +460,20 @@ export function createMoeiconsConfig(options: {
   };
 }
 
-/** Render the editable, grouped JSONC skeleton used by `init`. */
+/**
+ * Render the editable, grouped JSONC skeleton used by `init`.
+ *
+ * Delegates to the canonical renderer bundled from moe-icons-code-library
+ * `config-package` (see `src/config-package/generated` + SOURCE.json). The CLI
+ * no longer keeps a second full template; a schema v1/v2 default file is
+ * produced unless an integration result is supplied (v3 + `integration`).
+ */
 export function renderMoeiconsConfigJsonc(options: {
   target?: Target;
-  /** Legacy v1 alias; still emits a v2 `target`. */
+  /** Legacy v1 alias; still emits a `target` field. */
   framework?: "react" | "vue";
   tier?: "free" | "pro";
 }): string {
-  const tier = options.tier ?? "free";
-  const target = options.target ?? options.framework ?? "react";
-
-  // Collect style groups available for this tier, ordered by id.
-  const availableGroups = catalog.styleGroups
-    .filter((g) => g.tiers.includes(tier))
-    .sort((a, b) => a.id.localeCompare(b.id));
-
-  const defaultThemeName = "outline";
-
-  // Build theme entries: one per available SVG group (bitmap groups get their
-  // own entry with format/imageSize annotations).
-  const themeLines: string[] = [];
-  for (const group of availableGroups) {
-    const themeName = group.id.replace(/^moe-/, "");
-    if (group.type === "bitmap") {
-      // List available format/imageSize combinations as inline comments.
-      const formatsComment = `// format options: ${group.formats.join(", ")}`;
-      const sizesComment = `// imageSize options: ${group.imageSizes.join(", ")}`;
-      themeLines.push(
-        `    // ${themeName} — bitmap style (${group.id})`,
-        `    // ${formatsComment}`,
-        `    // ${sizesComment}`,
-        `    // ${JSON.stringify(themeName)}: {`,
-        `    //   "styleGroup": ${JSON.stringify(group.id)},`,
-        `    //   "format": "webp",`,
-        `    //   "imageSize": 256`,
-        `    // },`,
-      );
-    } else {
-      themeLines.push(
-        `    ${JSON.stringify(themeName)}: {`,
-        `      "styleGroup": ${JSON.stringify(group.id)}`,
-        `    },`,
-      );
-    }
-  }
-
-  // Collect icons: only those available in at least one style group of this tier,
-  // grouped by prefix and default-selected (all selected).
-  const tierGroupIds = new Set(availableGroups.map((g) => g.id));
-  const groups = new Map<string, string[]>();
-  for (const icon of catalog.icons) {
-    if (!icon.availableIn.some((sg) => tierGroupIds.has(sg))) continue;
-    const ids = groups.get(icon.prefix) ?? [];
-    ids.push(icon.id);
-    groups.set(icon.prefix, ids);
-  }
-  const iconLines = [...groups.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .flatMap(([prefix, ids]) => [
-      `    // ${prefix} icons`,
-      `    ${JSON.stringify(prefix)}: [`,
-      ...ids.map((id) => `      ${JSON.stringify(id)},`),
-      "    ],",
-    ]);
-
-  return [
-    "{",
-    `  "schemaVersion": 2,`,
-    `  "tier": ${JSON.stringify(tier)},`,
-    `  "target": ${JSON.stringify(target)},`,
-    `  "outputDir": "src/moeicons",`,
-    `  "defaultTheme": ${JSON.stringify(defaultThemeName)},`,
-    '  "themes": {',
-    ...themeLines,
-    `    // Set defaultTheme above to one of: ${availableGroups
-      .filter((g) => g.type !== "bitmap")
-      .map((g) => JSON.stringify(g.id.replace(/^moe-/, "")))
-      .join(", ")}`,
-    "  },",
-    "  // Comment out individual IDs or a complete prefix group to exclude it.",
-    '  "icons": {',
-    ...iconLines,
-    "  },",
-    '  "missingIconPolicy": "fallback"',
-    "}",
-    "",
-  ].join("\n");
+  const generated = loadGeneratedConfigPackage();
+  return generated.renderMoeiconsConfigJsonc({ ...options, catalog });
 }

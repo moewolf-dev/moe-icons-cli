@@ -6,6 +6,7 @@ import { catalog as bundledCatalog } from "../catalog/catalog.js";
 import { cacheArtifact, type CacheIo } from "./cache.js";
 import { extractAndVerifyMetadataArchive, type MetadataArchiveFiles } from "../metadata/archive.js";
 import {
+  assertLocalCandidateAllowed,
   cacheKey,
   FREE_DOWNLOAD_HOSTS,
   githubReleaseAssetUrl,
@@ -200,6 +201,7 @@ export async function downloadMetadataArchive(
   expectedTier: "free" | "pro",
   expectedVersion: string,
   tag: string,
+  allowLocalTest = false,
 ): Promise<{ ok: true; value: ExtractedMetadata; cacheHit: boolean } | FreeDownloadFailure> {
   const cachedPath = metadataCachePath(io.cacheDir, expectedVersion, metadataRef.sha256);
   if (io.existsSync(cachedPath)) {
@@ -211,6 +213,7 @@ export async function downloadMetadataArchive(
         expectedTier,
         expectedVersion,
         perFileDigests: metadataRef.files,
+        allowLocalTest,
       });
       if (extracted.kind === "ok") {
         return { ok: true, value: { ...extracted.value, metadataSha256: metadataRef.sha256 }, cacheHit: true };
@@ -247,6 +250,7 @@ export async function downloadMetadataArchive(
     expectedTier,
     expectedVersion,
     perFileDigests: metadataRef.files,
+    allowLocalTest,
   });
   if (extracted.kind !== "ok") {
     return { ok: false, reason: extracted.reason, message: extracted.message };
@@ -296,6 +300,7 @@ export async function fetchFreeDescriptor(io: FreeDownloadIo, sourceVersion: str
   let descriptor: ReleaseDescriptor;
   try {
     descriptor = parseReleaseDescriptor(descriptorFile.bytes);
+    assertLocalCandidateAllowed(descriptor, Boolean(io.fixtureDir));
   } catch (error) {
     return { ok: false, reason: "validation", message: error instanceof Error ? error.message : String(error) };
   }
@@ -335,7 +340,7 @@ export async function downloadFreeRelease(io: FreeDownloadIo, sourceVersion: str
     if (verified.ok) {
       const catalog = catalogFromArchive(cached, descriptor.catalog.filename, descriptor.catalog.sha256);
       if (!catalog.ok) return catalog;
-      const metadata = await downloadMetadataArchive(io, metadataRef, descriptor.catalog.sha256, "free", descriptor.fullVersion, tag);
+      const metadata = await downloadMetadataArchive(io, metadataRef, descriptor.catalog.sha256, "free", descriptor.fullVersion, tag, descriptor.channel === "local-test");
       if (!metadata.ok) return metadata;
       return {
         ok: true,
@@ -373,7 +378,7 @@ export async function downloadFreeRelease(io: FreeDownloadIo, sourceVersion: str
   const catalog = catalogFromArchive(artifact.bytes, descriptor.catalog.filename, descriptor.catalog.sha256);
   if (!catalog.ok) return catalog;
 
-  const metadata = await downloadMetadataArchive(io, metadataRef, descriptor.catalog.sha256, "free", descriptor.fullVersion, tag);
+  const metadata = await downloadMetadataArchive(io, metadataRef, descriptor.catalog.sha256, "free", descriptor.fullVersion, tag, descriptor.channel === "local-test");
   if (!metadata.ok) return metadata;
 
   try {

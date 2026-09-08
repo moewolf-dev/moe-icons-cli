@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 3,
+  "tier": "free",
+  "target": "react",
+  "outputDir": "src/moeicons",
+  "defaultTheme": "outline",
+  "themes": {
+    // SVG themes: one entry per style group visible in this tier.
+    "lite-outline": {
+      "styleGroup": "moe-lite-outline"
+    },
+    "outline": {
+      "styleGroup": "moe-outline"
+    },
+    "solid": {
+      "styleGroup": "moe-solid"
+    },
+    // Bitmap style groups are commented out and selected with format/imageSize:
+    // cute — bitmap style (moe-cute-3d)
+    // format options: webp, png
+    // imageSize options: 64, 128, 256, 512
+    // "cute": {
+    //   "styleGroup": "moe-cute-3d",
+    //   "format": "webp",
+    //   "imageSize": 256
+    // },
+    // Set defaultTheme above to one of: "lite-outline", "outline", "solid"
+  },
+  // Comment out individual IDs or a complete prefix group to exclude it.
+  "icons": {
+    // archive icons
+    "archive": [
+      "archive",
+      "archive-box",
+      "archive-box-close-open"
+    ],
+    // ui icons
+    "ui": [
+      "ui-search",
+      "ui-menu",
+      "ui-help"
+    ]
+  },
+  "missingIconPolicy": "fallback",
+  // integration is written only after the user confirms anchors:
+  // "integration": {
+  //   "adapter": "vite-react",
+  //   "entry": "src/main.tsx",
+  //   "style": "src/index.css"
+  // }
+}

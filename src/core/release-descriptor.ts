@@ -31,14 +31,24 @@ export interface ReleaseMetadataRef {
   };
 }
 
+/** Optional assets-only archive reference (ICON-E2E-0907 / E2E-C7). */
+export interface ReleaseAssetsRef {
+  readonly filename: string;
+  readonly sha256: string;
+  readonly size: number;
+}
+
 export interface ReleaseTierArtifact {
   readonly filename: string;
   readonly sha256: string;
+  readonly size?: number;
   readonly styleGroups?: readonly string[];
   readonly styleGroupCount?: number;
   readonly targets?: readonly ReleaseTarget[];
   readonly targetMetadata?: Readonly<Partial<Record<ReleaseTarget, ReleaseTargetMetadata>>>;
   readonly metadata?: ReleaseMetadataRef;
+  /** Present on new descriptors; absent on legacy four-archive descriptors. */
+  readonly assets?: ReleaseAssetsRef;
 }
 
 export interface ReleaseCatalogRef {
@@ -53,7 +63,14 @@ export interface ReleaseDescriptor {
   readonly fullVersion: string;
   readonly free: ReleaseTierArtifact;
   readonly catalog: ReleaseCatalogRef;
+  /** ICON-E2E-0907 / E2E-E2: present only on local-test candidates. */
+  readonly channel?: "local-test";
+  readonly publishable?: boolean;
+  readonly schemaVersion?: number;
+  readonly baseVersion?: string;
 }
+
+const LOCAL_TEST_VERSION = /^(\d+)\.(\d+)\.(\d+)-test$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -135,11 +152,26 @@ function parseMetadataRef(value: unknown, field: string): ReleaseMetadataRef {
   };
 }
 
+function parseAssetsRef(value: unknown, field: string): ReleaseAssetsRef {
+  if (!isRecord(value)) throw new Error(`${field} must be an object`);
+  if (typeof value.size !== "number" || !Number.isSafeInteger(value.size) || value.size < 1) {
+    throw new Error(`${field}.size must be a positive integer`);
+  }
+  return {
+    filename: requireFilename(value.filename, `${field}.filename`),
+    sha256: requireSha(value.sha256, `${field}.sha256`),
+    size: value.size,
+  };
+}
+
 function parseTier(value: unknown, field: string): ReleaseTierArtifact {
   if (!isRecord(value)) throw new Error(`${field} must be an object`);
   return {
     filename: requireFilename(value.filename, `${field}.filename`),
     sha256: requireSha(value.sha256, `${field}.sha256`),
+    ...(typeof value.size === "number" && Number.isSafeInteger(value.size) && value.size > 0
+      ? { size: value.size }
+      : {}),
     ...(Array.isArray(value.styleGroups) && value.styleGroups.every((item) => typeof item === "string")
       ? { styleGroups: value.styleGroups }
       : {}),
@@ -153,6 +185,7 @@ function parseTier(value: unknown, field: string): ReleaseTierArtifact {
     ...(value.metadata !== undefined
       ? { metadata: parseMetadataRef(value.metadata, `${field}.metadata`) }
       : {}),
+    ...(value.assets !== undefined ? { assets: parseAssetsRef(value.assets, `${field}.assets`) } : {}),
   };
 }
 
@@ -169,6 +202,10 @@ export function parseReleaseDescriptor(bytes: Uint8Array): ReleaseDescriptor {
     throw new Error("release-descriptor.json missing fullVersion");
   }
   if (!isRecord(parsed.catalog)) throw new Error("release-descriptor.json missing catalog");
+  const channel = parsed.channel === "local-test" ? ("local-test" as const) : undefined;
+  const publishable = parsed.publishable === true || parsed.publishable === false
+    ? parsed.publishable
+    : undefined;
   return {
     fullVersion: parsed.fullVersion,
     free: parseTier(parsed.free, "free"),
@@ -179,7 +216,40 @@ export function parseReleaseDescriptor(bytes: Uint8Array): ReleaseDescriptor {
       ...(typeof parsed.catalog.iconCount === "number" ? { iconCount: parsed.catalog.iconCount } : {}),
       ...(typeof parsed.catalog.styleGroupCount === "number" ? { styleGroupCount: parsed.catalog.styleGroupCount } : {}),
     },
+    ...(channel ? { channel } : {}),
+    ...(publishable !== undefined ? { publishable } : {}),
+    ...(typeof parsed.schemaVersion === "number" ? { schemaVersion: parsed.schemaVersion } : {}),
+    ...(typeof parsed.baseVersion === "string" ? { baseVersion: parsed.baseVersion } : {}),
   };
+}
+
+/** True when a fullVersion is a `X.Y.Z-test` local candidate version. */
+export function isLocalTestVersion(fullVersion: string): boolean {
+  return LOCAL_TEST_VERSION.test(fullVersion);
+}
+
+/**
+ * Reject local-test candidate descriptors unless they are explicitly local and
+ * non-publishable: an HTTP/remote source, a missing `local-test` channel, or
+ * `publishable: true` must never be accepted by the free install flow.
+ */
+export function assertLocalCandidateAllowed(descriptor: ReleaseDescriptor, viaLocalFixture: boolean): void {
+  if (!isLocalTestVersion(descriptor.fullVersion)) return;
+  if (!viaLocalFixture) {
+    throw new Error("local-test candidate descriptors are only accepted from a local release directory");
+  }
+  if (descriptor.channel !== "local-test") {
+    throw new Error("local-test candidate descriptor must declare channel local-test");
+  }
+  if (descriptor.publishable !== false) {
+    throw new Error("local-test candidate descriptor must declare publishable: false");
+  }
+  if (descriptor.schemaVersion !== 2) {
+    throw new Error("local-test candidate descriptor must be schemaVersion 2");
+  }
+  if (descriptor.baseVersion !== descriptor.fullVersion.replace(/-test$/, "")) {
+    throw new Error("local-test candidate descriptor baseVersion must match fullVersion");
+  }
 }
 
 /** Parse `hex  filename` sidecar produced next to the descriptor. */

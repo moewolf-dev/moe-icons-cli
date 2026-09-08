@@ -131,4 +131,47 @@ describe("CLI-14 Vue DOM switch (rendered)", () => {
     expect(html).toContain("data-theme=\"outline\"");
     expect(html).toContain("data-moeicon=\"arrow-bold-right\"");
   });
+
+  it("preserves class and aria-label across theme switches", async () => {
+    const { createSSRApp, h } = require_("vue");
+    const { renderToString } = require_("@vue/server-renderer");
+    const { MoeiconsProvider, ArrowBoldRight } = await import(
+      `${FIXTURE}/src/moeicons/index.ts`
+    );
+
+    const render = (theme: string) => {
+      const app = createSSRApp({
+        render: () =>
+          h(MoeiconsProvider, { theme }, () =>
+            h(ArrowBoldRight, { class: "user-icon", "aria-label": "Search arrow" }),
+          ),
+      });
+      return renderToString(app);
+    };
+
+    const outlineHtml = await render("outline");
+    const solidHtml = await render("solid");
+    for (const html of [outlineHtml, solidHtml]) {
+      expect(html).toContain("user-icon");
+      expect(html).toContain('aria-label="Search arrow"');
+      expect(html).toContain("moe-icon");
+    }
+    expect(outlineHtml).toContain('data-theme="outline"');
+    expect(solidHtml).toContain('data-theme="solid"');
+    expect(solidHtml).not.toContain('data-theme="outline"');
+  });
+
+  it("generated Vue sources never hard-code style group ids in icon proxies", () => {
+    const plan = planGeneratedFiles(vueConfig, "src/moeicons");
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    const proxy =
+      plan.files.find((f) => f.path.endsWith("icons/ArrowBoldRight.ts"))?.content ??
+      plan.files.find((f) => f.path.includes("ArrowBoldRight"))?.content ??
+      "";
+    expect(proxy).not.toContain("moe-outline");
+    expect(proxy).not.toContain("moe-solid");
+    expect(proxy).toContain("MOEICONS_THEME_KEY");
+    expect(proxy).toContain('registry["outline"].ArrowBoldRight');
+  });
 });

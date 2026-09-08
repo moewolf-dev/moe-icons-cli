@@ -115,4 +115,28 @@ describe("wizard navigation and login recovery (P4)", () => {
     expect(await main([], runtime)).toBe(0);
     expect(attempts).toBe(2);
   });
+
+  it("exits login recovery on cancel without a second Cancelled line from orchestrator", async () => {
+    const auth: AuthUseCaseDependencies = {
+      request: async () => {
+        throw new CliError("NETWORK_ERROR", "login create: network error (offline)");
+      },
+      openBrowser: async () => undefined,
+      sleep: async () => undefined,
+      tokenStore: {
+        get: () => undefined,
+        getActive: () => undefined,
+        set: () => undefined,
+        delete: () => undefined,
+        clear: () => undefined,
+      },
+      fileFallbackAllowed: true,
+    };
+    // Login → fail → Cancel (0) — stream adapter has no cancel frame; orchestrator must not invent one.
+    const { runtime, err, setCwd } = makeRuntime(["4", "0"], auth);
+    setCwd(dir);
+    expect(await main([], runtime)).toBe(0);
+    expect(err.join("")).toContain("Login failed:");
+    expect(err.join("")).not.toMatch(/Cancelled/);
+  });
 });

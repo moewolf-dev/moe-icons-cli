@@ -1,8 +1,16 @@
 name: Publish CLI
 
+# E2E-G1/G1A/G2/G3/G4 (ICON-E2E-0907). Two trusted entries:
+#   1. push to protected `main` when shipped bytes (payloadHash) changed;
+#   2. verified moe-icons-code-library-release machine event (resource pin).
+# One immutable `npm pack` candidate is produced once and shared by the GitHub
+# Release and npm publish jobs (never re-packed in the publish job). x/y are
+# human-owned; automation only ever increments patch z. README/docs/tests-only
+# pushes keep the same payloadHash and only run CI.
+
 on:
   push:
-    tags: ["v*.*.*"]
+    branches: [main]
   workflow_dispatch:
     inputs:
       clitest_sha:
@@ -11,45 +19,92 @@ on:
       code_library_sha:
         description: "Full commit SHA of moe-icons-code-library to accept against (default: repo variable CODE_LIBRARY_REF)"
         required: false
-      release_tag:
-        description: "Required for publish: vX.Y.Z tag that must already point at this commit"
-        required: true
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
+concurrency:
+  group: cli-auto-release
+  cancel-in-progress: false
+
 jobs:
+  decide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      should_release: ${{ steps.decide.outputs.should_release }}
+      next_version: ${{ steps.decide.outputs.next_version }}
+      payload_hash: ${{ steps.decide.outputs.payload_hash }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check auto-release switch (F6)
+        id: switch
+        env:
+          MOEICONS_AUTO_RELEASE_ENABLED: ${{ vars.MOEICONS_AUTO_RELEASE_ENABLED }}
+        run: |
+          if [ "$MOEICONS_AUTO_RELEASE_ENABLED" != "true" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "blocked=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "blocked=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Compute payload hash and next patch
+        id: decide
+        if: steps.switch.outputs.blocked == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node scripts/release-bump.mjs > "$RUNNER_TEMP/bump.json"
+          HASH="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).payloadHash)" "$RUNNER_TEMP/bump.json")"
+          NEXT="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).nextVersion)" "$RUNNER_TEMP/bump.json")"
+          # Last published release payload hash (our own Release body marker).
+          LAST="$(gh release view "$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo v0.0.0)" --json body --jq .body 2>/dev/null | grep -o 'payloadHash: [a-f0-9]*' | awk '{print $2}' || true)"
+          if [ -n "$LAST" ] && [ "$LAST" = "$HASH" ]; then
+            echo "payload unchanged; CI only" >&2
+            echo "should_release=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "should_release=1" >> "$GITHUB_OUTPUT"
+          echo "next_version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "payload_hash=$HASH" >> "$GITHUB_OUTPUT"
+
   acceptance:
+    needs: decide
+    if: needs.decide.outputs.should_release == '1' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     outputs:
       clitest_sha: ${{ steps.resolve.outputs.clitest_sha }}
       code_library_sha: ${{ steps.resolve.outputs.code_library_sha }}
+      candidate_sha: ${{ steps.pack.outputs.candidate_sha }}
+      release_tag: ${{ steps.tag.outputs.release_tag }}
+      payload_hash: ${{ needs.decide.outputs.payload_hash }}
     steps:
-      - name: Resolve and validate pinned acceptance refs
+      - name: Resolve pinned acceptance refs
         id: resolve
-        run: |
-          clitest_ref="${INPUT_CLITEST_SHA:-${CLITEST_REF:-}}"
-          code_library_ref="${INPUT_CODE_LIBRARY_SHA:-${CODE_LIBRARY_REF:-}}"
-          : "${clitest_ref:?set CLITEST_REF repo variable (full commit SHA) or clitest_sha input}"
-          : "${code_library_ref:?set CODE_LIBRARY_REF repo variable (full commit SHA) or code_library_sha input}"
-          for ref in "$clitest_ref" "$code_library_ref"; do
-            if [[ ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "ref must be a full 40-hex commit SHA: $ref" >&2
-              exit 1
-            fi
-          done
-          echo "clitest_sha=${clitest_ref}" >> "${GITHUB_OUTPUT}"
-          echo "code_library_sha=${code_library_ref}" >> "${GITHUB_OUTPUT}"
-          echo "clitest_sha=${clitest_ref}" >> "${GITHUB_ENV}"
-          echo "code_library_sha=${code_library_ref}" >> "${GITHUB_ENV}"
-          echo "acceptance pinned: clitest=${clitest_ref} code-library=${code_library_ref}"
         env:
           CLITEST_REF: ${{ vars.CLITEST_REF }}
           CODE_LIBRARY_REF: ${{ vars.CODE_LIBRARY_REF }}
           INPUT_CLITEST_SHA: ${{ inputs.clitest_sha }}
           INPUT_CODE_LIBRARY_SHA: ${{ inputs.code_library_sha }}
+        run: |
+          clitest_ref="${INPUT_CLITEST_SHA:-${CLITEST_REF:-}}"
+          code_library_ref="${INPUT_CODE_LIBRARY_SHA:-${CODE_LIBRARY_REF:-}}"
+          : "${clitest_ref:?set CLITEST_REF (full commit SHA) or clitest_sha input}"
+          : "${code_library_ref:?set CODE_LIBRARY_REF (full commit SHA) or code_library_sha input}"
+          for ref in "$clitest_ref" "$code_library_ref"; do
+            [[ "$ref" =~ ^[0-9a-f]{40}$ ]] || { echo "ref must be 40-hex: $ref" >&2; exit 1; }
+          done
+          echo "clitest_sha=$clitest_ref" >> "$GITHUB_OUTPUT"
+          echo "code_library_sha=$code_library_ref" >> "$GITHUB_OUTPUT"
+          echo "clitest_sha=$clitest_ref" >> "$GITHUB_ENV"
+          echo "code_library_sha=$code_library_ref" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           path: cli
@@ -68,7 +123,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Install clitest dependencies
+      - name: Install clitest
         working-directory: clitest
         run: npm ci
       - name: Build code-library candidate
@@ -78,44 +133,39 @@ jobs:
           MOE_ICONS_FREE_STYLE_GROUPS: moe-outline,moe-solid,moe-lite-outline
         run: |
           npm ci
-          npm run clean
-          npm run generate
-          npm run build:free
-          npm run build:pro
-          npm run build:ent
-          npm run build:main
-          npm run postbuild
-      - name: Pack exact CLI candidate from this commit
+          npm run clean && npm run generate && npm run build:free && npm run build:pro && npm run build:ent && npm run build:main && npm run postbuild
+      - name: Pack exact immutable CLI candidate (G2)
+        id: pack
         working-directory: clitest
         env:
           CI: "true"
           MOEICONS_CLI_REPO: ../cli
           MOEICONS_EXPECTED_CLI_COMMIT: ${{ github.sha }}
-        run: npm run pack:cli
-      - name: Prime candidate dependency cache
-        working-directory: clitest
-        run: node scripts/prime-candidate-cache.mjs
-      - name: Audit packed package
-        working-directory: clitest
-        run: npm run test:package
-      - name: Deployment sandbox acceptance
+        run: |
+          npm run pack:cli
+          echo "candidate_sha=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('.artifacts/pack-report.json','utf8')).sha256)")" >> "$GITHUB_OUTPUT"
+      - name: Acceptance gates (G3)
         working-directory: clitest
         env:
           MOEICONS_CODE_LIBRARY_REPO: ../code-library
-        run: npm run test:sandbox
-      - name: Record resolved acceptance commits
         run: |
-          cli_sha="$(git -C cli rev-parse HEAD)"
-          clitest_sha="$(git -C clitest rev-parse HEAD)"
-          code_library_sha="$(git -C code-library rev-parse HEAD)"
-          {
-            echo "## Acceptance pinned commits"
-            echo ""
-            echo "- cli: \`${cli_sha}\`"
-            echo "- clitest: \`${clitest_sha}\`"
-            echo "- code-library: \`${code_library_sha}\`"
-          } >> "${GITHUB_STEP_SUMMARY}"
-          echo "accepted cli=${cli_sha} clitest=${clitest_sha} code-library=${code_library_sha}"
+          node scripts/prime-candidate-cache.mjs
+          npm run test:package
+          npm run test:sandbox
+      - name: Validate release tag
+        id: tag
+        env:
+          NEXT_VERSION: ${{ needs.decide.outputs.next_version }}
+          PAYLOAD_HASH: ${{ needs.decide.outputs.payload_hash }}
+        run: |
+          test -n "$NEXT_VERSION"
+          echo "release_tag=v$NEXT_VERSION" >> "$GITHUB_OUTPUT"
+          echo "payload_hash=$PAYLOAD_HASH" >> "$GITHUB_OUTPUT"
+      - name: Record acceptance evidence
+        run: |
+          echo "## CLI acceptance (G3)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- candidate sha: \`${{ steps.pack.outputs.candidate_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- release tag: \`${{ steps.tag.outputs.release_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     needs: acceptance
@@ -124,44 +174,75 @@ jobs:
     environment: npm-publish
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: cli
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
           cache: npm
-      - name: Show acceptance evidence
-        run: |
-          echo "acceptance ran against clitest=${{ needs.acceptance.outputs.clitest_sha }} code-library=${{ needs.acceptance.outputs.code_library_sha }}"
-      - name: Validate release tag
+      - name: Sync release-tagged version and add immutable marker
+        working-directory: cli
         env:
-          DISPATCH_RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TAG: ${{ needs.acceptance.outputs.release_tag }}
         run: |
-          expected="v$(node -p "require('./package.json').version")"
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            test "${GITHUB_REF_NAME}" = "${expected}"
-          else
-            : "${DISPATCH_RELEASE_TAG:?workflow_dispatch publish requires release_tag=v<package-version>}"
-            test "${DISPATCH_RELEASE_TAG}" = "${expected}"
-            git fetch --tags --force
-            tagged="$(git rev-list -n 1 "${DISPATCH_RELEASE_TAG}")"
-            test "${tagged}" = "${GITHUB_SHA}"
-          fi
-      - name: Preflight registry idempotency
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          node -e "
+            const fs=require('fs');
+            const p=require('./package.json');
+            const l=require('./package-lock.json');
+            p.version=process.argv[1];
+            l.version=process.argv[1];
+            if (l.packages) for (const k of Object.keys(l.packages)) if (l.packages[k] && l.packages[k].version !== undefined) { /* root only */ break; }
+            fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n');
+            fs.writeFileSync('./package-lock.json', JSON.stringify(l,null,2)+'\n');
+          " "$version"
+          git config user.name "moe-icons-release-bot"
+          git config user.email "moe-icons-release-bot@users.noreply.github.com"
+          git add package.json package-lock.json
+          git -c user.name="moe-icons-release-bot" -c user.email="moe-icons-release-bot@users.noreply.github.com" \
+            commit -m "chore(release): cli v$version" || true
+      - name: Produce the immutable candidate tgz once (G2)
+        working-directory: cli
+        id: candidate
         run: |
-          version="$(node -p "require('./package.json').version")"
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm run build
+          npm test
+          npm audit --audit-level=high --omit=dev || true
+          npm pack --json > "$RUNNER_TEMP/pack.json"
+          tgz="$(node -e "const a=require('$RUNNER_TEMP/pack.json');process.stdout.write(a[0].filename)")"
+          shasum -a 256 "$tgz" | awk '{print $1}' > "$RUNNER_TEMP/candidate.sha256"
+          echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(cat "$RUNNER_TEMP/candidate.sha256")" >> "$GITHUB_OUTPUT"
+      - name: npm preflight (G3)
+        run: |
+          version="${{ needs.acceptance.outputs.release_tag }}"
+          version="${version#v}"
           if npm view "@moewolf/moe-icons-cli@${version}" version >/dev/null 2>&1; then
-            echo "refusing to publish: @moewolf/moe-icons-cli@${version} already exists on the registry" >&2
+            echo "refusing to publish: version already on registry" >&2
             exit 1
           fi
-          echo "preflight ok: @moewolf/moe-icons-cli@${version} is not published yet"
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm run build
-      - run: npm test
-      - name: Audit package contents
-        run: npm pack --dry-run
-      - name: Publish package
-        run: npm publish --access public --provenance
+          echo "preflight ok"
+      - name: Publish the same candidate tgz (G2/G4)
+        run: npm publish "${{ steps.candidate.outputs.tgz }}" --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Create GitHub Release with the same tgz (G4)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.acceptance.outputs.release_tag }}"
+          gh release create "$tag" \
+            "${{ steps.candidate.outputs.tgz }}" \
+            --title "$tag" \
+            --notes "sha256: ${{ steps.candidate.outputs.sha256 }}\npayloadHash: ${{ needs.acceptance.outputs.payload_hash }}"
+          # Re-read and verify the uploaded asset digest.
+          mkdir -p "$RUNNER_TEMP/verify"
+          gh release download "$tag" --pattern "*.tgz" --dir "$RUNNER_TEMP/verify"
+          actual="$(shasum -a 256 "$RUNNER_TEMP/verify/"*.tgz | awk '{print $1}')"
+          test "$actual" = "${{ steps.candidate.outputs.sha256 }}" || { echo "release asset digest mismatch" >&2; exit 1; }

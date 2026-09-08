@@ -22,6 +22,8 @@ export type MetadataArchiveVerification =
       readonly expectedVersion: string;
       /** Free path: the release descriptor provides per-file size + sha256. */
       readonly perFileDigests: Readonly<Record<(typeof METADATA_ARCHIVE_ENTRIES)[number], MetadataFileDigest>>;
+      /** ICON-E2E-0907 / E2E-E2: local-test manifests only. */
+      readonly allowLocalTest?: boolean;
     }
   | {
       readonly expectedCatalogSha: string;
@@ -29,6 +31,7 @@ export type MetadataArchiveVerification =
       readonly expectedVersion: string;
       /** Pro path: the signed whole-archive sha256 was already verified. */
       readonly perFileDigests?: undefined;
+      readonly allowLocalTest?: boolean;
     };
 
 export type MetadataArchiveResult =
@@ -98,7 +101,9 @@ export function extractAndVerifyMetadataArchive(
   }
   let manifest;
   try {
-    manifest = parseMetadataManifest(manifestJson);
+    manifest = parseMetadataManifest(manifestJson, {
+      allowLocalTest: verification.allowLocalTest === true,
+    });
   } catch (error) {
     return { kind: "error", reason: "validation", message: error instanceof Error ? error.message : String(error) };
   }

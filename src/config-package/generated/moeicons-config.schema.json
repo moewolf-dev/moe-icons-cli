@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://moeicons.dev/schema/moeicons-config-v3.json",
+  "title": "Moeicons user-project configuration (schema v3)",
+  "description": "Canonical user-project configuration. Version 3 adds the optional `integration` object (application/style anchors confirmed by the CLI) on top of the schema v2 fields. The pixel-ladder field remains `imageSize` and is never called `size`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "tier", "target", "outputDir", "defaultTheme", "themes", "icons"],
+  "properties": {
+    "schemaVersion": {
+      "const": 3
+    },
+    "tier": {
+      "enum": ["free", "pro"]
+    },
+    "target": {
+      "enum": ["react", "vue", "vanilla", "assets"]
+    },
+    "outputDir": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!.*\\.\\.)(?!^/)(?!.*\\\\).*$"
+    },
+    "defaultTheme": {
+      "type": "string",
+      "minLength": 1
+    },
+    "missingIconPolicy": {
+      "enum": ["fallback", "error"]
+    },
+    "themes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["styleGroup"],
+        "properties": {
+          "styleGroup": {
+            "type": "string",
+            "pattern": "^moe-[a-z0-9]+(?:-[a-z0-9]+)*$"
+          },
+          "styles": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "format": {
+            "enum": ["svg", "webp", "png"]
+          },
+          "imageSize": {
+            "enum": [64, 128, 256, 512]
+          },
+          "defaultSize": {
+            "type": "number"
+          },
+          "strokeWidth": {
+            "type": "number"
+          },
+          "className": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "icons": {
+      "description": "Either a flat string array or a prefix-grouped object. Grouped form is canonical; each key is a prefix and each value an array of icon IDs.",
+      "oneOf": [
+        {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "integration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter"],
+      "properties": {
+        "adapter": {
+          "enum": ["vite-react", "next-app", "next-pages", "vite-vue", "nuxt", "vanilla", "assets-only"]
+        },
+        "entry": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!.*\\.\\.)(?!^/)(?!.*\\\\).*$"
+        },
+        "style": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!.*\\.\\.)(?!^/)(?!.*\\\\).*$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "not": {
+              "properties": { "adapter": { "const": "assets-only" } },
+              "required": ["adapter"]
+            }
+          },
+          "then": { "required": ["entry"] }
+        }
+      ]
+    }
+  }
+}

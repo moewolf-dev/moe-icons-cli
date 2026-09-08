@@ -67,7 +67,7 @@ describe("CLI init + generate", () => {
   it("init creates a v2 config and never overwrites an existing one", async () => {
     const { runtime, setCwd } = makeRuntime();
     setCwd(dir);
-    const code = await main(["init", "--json"], runtime);
+    const code = await main(["init", "--json", "--yes"], runtime);
     expect(code).toBe(0);
     const configPath = join(dir, "moeicons.config.jsonc");
     expect(existsSync(configPath)).toBe(true);
@@ -88,7 +88,7 @@ describe("CLI init + generate", () => {
     );
     const { runtime, setCwd } = makeRuntime();
     setCwd(dir);
-    expect(await main(["init", "--json"], runtime)).toBe(0);
+    expect(await main(["init", "--json", "--yes"], runtime)).toBe(0);
     const config = parse(readFileSync(join(dir, "moeicons.config.jsonc"), "utf8")) as Record<
       string,
       unknown
@@ -99,7 +99,7 @@ describe("CLI init + generate", () => {
   it("generate writes proxy files into the configured output dir", async () => {
     const { runtime, setCwd } = makeRuntime();
     setCwd(dir);
-    await main(["init"], runtime);
+    await main(["init", "--yes"], runtime);
     // add icons to the config so generation has something to emit
     const configPath = join(dir, "moeicons.config.jsonc");
     const config = parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
@@ -129,7 +129,7 @@ describe("CLI init + generate", () => {
   it("does not replace user-owned files in the output directory", async () => {
     const { runtime, setCwd } = makeRuntime();
     setCwd(dir);
-    await main(["init"], runtime);
+    await main(["init", "--yes"], runtime);
     const configPath = join(dir, "moeicons.config.jsonc");
     const config = parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
     config.icons = ["ui-search"];
@@ -145,7 +145,7 @@ describe("CLI init + generate", () => {
   it("reconciles only metadata-owned resources, removes stale entries and preserves user files", async () => {
     const { runtime, setCwd } = makeRuntime();
     setCwd(dir);
-    await main(["init"], runtime);
+    await main(["init", "--yes"], runtime);
     const configPath = join(dir, "moeicons.config.jsonc");
     const config = parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
     config.icons = ["ui-search"];
@@ -212,7 +212,7 @@ describe("CLI init + generate", () => {
   it("rejects a user-modified managed file with zero resource modification", async () => {
     const { runtime, setCwd } = makeRuntime();
     setCwd(dir);
-    await main(["init"], runtime);
+    await main(["init", "--yes"], runtime);
     const configPath = join(dir, "moeicons.config.jsonc");
     const config = parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
     config.icons = ["ui-search"];

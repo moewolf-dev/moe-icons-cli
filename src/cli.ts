@@ -15,7 +15,6 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { runInitUseCase } from "./core/init.js";
 import { runGenerateUseCase } from "./core/generate.js";
 import { runInstallUseCase } from "./core/install.js";
 import { runWizardUseCase, loginRecoveryChoices } from "./core/wizard.js";
@@ -27,6 +26,7 @@ import {
   runAccountUseCase,
   runLoginUseCase,
   runLogoutUseCase,
+  runRemoteAccountUseCase,
   runSessionStatusUseCase,
   type AuthUseCaseDependencies,
 } from "./core/auth.js";
@@ -40,7 +40,19 @@ import { runBootstrapUseCase } from "./core/bootstrap.js";
 import { fetchProDescriptor } from "./core/pro-download.js";
 import { proResourceState, runProPredownloadUseCase } from "./core/pro-resources.js";
 import { formatBytes } from "./metadata/version.js";
+import { isLocalTestVersion } from "./core/release-descriptor.js";
 import type { FreeDownloadIo } from "./core/free-download.js";
+import {
+  buildInitPlan,
+  checkRequiresFix,
+  collectSafeFixes,
+  doctorJson,
+  formatDoctorReport,
+  formatPlannedDiffs,
+  plannedDiffsJson,
+  runDoctorApply,
+  runDoctorDiagnose,
+} from "./core/doctor.js";
 
 /**
  * main(argv, runtime): parse args, select command/default wizard, catch typed
@@ -87,6 +99,25 @@ function commandContext(
     signal: new AbortController().signal,
     now: () => new Date(),
   };
+}
+
+/**
+ * E2E-E3: allow a local candidate `X.Y.Z-test` to be installed by overriding
+ * the bundled catalog source version. Only honored when the process is pointed
+ * at a local release fixture (`MOEICONS_FREE_RELEASE_DIR`), never for the
+ * production GitHub/npm path.
+ */
+function localFixtureSourceVersion(env: Readonly<Record<string, string | undefined>>): string | undefined {
+  const fixture = env.MOEICONS_FREE_RELEASE_DIR;
+  const override = env.MOEICONS_SOURCE_VERSION;
+  if (!fixture || !override) return undefined;
+  if (!isLocalTestVersion(override)) {
+    throw new CliError(
+      "VALIDATION_ERROR",
+      "MOEICONS_SOURCE_VERSION override is only allowed for local X.Y.Z-test candidates",
+    );
+  }
+  return override;
 }
 
 function freeDownloadDeps(runtime: CliRuntime): Omit<FreeDownloadIo, "signal"> {
@@ -224,7 +255,7 @@ async function dispatchSync(
         runtime,
         json,
         noTailwind,
-        undefined,
+        localFixtureSourceVersion(runtime.env),
         undefined,
         command.target,
       );
@@ -239,7 +270,9 @@ async function dispatchSync(
     case "generate":
       return await runGenerate(runtime, json, noTailwind, false, target, yes);
     case "init":
-      return runInit(runtime, json, target);
+      return await runInit(runtime, json, yes, command.dryRun === true);
+    case "doctor":
+      return runDoctor(runtime, json, command.check === true, command.dryRun === true);
     case "mcp":
       void runMcp(runtime);
       return 0;
@@ -378,11 +411,16 @@ async function runAccount(runtime: CliRuntime, json: boolean): Promise<number> {
     commandContext(runtime, { json, yes: false }),
     runtime.auth,
   );
-  if (json) writeJson(runtime, { ok: true, account: session });
-  else
-    runtime.stdout(
-      `Account: ${session.accountId}\nSession expires: ${new Date(session.expiresAt).toISOString()}\n`,
-    );
+  const remote = await runRemoteAccountUseCase(
+    commandContext(runtime, { json, yes: false }),
+    { ...runtime.auth, fetch: runtime.auth?.fetch ?? globalThis.fetch.bind(globalThis) },
+  ).catch(() => undefined);
+  const account = { ...session, ...(remote ?? {}) };
+  if (json) writeJson(runtime, { ok: true, account });
+  else {
+    runtime.stdout(`Account: ${account.accountId}\nSession expires: ${new Date(account.expiresAt).toISOString()}\n`);
+    if (remote) runtime.stdout(`Tier: ${account.tier}\nEntitlement: ${account.entitlementStatus}\n`);
+  }
   return 0;
 }
 
@@ -401,31 +439,88 @@ async function runLogout(runtime: CliRuntime, json: boolean): Promise<number> {
   return 0;
 }
 
-/** Create moeicons.config.jsonc if absent (never overwrites an existing config). */
-function runInit(
+/**
+ * Four-anchor init (E2E-B5): diagnose → plan → confirm/--yes → transactional apply.
+ * `--dry-run` never writes. Non-TTY / `--json` requires `--yes` to write.
+ */
+async function runInit(
   runtime: CliRuntime,
   json: boolean,
-  target?: "react" | "vue" | "vanilla" | "assets",
-): number {
-  const result = runInitUseCase(
-    commandContext(runtime, { json, yes: false }),
-    { mkdirSync, writeFileSync, existsSync, renameSync, rmSync },
-    target,
-  );
-  if (!result.ok && result.reason === "exists") {
-    if (json) writeJson(runtime, { ok: true, alreadyExisted: true });
-    else runtime.stdout("moeicons.config.jsonc already exists; not overwritten.\n");
+  yes: boolean,
+  dryRun = false,
+): Promise<number> {
+  const { outcome } = buildInitPlan(runtime.cwd());
+  const { report } = outcome;
+  const fixes = collectSafeFixes(outcome);
+  const manifest = report.anchors.find((a) => a.kind === "manifest");
+  if (!manifest || manifest.status === "missing" || manifest.status === "invalid") {
+    throw new CliError("VALIDATION_ERROR", "no project found");
+  }
+
+  if (dryRun) {
+    if (json) {
+      writeJson(runtime, {
+        ...doctorJson(report),
+        mode: "dry-run",
+        diffs: plannedDiffsJson(fixes),
+      });
+    } else {
+      runtime.stdout(`${formatDoctorReport(report)}\n`);
+      const diffs = formatPlannedDiffs(fixes);
+      if (diffs) runtime.stdout(`${diffs}\n`);
+    }
     return 0;
   }
-  if (!result.ok) {
-    throw new CliError(
-      "VALIDATION_ERROR",
-      result.reason === "no-project" ? "no project found" : "init failed",
-    );
+
+  if (fixes.length === 0) {
+    if (json) writeJson(runtime, { ok: true, alreadyConfigured: true, ...doctorJson(report) });
+    else runtime.stdout("already configured\n");
+    return 0;
   }
-  if (json) writeJson(runtime, { ok: true, created: result.created });
-  else runtime.stdout(`Created ${result.created}\n`);
+
+  if (!json) {
+    runtime.stdout(`${formatDoctorReport(report)}\n`);
+    const diffs = formatPlannedDiffs(fixes);
+    if (diffs) runtime.stdout(`${diffs}\n`);
+  }
+
+  const context = commandContext(runtime, { json, yes });
+  const confirmed = await context.ui.confirm(
+    `Apply ${fixes.length} planned change(s)?`,
+    context.signal,
+  );
+  if (confirmed !== true) {
+    if (json) writeJson(runtime, { ok: true, cancelled: true });
+    else runtime.stdout("Cancelled; no files written.\n");
+    return 0;
+  }
+
+  const result = runDoctorApply(runtime.cwd(), fixes);
+  if (result.ok === false) {
+    throw new CliError("UNEXPECTED", result.message);
+  }
+  if (result.alreadyConfigured) {
+    if (json) writeJson(runtime, { ok: true, alreadyConfigured: true, written: [] });
+    else runtime.stdout("already configured\n");
+    return 0;
+  }
+  if (json) writeJson(runtime, { ok: true, written: result.written ?? [] });
+  else runtime.stdout(`Applied ${(result.written ?? []).join(", ")}\n`);
   return 0;
+}
+
+/** Read-only four-anchor diagnosis command (`doctor`). */
+function runDoctor(
+  runtime: CliRuntime,
+  json: boolean,
+  check: boolean,
+  dryRun: boolean,
+): number {
+  const { report } = runDoctorDiagnose(runtime.cwd());
+  void dryRun; // doctor is always read-only; --dry-run is accepted for parity
+  if (json) writeJson(runtime, doctorJson(report));
+  else runtime.stdout(formatDoctorReport(report));
+  return check ? (checkRequiresFix(report) ? 1 : 0) : 0;
 }
 
 /** Start the MCP stdio server; protocol data to stdout, logs to stderr. */
@@ -662,7 +757,7 @@ async function runWizardLogin(runtime: CliRuntime, yes: boolean): Promise<"home"
         context.signal,
       );
       if (choice === undefined) {
-        runtime.stderr("Cancelled\n");
+        // Select cancel frame already rendered "■ Cancelled"; do not duplicate.
         return "exit";
       }
       if (choice === "back") return "home";

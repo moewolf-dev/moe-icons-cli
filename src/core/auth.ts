@@ -5,8 +5,9 @@ import { requestJson } from "../api/client.js";
 import { CliError } from "../errors/index.js";
 import type { CommandContext } from "./context.js";
 
-const API_BASE_URL = "https://api.moeicons.com";
-const WEBSITE_ORIGIN = "https://moeicons.com";
+const DEFAULT_API_BASE_URL = "https://api.moeicons.com";
+const DEFAULT_WEBSITE_ORIGIN = "https://moeicons.com";
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
 export interface AuthUseCaseDependencies {
   readonly tokenStore?: TokenStore;
@@ -64,10 +65,30 @@ async function selectStore(context: CommandContext, deps: AuthUseCaseDependencie
   return (deps.fileTokenStore ?? ((rootDir) => createFileTokenStore(rootDir ? { rootDir } : {})))(context.env.MOEICONS_TOKEN_STORE_DIR);
 }
 
+function assertTrustedHttpBase(value: string, envName: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new CliError("VALIDATION_ERROR", `${envName} is not a valid URL`);
+  }
+  const loopback = parsed.protocol === "http:" && LOOPBACK_HOSTS.has(parsed.hostname);
+  if (parsed.protocol !== "https:" && !loopback) {
+    throw new CliError("VALIDATION_ERROR", `${envName} must be https or loopback http`);
+  }
+  return value.replace(/\/$/, "");
+}
+
 function auth0Config(context: CommandContext) {
   return {
-    apiBaseUrl: API_BASE_URL,
-    websiteOrigin: WEBSITE_ORIGIN,
+    apiBaseUrl: assertTrustedHttpBase(
+      context.env.MOEICONS_API_BASE_URL ?? DEFAULT_API_BASE_URL,
+      "MOEICONS_API_BASE_URL",
+    ),
+    websiteOrigin: assertTrustedHttpBase(
+      context.env.MOEICONS_WEBSITE_ORIGIN ?? DEFAULT_WEBSITE_ORIGIN,
+      "MOEICONS_WEBSITE_ORIGIN",
+    ),
     auth0Issuer: context.env.MOEICONS_AUTH0_ISSUER ?? "",
     auth0ClientId: context.env.MOEICONS_AUTH0_CLIENT_ID ?? "",
   };
@@ -75,12 +96,13 @@ function auth0Config(context: CommandContext) {
 
 export async function runLoginUseCase(context: CommandContext, deps: AuthUseCaseDependencies = {}): Promise<ReturnType<typeof redactSession>> {
   const tokenStore = await selectStore(context, deps);
+  const apiBaseUrl = auth0Config(context).apiBaseUrl;
   const request =
     deps.request ??
     ((path, options) =>
-      requestJson({ baseUrl: API_BASE_URL }, path, {
+      requestJson({ baseUrl: apiBaseUrl }, path, {
         ...options,
-        retries: options.method === "GET" ? 3 : 0,
+        retries: options.method === "GET" || options.method === "DELETE" ? 3 : 0,
         ...(options.stage ? { stage: `login ${options.stage}` } : {}),
       }));
   const session = await loginWithDeviceSession(auth0Config(context), {
@@ -120,6 +142,50 @@ export async function runAccessTokenUseCase(context: CommandContext, deps: AuthU
 
 export async function runAccountUseCase(context: CommandContext, deps: AuthUseCaseDependencies = {}): Promise<ReturnType<typeof redactSession>> {
   return redactSession((await activeSession(context, deps)).session);
+}
+
+/** Remote Worker entitlement lookup (H2); never guesses a plan from scope. */
+export async function runRemoteAccountUseCase(
+  context: CommandContext,
+  deps: AuthUseCaseDependencies = {},
+): Promise<{ tier: string; entitlementStatus: string; validUntil: string | null } | undefined> {
+  const apiBaseUrl = auth0Config(context).apiBaseUrl;
+  const doFetch = deps.fetch ?? fetch;
+  let session: StoredSession;
+  try {
+    session = (await activeSession(context, deps)).session;
+  } catch {
+    throw new CliError("AUTH_ERROR", "not logged in");
+  }
+
+  const call = async (token: string): Promise<Response> =>
+    doFetch(`${apiBaseUrl}/v1/cli/account`, {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
+      signal: context.signal,
+    });
+  let response = await call(session.accessToken);
+  // 401 => refresh exactly once and retry (H2 point 6).
+  if (response.status === 401) {
+    const refreshed = await runAccessTokenUseCase(context, deps, true);
+    response = await call(refreshed);
+  }
+  if (response.status === 403) {
+    // no/expired entitlement: caller still has a valid account; report free.
+    return { tier: "free", entitlementStatus: "none", validUntil: null };
+  }
+  if (!response.ok) {
+    throw new CliError("NETWORK_ERROR", `account lookup failed with ${response.status}`);
+  }
+  const value = (await response.json()) as Record<string, unknown>;
+  if (
+    typeof value.tier !== "string" ||
+    typeof value.entitlementStatus !== "string" ||
+    (value.validUntil !== null && typeof value.validUntil !== "string")
+  ) {
+    throw new CliError("VALIDATION_ERROR", "invalid account response");
+  }
+  return { tier: value.tier, entitlementStatus: value.entitlementStatus, validUntil: value.validUntil ?? null };
 }
 
 export async function runLogoutUseCase(context: CommandContext, deps: AuthUseCaseDependencies = {}): Promise<{ revoked: boolean }> {

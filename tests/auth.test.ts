@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createPkcePair, createLoginState } from "../src/auth/pkce.js";
 import { buildAuthorizationUrl, hashApiKey, exchangeAuthorizationCode } from "../src/auth/login.js";
-import { requestJson, verifyApiKey } from "../src/api/client.js";
+import { requestJson, verifyApiKey, redactJsonForPreview } from "../src/api/client.js";
 import { CliError } from "../src/errors/index.js";
 
 const AUTH_CONFIG = {
@@ -128,8 +128,127 @@ describe("requestJson", () => {
         }),
       ).rejects.toMatchObject({
         code: "NOT_FOUND",
-        message: expect.stringMatching(/login create:.*not valid JSON.*text\/html.*html/i),
+        message: expect.stringMatching(/login create:.*not valid JSON.*text\/html.*body=html, \d+ bytes/i),
       });
+      await expect(
+        requestJson({ baseUrl: "https://api.example.com" }, "/v1/cli-login-sessions", {
+          method: "POST",
+          stage: "login create",
+        }),
+      ).rejects.toSatisfy((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        return !message.includes("<html") && !message.includes("Not Found");
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("never includes secret values in default error summaries", async () => {
+    const secret = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature";
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ access_token: secret, email: "user@example.com" }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+    try {
+      await expect(requestJson({ baseUrl: "https://api.example.com" }, "/x", { method: "POST" })).rejects.toSatisfy(
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          expect(message).toMatch(/body=json-declared, \d+ bytes/);
+          expect(message).not.toContain("preview=");
+          expect(message).not.toContain(secret);
+          expect(message).not.toContain("user@example.com");
+          expect(message).not.toContain("access_token");
+          return true;
+        },
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("redacts nested secrets when debug body preview is explicitly enabled", async () => {
+    const secret = "actual-secret-value-do-not-leak";
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ nested: { access_token: secret }, ok: true }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+    try {
+      await expect(
+        requestJson({ baseUrl: "https://api.example.com" }, "/x", { debugBodyPreview: true }),
+      ).rejects.toSatisfy((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        expect(message).toContain("preview=");
+        expect(message).toContain("[redacted]");
+        expect(message).not.toContain(secret);
+        return true;
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("retries idempotent GET network failures with backoff and never retries POST", async () => {
+    vi.useFakeTimers();
+    const originalFetch = globalThis.fetch;
+    let getCalls = 0;
+    let postCalls = 0;
+    try {
+      globalThis.fetch = (async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.endsWith("/get")) {
+          getCalls += 1;
+          if (getCalls < 3) throw new TypeError("fetch failed");
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+        postCalls += 1;
+        throw new TypeError("fetch failed");
+      }) as unknown as typeof fetch;
+
+      const getPromise = requestJson({ baseUrl: "https://api.example.com" }, "/get", {
+        method: "GET",
+        retries: 3,
+      });
+      await vi.runAllTimersAsync();
+      await expect(getPromise).resolves.toMatchObject({ data: { ok: true } });
+      expect(getCalls).toBe(3);
+
+      const postPromise = requestJson({ baseUrl: "https://api.example.com" }, "/post", {
+        method: "POST",
+        retries: 3,
+      });
+      await expect(postPromise).rejects.toMatchObject({ code: "NETWORK_ERROR" });
+      expect(postCalls).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry after an external abort", async () => {
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    const controller = new AbortController();
+      globalThis.fetch = (async () => {
+      calls += 1;
+      controller.abort();
+      const error = new Error("The operation was aborted");
+      error.name = "AbortError";
+      throw error;
+    }) as unknown as typeof fetch;
+    try {
+      await expect(
+        requestJson({ baseUrl: "https://api.example.com" }, "/x", {
+          method: "GET",
+          retries: 3,
+          signal: controller.signal,
+        }),
+      ).rejects.toMatchObject({ code: "NETWORK_ERROR", message: expect.stringMatching(/aborted/i) });
+      expect(calls).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
     }

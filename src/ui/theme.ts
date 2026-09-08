@@ -13,11 +13,20 @@ export interface UiTheme {
   readonly enabled: boolean;
   readonly blue: (text: string) => string;
   readonly red: (text: string) => string;
+  /** Raw SGR open sequences for multi-span painting (empty when color is off). */
+  readonly openBlue: string;
+  readonly openRed: string;
   readonly symbols: typeof THEME_SYMBOLS;
 }
 
 function ansiFg(r: number, g: number, b: number): string {
   return `\x1b[38;2;${r};${g};${b}m`;
+}
+
+/** Brand SGR open sequence; only place outside theme that should need RGB → ANSI. */
+export function brandAnsiFgOpen(color: "blue" | "red"): string {
+  const rgb = color === "blue" ? BRAND_BLUE_RGB : BRAND_RED_RGB;
+  return ansiFg(rgb.r, rgb.g, rgb.b);
 }
 
 /** Do not nest `theme.blue`/`theme.red`: reset returns to the default foreground, not an outer color. */
@@ -42,6 +51,8 @@ export function createTheme(enabled: boolean): UiTheme {
     enabled,
     blue: paint(enabled, BRAND_BLUE_RGB.r, BRAND_BLUE_RGB.g, BRAND_BLUE_RGB.b),
     red: paint(enabled, BRAND_RED_RGB.r, BRAND_RED_RGB.g, BRAND_RED_RGB.b),
+    openBlue: enabled ? brandAnsiFgOpen("blue") : "",
+    openRed: enabled ? brandAnsiFgOpen("red") : "",
     symbols: THEME_SYMBOLS,
   };
 }

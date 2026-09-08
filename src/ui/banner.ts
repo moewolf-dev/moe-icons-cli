@@ -163,8 +163,9 @@ function glyphShadeAt(column: number): "blue" | "red" | undefined {
  * ██ keep the default foreground. Disable color with theme.enabled=false.
  */
 export function paintWordmarkLarge(lines: readonly string[], theme: UiTheme): string[] {
-  const openBlue = "\x1b[38;2;59;130;246m";
-  const openRed = "\x1b[38;2;239;68;68m";
+  // Color open sequences come only from theme (no RGB/ANSI literals here).
+  const openBlue = theme.openBlue;
+  const openRed = theme.openRed;
   return lines.map((line) => {
     const padded = line.padEnd(WORDMARK_LARGE_WIDTH, " ");
     if (!theme.enabled) return padded.replace(/ +$/u, "");

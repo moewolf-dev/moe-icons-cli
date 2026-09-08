@@ -113,10 +113,12 @@ describe("MOEICONS banner", () => {
   });
 
   it("colors only shade characters by glyph and resets between regions", () => {
-    const colored = paintWordmarkLarge([...MOEICONS_WORDMARK_LARGE], createTheme(true)).join("\n");
-    expect(colored).toContain("\x1b[38;2;59;130;246m");
-    expect(colored).toContain("\x1b[38;2;239;68;68m");
+    const theme = createTheme(true);
+    const colored = paintWordmarkLarge([...MOEICONS_WORDMARK_LARGE], theme).join("\n");
+    expect(colored).toContain(theme.openBlue);
+    expect(colored).toContain(theme.openRed);
     expect(colored).toContain("\x1b[39m");
+    expect(colored).not.toMatch(/\x1b\[38;2;59;130;246m█/);
     const plain = paintWordmarkLarge([...MOEICONS_WORDMARK_LARGE], createTheme(false)).join("\n");
     expect(plain).not.toContain("\x1b[");
     expect(plain).toBe(MOEICONS_WORDMARK_LARGE.join("\n"));
