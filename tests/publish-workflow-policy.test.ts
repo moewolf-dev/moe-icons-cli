@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -84,5 +84,19 @@ describe("P0-6 draft-first CLI release recovery", () => {
     expect(workflow).toMatch(/is_draft.*--jq \.isDraft|isDraft --jq \.isDraft/);
     expect(workflow).toMatch(/gh release upload "\$TAG"/);
     expect(workflow).toMatch(/registry content differs from candidate|candidate-digests/);
+  });
+});
+
+describe("P1-7 workflow action pinning", () => {
+  it("pins every action in every CLI workflow to a 40-hex commit", () => {
+    const dir = join(__dirname, "..", ".github", "workflows");
+    for (const name of readdirSync(dir).filter((file) => file.endsWith(".yml"))) {
+      const text = readFileSync(join(dir, name), "utf8");
+      for (const line of text.split("\n")) {
+        const match = /uses:\s*([^\s#]+)/.exec(line);
+        if (!match || match[1].startsWith("./")) continue;
+        expect(match[1], `${name}: ${match[1]}`).toMatch(/@[0-9a-f]{40}$/);
+      }
+    }
   });
 });
