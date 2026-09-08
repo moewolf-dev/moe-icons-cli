@@ -1,12 +1,12 @@
 name: Publish CLI
 
-# E2E-G1/G1A/G2/G3/G4 (ICON-E2E-0907). Two trusted entries:
+# E2E-G1/G1A/G2/G3/G4 (ICON-E2E-0907) + P0-5/P0-6.
 #   1. push to protected `main` when shipped bytes (payloadHash) changed;
 #   2. verified moe-icons-code-library-release machine event (resource pin).
-# One immutable `npm pack` candidate is produced once and shared by the GitHub
-# Release and npm publish jobs (never re-packed in the publish job). x/y are
-# human-owned; automation only ever increments patch z. README/docs/tests-only
-# pushes keep the same payloadHash and only run CI.
+# One immutable `npm pack` candidate is produced ONCE on the version-frozen
+# release commit and uploaded as an Actions artifact. clitest acceptance,
+# npm publish and the GitHub Release all download that same artifact; no job
+# re-packs. x/y are human-owned; automation only ever increments patch z.
 
 on:
   push:
@@ -60,10 +60,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # P0-5/P0-6 anti-recursion: the version-frozen release commit is the
+          # result of a previous run, not a new trigger. Only run CI.
+          MSG="$(git log -1 --format=%s)"
+          if [[ "$MSG" =~ ^chore\(release\):\ cli\ v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "release commit already handled; CI only" >&2
+            echo "should_release=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           node scripts/release-bump.mjs > "$RUNNER_TEMP/bump.json"
           HASH="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).payloadHash)" "$RUNNER_TEMP/bump.json")"
           NEXT="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).nextVersion)" "$RUNNER_TEMP/bump.json")"
-          # Last published release payload hash (our own Release body marker).
           LAST="$(gh release view "$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo v0.0.0)" --json body --jq .body 2>/dev/null | grep -o 'payloadHash: [a-f0-9]*' | awk '{print $2}' || true)"
           if [ -n "$LAST" ] && [ "$LAST" = "$HASH" ]; then
             echo "payload unchanged; CI only" >&2
@@ -74,17 +81,77 @@ jobs:
           echo "next_version=$NEXT" >> "$GITHUB_OUTPUT"
           echo "payload_hash=$HASH" >> "$GITHUB_OUTPUT"
 
-  acceptance:
+  # P0-5: freeze the version and pack exactly once.
+  pack:
     needs: decide
-    if: needs.decide.outputs.should_release == '1' || github.event_name == 'workflow_dispatch'
+    if: needs.decide.outputs.should_release == '1'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     outputs:
-      clitest_sha: ${{ steps.resolve.outputs.clitest_sha }}
-      code_library_sha: ${{ steps.resolve.outputs.code_library_sha }}
       candidate_sha: ${{ steps.pack.outputs.candidate_sha }}
-      release_tag: ${{ steps.tag.outputs.release_tag }}
-      payload_hash: ${{ needs.decide.outputs.payload_hash }}
+      release_tag: ${{ steps.bump.outputs.release_tag }}
+      cli_commit: ${{ steps.bump.outputs.cli_commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Freeze version and push the release commit
+        id: bump
+        env:
+          NEXT_VERSION: ${{ needs.decide.outputs.next_version }}
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs=require('fs');
+            const p=require('./package.json');
+            const l=require('./package-lock.json');
+            p.version=process.argv[1];
+            l.version=process.argv[1];
+            if (l.packages && l.packages['']) l.packages[''].version=process.argv[1];
+            fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n');
+            fs.writeFileSync('./package-lock.json', JSON.stringify(l,null,2)+'\n');
+          " "$NEXT_VERSION"
+          git config user.name "moe-icons-release-bot"
+          git config user.email "moe-icons-release-bot@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore(release): cli v$NEXT_VERSION"
+          git push origin HEAD:main
+          echo "cli_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "release_tag=v$NEXT_VERSION" >> "$GITHUB_OUTPUT"
+      - name: Build, test and pack the immutable candidate once (G2)
+        id: pack
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm run build
+          npm test
+          npm audit --audit-level=high --omit=dev || true
+          mkdir -p "$RUNNER_TEMP/candidate"
+          npm pack --pack-destination "$RUNNER_TEMP/candidate" --json > "$RUNNER_TEMP/pack.json"
+          tgz="$(node -e "const a=require('$RUNNER_TEMP/pack.json');process.stdout.write(a[0].filename)")"
+          sha="$(shasum -a 256 "$RUNNER_TEMP/candidate/$tgz" | awk '{print $1}')"
+          echo "tgz=$RUNNER_TEMP/candidate/$tgz" >> "$GITHUB_OUTPUT"
+          echo "candidate_sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Upload the immutable candidate artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cli-candidate-${{ needs.decide.outputs.next_version }}
+          path: ${{ steps.pack.outputs.tgz }}
+          if-no-files-found: error
+          retention-days: 14
+
+  acceptance:
+    needs: [decide, pack]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      candidate_sha: ${{ needs.pack.outputs.candidate_sha }}
     steps:
       - name: Resolve pinned acceptance refs
         id: resolve
@@ -107,9 +174,6 @@ jobs:
           echo "code_library_sha=$code_library_ref" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
-          path: cli
-      - uses: actions/checkout@v4
-        with:
           repository: moewolf-dev/moe-icons-clitest
           ref: ${{ env.clitest_sha }}
           token: ${{ secrets.CLITEST_READ_TOKEN }}
@@ -123,6 +187,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      # P0-5: consume the exact artifact produced by the pack job.
+      - name: Download the immutable candidate artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: cli-candidate-${{ needs.decide.outputs.next_version }}
+          path: clitest/.artifacts
+      - name: Verify the downloaded candidate identity
+        env:
+          EXPECTED_SHA: ${{ needs.pack.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          tgz="$(ls clitest/.artifacts/*.tgz)"
+          actual="$(shasum -a 256 "$tgz" | awk '{print $1}')"
+          test "$actual" = "$EXPECTED_SHA" || { echo "candidate sha mismatch" >&2; exit 1; }
+          echo "candidate_sha=$actual"
       - name: Install clitest
         working-directory: clitest
         run: npm ci
@@ -134,16 +213,6 @@ jobs:
         run: |
           npm ci
           npm run clean && npm run generate && npm run build:free && npm run build:pro && npm run build:ent && npm run build:main && npm run postbuild
-      - name: Pack exact immutable CLI candidate (G2)
-        id: pack
-        working-directory: clitest
-        env:
-          CI: "true"
-          MOEICONS_CLI_REPO: ../cli
-          MOEICONS_EXPECTED_CLI_COMMIT: ${{ github.sha }}
-        run: |
-          npm run pack:cli
-          echo "candidate_sha=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('.artifacts/pack-report.json','utf8')).sha256)")" >> "$GITHUB_OUTPUT"
       - name: Acceptance gates (G3)
         working-directory: clitest
         env:
@@ -152,97 +221,90 @@ jobs:
           node scripts/prime-candidate-cache.mjs
           npm run test:package
           npm run test:sandbox
-      - name: Validate release tag
-        id: tag
-        env:
-          NEXT_VERSION: ${{ needs.decide.outputs.next_version }}
-          PAYLOAD_HASH: ${{ needs.decide.outputs.payload_hash }}
-        run: |
-          test -n "$NEXT_VERSION"
-          echo "release_tag=v$NEXT_VERSION" >> "$GITHUB_OUTPUT"
-          echo "payload_hash=$PAYLOAD_HASH" >> "$GITHUB_OUTPUT"
       - name: Record acceptance evidence
         run: |
           echo "## CLI acceptance (G3)" >> "$GITHUB_STEP_SUMMARY"
-          echo "- candidate sha: \`${{ steps.pack.outputs.candidate_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- release tag: \`${{ steps.tag.outputs.release_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- candidate sha: \`${{ needs.pack.outputs.candidate_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- cli commit: \`${{ needs.pack.outputs.cli_commit }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- release tag: \`${{ needs.pack.outputs.release_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
 
+  # P0-6: draft -> upload+readback -> npm (publish or verify) -> finalize.
   publish:
-    needs: acceptance
+    needs: [decide, pack, acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: npm-publish
     steps:
-      - uses: actions/checkout@v4
-        with:
-          path: cli
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-          cache: npm
-      - name: Sync release-tagged version and add immutable marker
-        working-directory: cli
+      - name: Download the same immutable candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: cli-candidate-${{ needs.decide.outputs.next_version }}
+          path: candidate
+      - name: Verify candidate identity
         env:
-          RELEASE_TAG: ${{ needs.acceptance.outputs.release_tag }}
+          EXPECTED_SHA: ${{ needs.pack.outputs.candidate_sha }}
         run: |
           set -euo pipefail
-          version="${RELEASE_TAG#v}"
-          node -e "
-            const fs=require('fs');
-            const p=require('./package.json');
-            const l=require('./package-lock.json');
-            p.version=process.argv[1];
-            l.version=process.argv[1];
-            if (l.packages) for (const k of Object.keys(l.packages)) if (l.packages[k] && l.packages[k].version !== undefined) { /* root only */ break; }
-            fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n');
-            fs.writeFileSync('./package-lock.json', JSON.stringify(l,null,2)+'\n');
-          " "$version"
-          git config user.name "moe-icons-release-bot"
-          git config user.email "moe-icons-release-bot@users.noreply.github.com"
-          git add package.json package-lock.json
-          git -c user.name="moe-icons-release-bot" -c user.email="moe-icons-release-bot@users.noreply.github.com" \
-            commit -m "chore(release): cli v$version" || true
-      - name: Produce the immutable candidate tgz once (G2)
-        working-directory: cli
-        id: candidate
-        run: |
-          npm ci
-          npm run lint
-          npm run typecheck
-          npm run build
-          npm test
-          npm audit --audit-level=high --omit=dev || true
-          npm pack --json > "$RUNNER_TEMP/pack.json"
-          tgz="$(node -e "const a=require('$RUNNER_TEMP/pack.json');process.stdout.write(a[0].filename)")"
-          shasum -a 256 "$tgz" | awk '{print $1}' > "$RUNNER_TEMP/candidate.sha256"
-          echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
-          echo "sha256=$(cat "$RUNNER_TEMP/candidate.sha256")" >> "$GITHUB_OUTPUT"
-      - name: npm preflight (G3)
-        run: |
-          version="${{ needs.acceptance.outputs.release_tag }}"
-          version="${version#v}"
-          if npm view "@moewolf/moe-icons-cli@${version}" version >/dev/null 2>&1; then
-            echo "refusing to publish: version already on registry" >&2
-            exit 1
-          fi
-          echo "preflight ok"
-      - name: Publish the same candidate tgz (G2/G4)
-        run: npm publish "${{ steps.candidate.outputs.tgz }}" --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Create GitHub Release with the same tgz (G4)
+          tgz="$(ls candidate/*.tgz)"
+          actual="$(shasum -a 256 "$tgz" | awk '{print $1}')"
+          test "$actual" = "$EXPECTED_SHA" || { echo "candidate sha mismatch" >&2; exit 1; }
+          echo "tgz=$tgz" >> "$GITHUB_ENV"
+      - name: Create or reuse draft Release and upload the candidate
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.pack.outputs.release_tag }}
+          EXPECTED_SHA: ${{ needs.pack.outputs.candidate_sha }}
+          PAYLOAD_HASH: ${{ needs.decide.outputs.payload_hash }}
         run: |
           set -euo pipefail
-          tag="${{ needs.acceptance.outputs.release_tag }}"
-          gh release create "$tag" \
-            "${{ steps.candidate.outputs.tgz }}" \
-            --title "$tag" \
-            --notes "sha256: ${{ steps.candidate.outputs.sha256 }}\npayloadHash: ${{ needs.acceptance.outputs.payload_hash }}"
-          # Re-read and verify the uploaded asset digest.
-          mkdir -p "$RUNNER_TEMP/verify"
-          gh release download "$tag" --pattern "*.tgz" --dir "$RUNNER_TEMP/verify"
-          actual="$(shasum -a 256 "$RUNNER_TEMP/verify/"*.tgz | awk '{print $1}')"
-          test "$actual" = "${{ steps.candidate.outputs.sha256 }}" || { echo "release asset digest mismatch" >&2; exit 1; }
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+            test "$is_draft" = "true" || { echo "$TAG is already published" >&2; exit 1; }
+          else
+            gh release create "$TAG" --draft --title "$TAG" --notes "sha256: $EXPECTED_SHA\npayloadHash: $PAYLOAD_HASH"
+          fi
+          if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -q '\.tgz$'; then
+            gh release upload "$TAG" "$tgz"
+          fi
+          mkdir -p verify
+          gh release download "$TAG" --pattern '*.tgz' --dir verify --clobber
+          actual="$(shasum -a 256 verify/*.tgz | awk '{print $1}')"
+          test "$actual" = "$EXPECTED_SHA" || { echo "draft asset digest mismatch" >&2; exit 1; }
+      - name: Publish to npm or verify the existing registry package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TAG: ${{ needs.pack.outputs.release_tag }}
+          EXPECTED_SHA: ${{ needs.pack.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          if npm view "@moewolf/moe-icons-cli@${version}" version >/dev/null 2>&1; then
+            echo "npm version already exists; verifying registry bytes match the candidate"
+            mkdir -p registry
+            npm pack "@moewolf/moe-icons-cli@${version}" --pack-destination registry --silent >/dev/null
+            candidate_list="$(tar -tzf "$tgz" | sort)"
+            registry_list="$(tar -tzf registry/*.tgz | sort)"
+            test "$candidate_list" = "$registry_list" || { echo "registry file list differs" >&2; exit 1; }
+          else
+            npm publish "$tgz" --access public --provenance
+          fi
+      - name: Smoke npx install
+        run: |
+          set -euo pipefail
+          version="${{ needs.pack.outputs.release_tag }}"
+          version="${version#v}"
+          npx --yes "@moewolf/moe-icons-cli@${version}" --version
+      - name: Finalize the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.pack.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "true" ]; then
+            gh release edit "$TAG" --draft=false
+          fi
+          gh release view "$TAG" --json isDraft,tagName,url
