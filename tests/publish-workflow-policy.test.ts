@@ -93,9 +93,9 @@ describe("P1-7 workflow action pinning", () => {
     for (const name of readdirSync(dir).filter((file) => file.endsWith(".yml"))) {
       const text = readFileSync(join(dir, name), "utf8");
       for (const line of text.split("\n")) {
-        const match = /uses:\s*([^\s#]+)/.exec(line);
-        if (!match || match[1].startsWith("./")) continue;
-        expect(match[1], `${name}: ${match[1]}`).toMatch(/@[0-9a-f]{40}$/);
+        const used = /uses:\s*([^\s#]+)/.exec(line)?.[1];
+        if (!used || used.startsWith("./")) continue;
+        expect(used, `${name}: ${used}`).toMatch(/@[0-9a-f]{40}$/);
       }
     }
   });
