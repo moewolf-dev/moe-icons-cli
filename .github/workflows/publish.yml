@@ -37,10 +37,10 @@ jobs:
       next_version: ${{ steps.decide.outputs.next_version }}
       payload_hash: ${{ steps.decide.outputs.payload_hash }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
       - name: Check auto-release switch (F6)
@@ -92,10 +92,10 @@ jobs:
       release_tag: ${{ steps.bump.outputs.release_tag }}
       cli_commit: ${{ steps.bump.outputs.cli_commit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -172,19 +172,19 @@ jobs:
           echo "code_library_sha=$code_library_ref" >> "$GITHUB_OUTPUT"
           echo "clitest_sha=$clitest_ref" >> "$GITHUB_ENV"
           echo "code_library_sha=$code_library_ref" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: moewolf-dev/moe-icons-clitest
           ref: ${{ env.clitest_sha }}
           token: ${{ secrets.CLITEST_READ_TOKEN }}
           path: clitest
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: moewolf-dev/moe-icons-code-library
           ref: ${{ env.code_library_sha }}
           token: ${{ secrets.CODE_LIBRARY_READ_TOKEN }}
           path: code-library
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
       # P0-5: consume the exact artifact produced by the pack job.
@@ -235,7 +235,7 @@ jobs:
     timeout-minutes: 20
     environment: npm-publish
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
