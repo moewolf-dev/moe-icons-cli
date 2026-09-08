@@ -1,0 +1,211 @@
+{
+  "schemaVersion": 1,
+  "name": "cli-login-state-machine",
+  "owner": "moe-icons-web-worker",
+  "consumers": [
+    "moe-icons-cli",
+    "moe-icons-website"
+  ],
+  "loginChain": [
+    "cli-create-session",
+    "browser-open-website-cli-login",
+    "website-redirect-auth0",
+    "worker-complete-session",
+    "cli-poll-exchange",
+    "secure-token-store"
+  ],
+  "transitions": [
+    {
+      "id": "create",
+      "method": "POST",
+      "path": "/v1/cli-login-sessions",
+      "requestRequired": [
+        "codeChallenge",
+        "clientNonce",
+        "state"
+      ],
+      "response": {
+        "status": 201,
+        "contentType": "application/json",
+        "required": [
+          "ok",
+          "loginId",
+          "pollingToken",
+          "browserUrl",
+          "intervalSeconds",
+          "expiresAt"
+        ],
+        "browserPath": "/cli-login"
+      }
+    },
+    {
+      "id": "browser-redirect",
+      "method": "POST",
+      "path": "/v1/cli-login-sessions/{id}/authorize",
+      "requestRequired": [
+        "state",
+        "intent"
+      ],
+      "response": {
+        "status": 200,
+        "contentType": "application/json",
+        "required": [
+          "ok",
+          "authorizeUrl",
+          "expiresAt",
+          "status",
+          "summary"
+        ]
+      }
+    },
+    {
+      "id": "pending",
+      "method": "GET",
+      "path": "/v1/cli-login-sessions/{id}",
+      "auth": "Bearer <pollingToken>",
+      "response": {
+        "status": 202,
+        "contentType": "application/json",
+        "required": [
+          "ok",
+          "status",
+          "expiresAt"
+        ],
+        "statusValue": "pending"
+      }
+    },
+    {
+      "id": "complete",
+      "method": "POST",
+      "path": "/v1/cli-login-sessions/{id}/complete",
+      "requestRequired": [
+        "state",
+        "code"
+      ],
+      "response": {
+        "status": 200,
+        "contentType": "application/json",
+        "required": [
+          "ok",
+          "status"
+        ],
+        "statusValue": "complete"
+      }
+    },
+    {
+      "id": "complete-poll",
+      "method": "GET",
+      "path": "/v1/cli-login-sessions/{id}",
+      "auth": "Bearer <pollingToken>",
+      "response": {
+        "status": 200,
+        "contentType": "application/json",
+        "required": [
+          "ok",
+          "status",
+          "exchangeCode"
+        ],
+        "statusValue": "complete"
+      }
+    },
+    {
+      "id": "exchange",
+      "method": "POST",
+      "path": "/v1/cli-login-sessions/{id}/exchange",
+      "auth": "Bearer <pollingToken>",
+      "requestRequired": [
+        "exchangeCode",
+        "clientNonce",
+        "codeVerifier"
+      ],
+      "response": {
+        "status": 200,
+        "contentType": "application/json",
+        "required": [
+          "ok",
+          "accountId",
+          "accessToken",
+          "refreshToken",
+          "expiresIn",
+          "tokenType"
+        ]
+      }
+    },
+    {
+      "id": "account",
+      "method": "GET",
+      "path": "/v1/cli/account",
+      "auth": "Bearer <accessToken>",
+      "response": {
+        "status": 200,
+        "contentType": "application/json",
+        "required": [
+          "ok",
+          "accountId",
+          "tier",
+          "entitlementStatus",
+          "validUntil"
+        ]
+      }
+    },
+    {
+      "id": "cancelled",
+      "method": "DELETE",
+      "path": "/v1/cli-login-sessions/{id}",
+      "auth": "Bearer <pollingToken>",
+      "response": {
+        "status": 200,
+        "contentType": "application/json",
+        "required": [
+          "ok",
+          "status"
+        ],
+        "statusValue": "cancelled"
+      }
+    },
+    {
+      "id": "expired",
+      "method": "GET",
+      "path": "/v1/cli-login-sessions/{id}",
+      "auth": "Bearer <pollingToken>",
+      "response": {
+        "status": 410,
+        "contentType": "application/json",
+        "required": [
+          "ok",
+          "code",
+          "message"
+        ],
+        "errorCode": "SESSION_EXPIRED"
+      }
+    }
+  ],
+  "errorCodes": [
+    "VALIDATION_ERROR",
+    "AUTH_ERROR",
+    "NOT_FOUND",
+    "SESSION_EXPIRED",
+    "SESSION_STATE_CONFLICT",
+    "SESSION_PAYLOAD_INVALID",
+    "SESSION_REPLAYED",
+    "RATE_LIMITED",
+    "METHOD_NOT_ALLOWED",
+    "CONFIG_ERROR"
+  ],
+  "auth0Revoke": {
+    "method": "POST",
+    "path": "/oauth/revoke",
+    "requestRequired": [
+      "client_id",
+      "token"
+    ],
+    "clearsLocalOnAnyResult": true,
+    "publicResultFields": [
+      "revoked"
+    ],
+    "neverLogs": [
+      "refreshToken",
+      "accessToken"
+    ]
+  }
+}

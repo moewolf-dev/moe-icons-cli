@@ -79,19 +79,86 @@ function assertTrustedHttpBase(value: string, envName: string): string {
   return value.replace(/\/$/, "");
 }
 
-function auth0Config(context: CommandContext) {
+function isLoopbackHttp(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" && LOOPBACK_HOSTS.has(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+export type MoeiconsEnvironment = "production" | "local";
+
+export interface AuthEnvironment {
+  readonly mode: MoeiconsEnvironment;
+  readonly label: string;
+  readonly apiBaseUrl: string;
+  readonly websiteOrigin: string;
+  readonly auth0Issuer: string;
+  readonly auth0ClientId: string;
+}
+
+/**
+ * H5: resolve a single coherent auth environment. `MOEICONS_ENV` may declare
+ * `local` or `production`; when set it must agree with the endpoints. Loopback
+ * HTTP is only allowed for local, and the API/website must not be mixed across
+ * environments so a dev token can never be written to production (or vice versa).
+ */
+export function resolveAuthEnvironment(
+  env: Record<string, string | undefined>,
+): AuthEnvironment {
+  const apiBaseUrl = assertTrustedHttpBase(
+    env.MOEICONS_API_BASE_URL ?? DEFAULT_API_BASE_URL,
+    "MOEICONS_API_BASE_URL",
+  );
+  const websiteOrigin = assertTrustedHttpBase(
+    env.MOEICONS_WEBSITE_ORIGIN ?? DEFAULT_WEBSITE_ORIGIN,
+    "MOEICONS_WEBSITE_ORIGIN",
+  );
+  const apiLoopback = isLoopbackHttp(apiBaseUrl);
+  const websiteLoopback = isLoopbackHttp(websiteOrigin);
+  if (apiLoopback !== websiteLoopback) {
+    throw new CliError(
+      "VALIDATION_ERROR",
+      "MOEICONS_API_BASE_URL and MOEICONS_WEBSITE_ORIGIN must both be loopback (local) or both be non-loopback (production)",
+    );
+  }
+  const declared = env.MOEICONS_ENV;
+  if (declared !== undefined && declared !== "local" && declared !== "production") {
+    throw new CliError("VALIDATION_ERROR", "MOEICONS_ENV must be local or production");
+  }
+  const inferred: MoeiconsEnvironment = apiLoopback ? "local" : "production";
+  if (declared && declared !== inferred) {
+    throw new CliError(
+      "VALIDATION_ERROR",
+      `MOEICONS_ENV=${declared} conflicts with configured endpoints (${inferred})`,
+    );
+  }
+  const mode = declared ?? inferred;
   return {
-    apiBaseUrl: assertTrustedHttpBase(
-      context.env.MOEICONS_API_BASE_URL ?? DEFAULT_API_BASE_URL,
-      "MOEICONS_API_BASE_URL",
-    ),
-    websiteOrigin: assertTrustedHttpBase(
-      context.env.MOEICONS_WEBSITE_ORIGIN ?? DEFAULT_WEBSITE_ORIGIN,
-      "MOEICONS_WEBSITE_ORIGIN",
-    ),
-    auth0Issuer: context.env.MOEICONS_AUTH0_ISSUER ?? "",
-    auth0ClientId: context.env.MOEICONS_AUTH0_CLIENT_ID ?? "",
+    mode,
+    label: mode === "local" ? "local (dev)" : "production",
+    apiBaseUrl,
+    websiteOrigin,
+    auth0Issuer: env.MOEICONS_AUTH0_ISSUER ?? "",
+    auth0ClientId: env.MOEICONS_AUTH0_CLIENT_ID ?? "",
   };
+}
+
+function auth0Config(context: CommandContext) {
+  const resolved = resolveAuthEnvironment(context.env);
+  return {
+    apiBaseUrl: resolved.apiBaseUrl,
+    websiteOrigin: resolved.websiteOrigin,
+    auth0Issuer: resolved.auth0Issuer,
+    auth0ClientId: resolved.auth0ClientId,
+  };
+}
+
+/** H5: human-readable environment label for `login`/`account` output. */
+export function describeAuthEnvironment(context: CommandContext): string {
+  return resolveAuthEnvironment(context.env).label;
 }
 
 export async function runLoginUseCase(context: CommandContext, deps: AuthUseCaseDependencies = {}): Promise<ReturnType<typeof redactSession>> {
@@ -105,9 +172,13 @@ export async function runLoginUseCase(context: CommandContext, deps: AuthUseCase
         retries: options.method === "GET" || options.method === "DELETE" ? 3 : 0,
         ...(options.stage ? { stage: `login ${options.stage}` } : {}),
       }));
+  // H4 test seam: loopback acceptance runs headless. Production never sets this.
+  const browserOpener =
+    deps.openBrowser ??
+    (context.env.MOEICONS_NO_BROWSER === "1" ? () => Promise.resolve() : openBrowser);
   const session = await loginWithDeviceSession(auth0Config(context), {
     request,
-    openBrowser: deps.openBrowser ?? openBrowser,
+    openBrowser: browserOpener,
     sleep: deps.sleep ?? ((milliseconds, signal) => new Promise<void>((resolve, reject) => {
       const timer = setTimeout(resolve, milliseconds);
       signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new CliError("CANCELLED", "login cancelled")); }, { once: true });

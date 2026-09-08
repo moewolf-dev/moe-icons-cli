@@ -18,6 +18,7 @@ export interface ExchangeLoginResponse {
   readonly accessToken: string;
   readonly refreshToken: string;
   readonly expiresIn: number;
+  readonly tokenType: "Bearer";
 }
 
 function asRecord(data: unknown, stage: string): Record<string, unknown> {
@@ -93,5 +94,8 @@ export function parseExchangeLoginResponse(data: unknown): ExchangeLoginResponse
   ) {
     throw new CliError("VALIDATION_ERROR", `${stage}: invalid expiresIn`);
   }
-  return { accountId, accessToken, refreshToken, expiresIn };
+  if (record.tokenType !== "Bearer") {
+    throw new CliError("VALIDATION_ERROR", `${stage}: unsupported tokenType`);
+  }
+  return { accountId, accessToken, refreshToken, expiresIn, tokenType: "Bearer" };
 }

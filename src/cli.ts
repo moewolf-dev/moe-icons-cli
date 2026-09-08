@@ -23,6 +23,7 @@ import { createCommandUi } from "./ui/create-ui.js";
 import { CLI_VERSION, MOEICONS_BANNER, renderNoticeBox, renderProjectNotice, renderWordmarkText } from "./ui/banner.js";
 import { createTheme, isThemeEnabled } from "./ui/theme.js";
 import {
+  describeAuthEnvironment,
   runAccountUseCase,
   runLoginUseCase,
   runLogoutUseCase,
@@ -282,12 +283,14 @@ async function dispatchSync(
 }
 
 async function runLogin(runtime: CliRuntime, json: boolean, yes: boolean): Promise<number> {
-  const session = await runLoginUseCase(commandContext(runtime, { json, yes }), {
+  const context = commandContext(runtime, { json, yes });
+  const environment = describeAuthEnvironment(context);
+  const session = await runLoginUseCase(context, {
     ...runtime.auth,
     fileFallbackAllowed: runtime.isTTY(),
   });
-  if (json) writeJson(runtime, { ok: true, account: session });
-  else runtime.stdout(`Logged in as ${session.accountId}\n`);
+  if (json) writeJson(runtime, { ok: true, environment, account: session });
+  else runtime.stdout(`Environment: ${environment}\nLogged in as ${session.accountId}\n`);
   if (!json && runtime.isTTY()) await offerProPredownload(runtime);
   return 0;
 }
@@ -407,18 +410,17 @@ async function runProResources(runtime: CliRuntime, yes: boolean): Promise<numbe
 }
 
 async function runAccount(runtime: CliRuntime, json: boolean): Promise<number> {
-  const session = await runAccountUseCase(
-    commandContext(runtime, { json, yes: false }),
-    runtime.auth,
-  );
+  const context = commandContext(runtime, { json, yes: false });
+  const environment = describeAuthEnvironment(context);
+  const session = await runAccountUseCase(context, runtime.auth);
   const remote = await runRemoteAccountUseCase(
     commandContext(runtime, { json, yes: false }),
     { ...runtime.auth, fetch: runtime.auth?.fetch ?? globalThis.fetch.bind(globalThis) },
   ).catch(() => undefined);
   const account = { ...session, ...(remote ?? {}) };
-  if (json) writeJson(runtime, { ok: true, account });
+  if (json) writeJson(runtime, { ok: true, environment, account });
   else {
-    runtime.stdout(`Account: ${account.accountId}\nSession expires: ${new Date(account.expiresAt).toISOString()}\n`);
+    runtime.stdout(`Environment: ${environment}\nAccount: ${account.accountId}\nSession expires: ${new Date(account.expiresAt).toISOString()}\n`);
     if (remote) runtime.stdout(`Tier: ${account.tier}\nEntitlement: ${account.entitlementStatus}\n`);
   }
   return 0;

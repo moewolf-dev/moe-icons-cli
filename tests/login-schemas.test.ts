@@ -54,6 +54,7 @@ describe("login response schemas", () => {
         accessToken: "at",
         refreshToken: "rt",
         expiresIn: 900,
+        tokenType: "Bearer",
       }),
     ).toMatchObject({ accountId: "a", expiresIn: 900 });
   });

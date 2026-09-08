@@ -99,6 +99,7 @@ describe("login loopback E2E (P4-D10)", () => {
             accessToken: "access",
             refreshToken: "refresh",
             expiresIn: 3600,
+            tokenType: "Bearer",
           },
         };
       }

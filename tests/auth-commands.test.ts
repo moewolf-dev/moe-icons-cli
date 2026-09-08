@@ -39,7 +39,7 @@ describe("auth command adapters", () => {
     const request = vi.fn()
       .mockResolvedValueOnce({ status: 201, data: { loginId: "id", pollingToken: "poll", browserUrl: "https://moeicons.com/cli-login?loginId=id", intervalSeconds: 5, expiresAt: "2099-01-01T00:00:00Z" } })
       .mockResolvedValueOnce({ status: 200, data: { status: "complete", exchangeCode: "exchange" } })
-      .mockResolvedValueOnce({ status: 200, data: { accountId: session.accountId, accessToken: session.accessToken, refreshToken: session.refreshToken, expiresIn: 900 } });
+      .mockResolvedValueOnce({ status: 200, data: { accountId: session.accountId, accessToken: session.accessToken, refreshToken: session.refreshToken, expiresIn: 900, tokenType: "Bearer" } });
     const fixture = runtime({ tokenStore: store, request, openBrowser: vi.fn(async () => undefined), sleep: vi.fn(async () => undefined) });
     expect(await main(["login", "--json"], fixture.runtime)).toBe(0);
     const body = JSON.parse(fixture.out.join(""));
@@ -78,6 +78,43 @@ describe("auth command adapters", () => {
     expect(await main(["logout", "--json"], fixture.runtime)).toBe(0);
     expect(JSON.parse(fixture.out.join(""))).toEqual({ ok: true, revoked: true });
     expect(fixture.out.join("")).not.toContain(session.refreshToken);
+  });
+
+  it("H3: interactive logout distinguishes confirmed and local-only revocation", async () => {
+    const confirmed = runtime({ tokenStore: memoryStore(session), fetch: vi.fn(async () => new Response(null, { status: 200 })) }, {
+      MOEICONS_AUTH0_ISSUER: "https://tenant.auth0.com", MOEICONS_AUTH0_CLIENT_ID: "client",
+    });
+    expect(await main(["logout"], confirmed.runtime)).toBe(0);
+    expect(confirmed.out.join("")).toBe("Logged out.\n");
+    expect(confirmed.out.join("")).not.toContain(session.refreshToken);
+
+    const localOnly = runtime({ tokenStore: memoryStore(session), fetch: vi.fn(async () => new Response(null, { status: 503 })) }, {
+      MOEICONS_AUTH0_ISSUER: "https://tenant.auth0.com", MOEICONS_AUTH0_CLIENT_ID: "client",
+    });
+    expect(await main(["logout"], localOnly.runtime)).toBe(0);
+    expect(localOnly.out.join("")).toBe("Logged out locally; remote revocation was not confirmed.\n");
+    expect(localOnly.out.join("")).not.toContain(session.refreshToken);
+  });
+
+  it("H3: second interactive logout is idempotent and calls only Auth0 revoke", async () => {
+    const store = memoryStore(session);
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(null, { status: 200 }));
+    const first = runtime({ tokenStore: store, fetch: fetchMock }, {
+      MOEICONS_AUTH0_ISSUER: "https://tenant.auth0.com", MOEICONS_AUTH0_CLIENT_ID: "client",
+    });
+    expect(await main(["logout"], first.runtime)).toBe(0);
+    expect(first.out.join("")).toBe("Logged out.\n");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://tenant.auth0.com/oauth/revoke");
+    expect(store.getActive()).toBeUndefined();
+
+    const second = runtime({ tokenStore: store, fetch: fetchMock }, {
+      MOEICONS_AUTH0_ISSUER: "https://tenant.auth0.com", MOEICONS_AUTH0_CLIENT_ID: "client",
+    });
+    expect(await main(["logout"], second.runtime)).toBe(0);
+    expect(second.out.join("")).toBe("Logged out.\n");
+    // No extra revoke call and no Worker logout endpoint.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("hides login only for a current or successfully refreshed session", async () => {

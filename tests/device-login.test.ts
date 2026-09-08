@@ -17,7 +17,7 @@ describe('device-style Auth0 login', () => {
       .mockResolvedValueOnce({ status: 201, data: { loginId: 'id', pollingToken: 'poll', browserUrl: 'https://moeicons.com/cli-login?loginId=id', intervalSeconds: 5, expiresAt: '2026-08-24T00:10:00Z' } })
       .mockResolvedValueOnce({ status: 202, data: { status: 'pending' } })
       .mockResolvedValueOnce({ status: 200, data: { status: 'complete', exchangeCode: 'exchange' } })
-      .mockResolvedValueOnce({ status: 200, data: { accountId: 'auth0|user', accessToken: 'access', refreshToken: 'refresh', expiresIn: 900 } });
+      .mockResolvedValueOnce({ status: 200, data: { accountId: 'auth0|user', accessToken: 'access', refreshToken: 'refresh', expiresIn: 900, tokenType: 'Bearer' } });
     const opened: string[] = [];
     const result = await loginWithDeviceSession(config, {
       request, openBrowser: async (url) => { opened.push(url); }, sleep: async () => undefined,
