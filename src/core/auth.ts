@@ -136,12 +136,30 @@ export function resolveAuthEnvironment(
     );
   }
   const mode = declared ?? inferred;
+  // H5: the Auth0 issuer receives refresh tokens, so it must match the mode.
+  const auth0Issuer = env.MOEICONS_AUTH0_ISSUER ?? "";
+  if (auth0Issuer) {
+    assertTrustedHttpBase(auth0Issuer, "MOEICONS_AUTH0_ISSUER");
+    const issuerLoopback = isLoopbackHttp(auth0Issuer);
+    if (mode === "local" && !issuerLoopback) {
+      throw new CliError(
+        "VALIDATION_ERROR",
+        "local MOEICONS_AUTH0_ISSUER must be loopback http",
+      );
+    }
+    if (mode === "production" && issuerLoopback) {
+      throw new CliError(
+        "VALIDATION_ERROR",
+        "production MOEICONS_AUTH0_ISSUER must be https",
+      );
+    }
+  }
   return {
     mode,
     label: mode === "local" ? "local (dev)" : "production",
     apiBaseUrl,
     websiteOrigin,
-    auth0Issuer: env.MOEICONS_AUTH0_ISSUER ?? "",
+    auth0Issuer,
     auth0ClientId: env.MOEICONS_AUTH0_CLIENT_ID ?? "",
   };
 }

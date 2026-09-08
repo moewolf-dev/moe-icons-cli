@@ -61,6 +61,19 @@ describe("H5 resolveAuthEnvironment", () => {
     ).toThrow(/https or loopback/);
   });
 
+  it("H5: rejects an Auth0 issuer that does not match the environment", () => {
+    expect(() =>
+      resolveAuthEnvironment({ ...LOCAL, MOEICONS_AUTH0_ISSUER: "https://tenant.auth0.com" }),
+    ).toThrow(/local MOEICONS_AUTH0_ISSUER must be loopback/);
+    expect(() =>
+      resolveAuthEnvironment({ MOEICONS_AUTH0_ISSUER: "http://127.0.0.1:9000" }),
+    ).toThrow(/production MOEICONS_AUTH0_ISSUER must be https/);
+    // Matching issuers are accepted; an empty issuer is allowed.
+    expect(resolveAuthEnvironment({ ...LOCAL, MOEICONS_AUTH0_ISSUER: "http://127.0.0.1:9000" }).auth0Issuer).toBe("http://127.0.0.1:9000");
+    expect(resolveAuthEnvironment({ MOEICONS_AUTH0_ISSUER: "https://tenant.auth0.com" }).auth0Issuer).toBe("https://tenant.auth0.com");
+    expect(resolveAuthEnvironment({}).auth0Issuer).toBe("");
+  });
+
   it("describeAuthEnvironment reads the command context env", () => {
     expect(describeAuthEnvironment(context({ ...LOCAL }))).toBe("local (dev)");
     expect(describeAuthEnvironment(context({}))).toBe("production");

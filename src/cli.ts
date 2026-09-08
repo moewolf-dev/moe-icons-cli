@@ -263,7 +263,7 @@ async function dispatchSync(
     case "login":
       return await runLogin(runtime, json, yes);
     case "logout":
-      return await runLogout(runtime, json);
+      return await runLogout(runtime, json, yes);
     case "account":
       return await runAccount(runtime, json);
     case "groups":
@@ -413,24 +413,43 @@ async function runAccount(runtime: CliRuntime, json: boolean): Promise<number> {
   const context = commandContext(runtime, { json, yes: false });
   const environment = describeAuthEnvironment(context);
   const session = await runAccountUseCase(context, runtime.auth);
-  const remote = await runRemoteAccountUseCase(
-    commandContext(runtime, { json, yes: false }),
-    { ...runtime.auth, fetch: runtime.auth?.fetch ?? globalThis.fetch.bind(globalThis) },
-  ).catch(() => undefined);
+  // H6/account: never silently report success when the Worker entitlement
+  // lookup failed. JSON/automation fails non-zero; interactive mode says so.
+  let remote: Awaited<ReturnType<typeof runRemoteAccountUseCase>>;
+  let remoteError: unknown;
+  try {
+    remote = await runRemoteAccountUseCase(
+      commandContext(runtime, { json, yes: false }),
+      { ...runtime.auth, fetch: runtime.auth?.fetch ?? globalThis.fetch.bind(globalThis) },
+    );
+  } catch (error) {
+    remoteError = error;
+  }
+  if (json && remoteError) throw remoteError;
   const account = { ...session, ...(remote ?? {}) };
   if (json) writeJson(runtime, { ok: true, environment, account });
   else {
     runtime.stdout(`Environment: ${environment}\nAccount: ${account.accountId}\nSession expires: ${new Date(account.expiresAt).toISOString()}\n`);
     if (remote) runtime.stdout(`Tier: ${account.tier}\nEntitlement: ${account.entitlementStatus}\n`);
+    else runtime.stdout("Remote account: unavailable\n");
   }
   return 0;
 }
 
-async function runLogout(runtime: CliRuntime, json: boolean): Promise<number> {
-  const result = await runLogoutUseCase(
-    commandContext(runtime, { json, yes: false }),
-    runtime.auth,
-  );
+async function runLogout(runtime: CliRuntime, json: boolean, yes: boolean): Promise<number> {
+  const context = commandContext(runtime, { json, yes });
+  // H3: interactive logout is explicit; declining leaves credentials intact.
+  if (!json && !yes && runtime.isTTY()) {
+    const confirmed = await context.ui.confirm(
+      "Log out and revoke the current session?",
+      context.signal,
+    );
+    if (confirmed !== true) {
+      runtime.stdout("Cancelled; you are still logged in.\n");
+      return 0;
+    }
+  }
+  const result = await runLogoutUseCase(context, runtime.auth);
   if (json) writeJson(runtime, { ok: true, ...result });
   else
     runtime.stdout(
@@ -665,7 +684,7 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
 
     if (result.action === "settings") {
       if (result.flow === "logout") {
-        await runLogout(runtime, false);
+        await runLogout(runtime, false, true);
         continue;
       }
       const update = await runCliUpdateCheck({

@@ -49,7 +49,10 @@ describe("auth command adapters", () => {
 
   it("account refreshes an expired session once and never prints tokens", async () => {
     const store = memoryStore({ ...session, expiresAt: 0 });
-    const fixture = runtime({ tokenStore: store, fetch: vi.fn(async () => Response.json({ access_token: "new-access", expires_in: 60 })) }, {
+    const fixture = runtime({ tokenStore: store, fetch: vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes("/oauth/token")) return Response.json({ access_token: "new-access", expires_in: 60 });
+      return Response.json({ ok: true, accountId: "auth0|user", tier: "pro", entitlementStatus: "active", validUntil: "2099-01-01T00:00:00.000Z" });
+    }) }, {
       MOEICONS_AUTH0_ISSUER: "https://tenant.auth0.com", MOEICONS_AUTH0_CLIENT_ID: "client",
     });
     expect(await main(["account", "--json"], fixture.runtime)).toBe(0);
@@ -115,6 +118,40 @@ describe("auth command adapters", () => {
     expect(second.out.join("")).toBe("Logged out.\n");
     // No extra revoke call and no Worker logout endpoint.
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("H3: TTY logout confirm decline keeps the session", async () => {
+    const store = memoryStore(session);
+    const out: string[] = [];
+    const runtime = {
+      cwd: () => ".",
+      stdout: (text: string) => out.push(text),
+      stderr: () => {},
+      env: {},
+      isTTY: () => true,
+      readLine: async () => "n",
+      readKey: async () => "",
+      auth: { tokenStore: store, fetch: vi.fn(async () => new Response(null, { status: 200 })) },
+    } satisfies CliRuntime;
+    expect(await main(["logout"], runtime)).toBe(0);
+    expect(out.join("")).toMatch(/still logged in/i);
+    expect(store.getActive()).toBeDefined();
+  });
+
+  it("H3: --yes logout skips the interactive confirm", async () => {
+    const store = memoryStore(session);
+    const runtime = {
+      cwd: () => ".",
+      stdout: () => {},
+      stderr: () => {},
+      env: {},
+      isTTY: () => true,
+      readLine: async () => "n",
+      readKey: async () => "",
+      auth: { tokenStore: store, fetch: vi.fn(async () => new Response(null, { status: 200 })) },
+    } satisfies CliRuntime;
+    expect(await main(["logout", "--yes"], runtime)).toBe(0);
+    expect(store.getActive()).toBeUndefined();
   });
 
   it("hides login only for a current or successfully refreshed session", async () => {
