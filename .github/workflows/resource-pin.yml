@@ -1,0 +1,241 @@
+name: Update CLI resource pin
+
+# E2E-G1A: consume verified moe-icons-code-library-release, refresh bundled
+# catalog + resource-release.json, patch-bump CLI version, and (only when
+# MOEICONS_AUTO_RELEASE_ENABLED=true) push the bot commit that later triggers
+# Publish CLI. workflow_dispatch is dry-run only.
+
+run-name: acceptance ${{ github.event.client_payload.correlationId || inputs.correlationId || github.sha }}
+
+on:
+  repository_dispatch:
+    types: [moe-icons-code-library-release]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: dry_run=true forces zero git writes
+        required: false
+        default: "true"
+        type: string
+      correlationId:
+        required: false
+        type: string
+      resourceVersion:
+        required: false
+        type: string
+      sourceCommit:
+        required: false
+        type: string
+      generatorCommit:
+        required: false
+        type: string
+      privateDescriptorSha256:
+        required: false
+        type: string
+      publicDescriptorSha256:
+        required: false
+        type: string
+      freeCandidateArtifactId:
+        required: false
+        type: string
+      upstreamRunId:
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+  issues: write
+
+concurrency:
+  group: cli-auto-release
+  cancel-in-progress: false
+
+jobs:
+  pin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Reject workflow_dispatch writes
+        id: dispatchcheck
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DRY_RUN" != "true" ]; then
+            echo "workflow_dispatch is reserved for dry_run=true" >&2
+            exit 1
+          fi
+          echo "write_allowed=1" >> "$GITHUB_OUTPUT"
+
+      - name: Check auto-release switch (F6)
+        id: switch
+        env:
+          MOEICONS_AUTO_RELEASE_ENABLED: ${{ vars.MOEICONS_AUTO_RELEASE_ENABLED }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "blocked=1" >> "$GITHUB_OUTPUT"
+          elif [ "$MOEICONS_AUTO_RELEASE_ENABLED" != "true" ]; then
+            echo "blocked=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "blocked=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Materialize event payload
+        id: payload
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PAYLOAD: ${{ toJson(github.event.client_payload) }}
+          OUT: ${{ runner.temp }}/cli-pin-event.json
+          RESOURCE_VERSION: ${{ inputs.resourceVersion }}
+          SOURCE_COMMIT: ${{ inputs.sourceCommit }}
+          GENERATOR_COMMIT: ${{ inputs.generatorCommit }}
+          PRIVATE_SHA: ${{ inputs.privateDescriptorSha256 }}
+          PUBLIC_SHA: ${{ inputs.publicDescriptorSha256 }}
+          ARTIFACT_ID: ${{ inputs.freeCandidateArtifactId }}
+          UPSTREAM_RUN_ID: ${{ inputs.upstreamRunId }}
+          CORRELATION_ID: ${{ inputs.correlationId }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            node -e '
+              const fs=require("fs");
+              const p=JSON.parse(process.env.PAYLOAD);
+              fs.writeFileSync(process.env.OUT, JSON.stringify(p,null,2)+"\n");
+            '
+          else
+            node -e '
+              const fs=require("fs");
+              const p={
+                resourceVersion: process.env.RESOURCE_VERSION,
+                sourceCommit: process.env.SOURCE_COMMIT,
+                generatorCommit: process.env.GENERATOR_COMMIT,
+                privateDescriptorSha256: process.env.PRIVATE_SHA,
+                publicDescriptorSha256: process.env.PUBLIC_SHA,
+                freeCandidateArtifactId: process.env.ARTIFACT_ID,
+                upstreamRunId: process.env.UPSTREAM_RUN_ID,
+                correlationId: process.env.CORRELATION_ID || null,
+              };
+              fs.writeFileSync(process.env.OUT, JSON.stringify(p,null,2)+"\n");
+            '
+          fi
+
+      - name: Validate event
+        run: node scripts/validate-code-library-event.mjs "$RUNNER_TEMP/cli-pin-event.json" | tee "$RUNNER_TEMP/cli-pin-event.validated.json"
+
+      - name: Download free-candidate artifact (catalog source)
+        if: ${{ github.event_name == 'repository_dispatch' || inputs.freeCandidateArtifactId != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.CODE_LIBRARY_ARTIFACT_READ_TOKEN || secrets.CODE_LIBRARY_READ_TOKEN }}
+          ARTIFACT_ID: ${{ github.event.client_payload.freeCandidateArtifactId || github.event.client_payload.artifactId || inputs.freeCandidateArtifactId }}
+        run: |
+          set -euo pipefail
+          test -n "${GH_TOKEN:-}"
+          echo "::add-mask::$GH_TOKEN"
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          mkdir -p "$RUNNER_TEMP/candidate"
+          gh api "repos/moewolf-dev/moe-icons-code-library/actions/artifacts/${ARTIFACT_ID}/zip" > "$RUNNER_TEMP/candidate.zip"
+          unzip -q "$RUNNER_TEMP/candidate.zip" -d "$RUNNER_TEMP/candidate"
+          VERSION="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).resourceVersion)" "$RUNNER_TEMP/cli-pin-event.validated.json")"
+          META="$RUNNER_TEMP/candidate/moe-icons-free-metadata-${VERSION}.tgz"
+          test -f "$META"
+          mkdir -p "$RUNNER_TEMP/metadata"
+          tar -xzf "$META" -C "$RUNNER_TEMP/metadata"
+          # metadata archive layout: metadata/catalog.json
+          CATALOG="$(find "$RUNNER_TEMP/metadata" -name catalog.json | head -n 1)"
+          test -f "$CATALOG"
+          cp "$CATALOG" "$RUNNER_TEMP/catalog.json"
+          echo "catalog_sha=$(shasum -a 256 "$RUNNER_TEMP/catalog.json" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+        id: catalog
+
+      - name: Fixture catalog for dry-run without artifact
+        id: fixturecatalog
+        if: ${{ steps.catalog.outcome == 'skipped' || steps.catalog.outputs.catalog_sha == '' }}
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs=require("fs");
+            const event=JSON.parse(fs.readFileSync(process.env.EVENT,"utf8"));
+            const catalog=JSON.parse(fs.readFileSync("src/catalog/catalog.json","utf8"));
+            catalog.catalogVersion=event.resourceVersion;
+            catalog.sourceVersion=event.resourceVersion;
+            catalog.sourceCommit=event.sourceCommit;
+            catalog.generatorCommit=event.generatorCommit;
+            fs.writeFileSync(process.env.OUT, JSON.stringify(catalog,null,2)+"\n");
+          '
+          echo "catalog_sha=$(shasum -a 256 "$RUNNER_TEMP/catalog.json" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+        env:
+          EVENT: ${{ runner.temp }}/cli-pin-event.validated.json
+          OUT: ${{ runner.temp }}/catalog.json
+
+      - name: Apply resource pin (dry-run when switch blocked)
+        id: apply
+        run: |
+          set -euo pipefail
+          EXTRA=(--dry-run)
+          if [ "${{ steps.switch.outputs.blocked }}" = "0" ] && [ "${{ steps.dispatchcheck.outputs.write_allowed }}" = "1" ]; then
+            EXTRA=()
+          fi
+          node scripts/apply-resource-pin.mjs \
+            --event "$RUNNER_TEMP/cli-pin-event.validated.json" \
+            --catalog "$RUNNER_TEMP/catalog.json" \
+            "${EXTRA[@]}" | tee "$RUNNER_TEMP/pin-apply.json"
+          echo "action=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).action)" "$RUNNER_TEMP/pin-apply.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Plan and optionally commit pin bump
+        if: steps.apply.outputs.action == 'apply' && steps.switch.outputs.blocked == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).resourceVersion)" "$RUNNER_TEMP/cli-pin-event.validated.json")"
+          node scripts/plan-resource-pin-commit.mjs --resource-version "$VERSION" > "$RUNNER_TEMP/pin-commit.json"
+          NEXT="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).nextCliVersion)" "$RUNNER_TEMP/pin-commit.json")"
+          MSG="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).commitMessage)" "$RUNNER_TEMP/pin-commit.json")"
+          node scripts/plan-resource-pin-commit.mjs --resource-version "$VERSION" --apply-version "$NEXT" > /dev/null
+          git config user.name "moe-icons-release-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/catalog/catalog.json src/catalog/resource-release.json package.json package-lock.json
+          EXTRA="$(git diff --cached --name-only | grep -vE '^(src/catalog/catalog\.json|src/catalog/resource-release\.json|package\.json|package-lock\.json)$' || true)"
+          if [ -n "$EXTRA" ]; then
+            echo "disallowed staged paths:" >&2
+            echo "$EXTRA" >&2
+            exit 1
+          fi
+          git commit -m "$MSG"
+          git push origin HEAD:main
+
+      - name: Dry-run / blocked conclusion
+        if: steps.switch.outputs.blocked == '1'
+        run: |
+          echo "MOEICONS_AUTO_RELEASE_ENABLED is not true (or workflow_dispatch dry-run): validated pin plan, no git push."
+          test -f "$RUNNER_TEMP/pin-apply.json"
+
+      - name: Notify unique auto-release failure (F6)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESOURCE_VERSION: ${{ github.event.client_payload.resourceVersion || inputs.resourceVersion }}
+          CORRELATION_ID: ${{ github.event.client_payload.correlationId || inputs.correlationId }}
+        run: |
+          set -euo pipefail
+          CID="${CORRELATION_ID:-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-cli-pin}"
+          node scripts/notify-release-failure.cjs --execute \
+            --repo "${GITHUB_REPOSITORY}" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --stage "cli-resource-pin" \
+            --resource-version "${RESOURCE_VERSION:-n/a}" \
+            --correlation-id "$CID" \
+            --attempt "${GITHUB_RUN_ATTEMPT}" \
+            --conclusion "failure"
