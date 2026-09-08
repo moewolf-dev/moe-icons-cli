@@ -8,6 +8,7 @@ import type { CommandContext } from "./context.js";
 import { downloadProArtifact } from "./pro-download.js";
 import { artifactCachePath, metadataCachePath } from "./free-download.js";
 import { selectTargetSubtree } from "./target-subtree.js";
+import { typesReexport } from "./install.js";
 import { CliError } from "../errors/index.js";
 import type { Target } from "../commands/parser.js";
 import { homedir } from "node:os";
@@ -99,7 +100,7 @@ export async function runProInstallUseCase(
     ".moeicons/catalog.json": downloaded.catalogJson,
     ".moeicons/manifest.json": downloaded.manifestJson,
     ".moeicons/MANUAL.md": downloaded.manualMd,
-    "src/moeicons/types.ts": `export type { ReactIconProps } from "moe-icons";\n`,
+    "src/moeicons/types.ts": typesReexport("pro", target),
     "src/moeicons/.moeicons-pro.marker": "pro\n",
   };
   for (const [rel, bytes] of Object.entries(subtree.files)) {

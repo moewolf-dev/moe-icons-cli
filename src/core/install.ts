@@ -40,6 +40,17 @@ export interface InstallUseCaseDeps {
   readonly download: Omit<FreeDownloadIo, "signal">;
 }
 
+/**
+ * P0-3: the project `types.ts` must re-export a type that actually exists in the
+ * installed `moe-icons` package. Assets have no component type, so it is empty.
+ */
+export function typesReexport(tier: "free" | "pro", target: Target): string {
+  if (target === "react") return `export type { ReactIconProps } from "moe-icons/${tier}/react";\n`;
+  if (target === "vue") return `export type { VueIconProps } from "moe-icons/${tier}/vue";\n`;
+  if (target === "vanilla") return `export type { VanillaIconOptions } from "moe-icons/${tier}/vanilla";\n`;
+  return "export {};\n";
+}
+
 function normalizeGroup(group: string | undefined): "free" | "pro" {
   if (group === undefined || group === "free") return "free";
   if (group === "ent") return "pro";
@@ -121,7 +132,7 @@ export async function runInstallUseCase(
     ".moeicons/catalog.json": catalogJson,
     ".moeicons/manifest.json": downloaded.manifestJson,
     ".moeicons/MANUAL.md": downloaded.manualMd,
-    "src/moeicons/types.ts": `export type { ReactIconProps } from "moe-icons";\n`,
+    "src/moeicons/types.ts": typesReexport("free", target),
     "src/moeicons/.moeicons-free.marker": "free\n",
   };
   for (const [rel, bytes] of Object.entries(subtree.files)) {
