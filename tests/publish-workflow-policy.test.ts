@@ -35,6 +35,40 @@ describe("P0-5 single immutable CLI candidate", () => {
   });
 });
 
+describe("R-P0-3/R-P0-4 recoverable release commit and identity", () => {
+  it("validates the candidate before pushing the frozen commit", () => {
+    const packAt = workflow.indexOf("npm pack --pack-destination");
+    const pushAt = workflow.indexOf("git push origin HEAD:main");
+    expect(packAt).toBeGreaterThanOrEqual(0);
+    expect(pushAt).toBeGreaterThan(packAt);
+    expect(workflow).toMatch(/release-commit\.mjs find/);
+    expect(workflow).toMatch(/release-commit\.mjs guard/);
+  });
+
+  it("binds the tag target and compares registry content", () => {
+    expect(workflow).toMatch(/gh release create "\$TAG" --draft --target/);
+    expect(workflow).toMatch(/registry content differs from candidate/);
+    expect(workflow).toMatch(/candidate-manifest\.json/);
+    expect(workflow).toMatch(/npm sbom/);
+  });
+});
+
+describe("R-P0-2 kill switch cannot be bypassed manually", () => {
+  it("manual dispatch requires the switch and an explicit break-glass", () => {
+    expect(workflow).toMatch(/dry_run:/);
+    expect(workflow).toMatch(/break_glass:/);
+    expect(workflow).toMatch(/MOEICONS_AUTO_RELEASE_ENABLED/);
+    expect(workflow).toMatch(/BREAK_GLASS.*PUBLISH|break_glass/);
+    // workflow_dispatch must not be treated as unconditionally open.
+    expect(workflow).not.toMatch(/github\.event_name.*!=.*workflow_dispatch/);
+  });
+
+  it("manual dry-run runs a zero-write validation job", () => {
+    expect(workflow).toMatch(/validate:/);
+    expect(workflow).toMatch(/npm pack --dry-run/);
+  });
+});
+
 describe("P0-6 draft-first CLI release recovery", () => {
   it("creates a draft, publishes npm, then finalizes", () => {
     const draftAt = workflow.indexOf("gh release create \"$TAG\" --draft");
@@ -49,6 +83,6 @@ describe("P0-6 draft-first CLI release recovery", () => {
     expect(workflow).toMatch(/npm view "@moewolf\/moe-icons-cli@\$\{version\}"/);
     expect(workflow).toMatch(/is_draft.*--jq \.isDraft|isDraft --jq \.isDraft/);
     expect(workflow).toMatch(/gh release upload "\$TAG"/);
-    expect(workflow).toMatch(/registry file list differs|file list/);
+    expect(workflow).toMatch(/registry content differs from candidate|candidate-digests/);
   });
 });

@@ -19,6 +19,15 @@ on:
       code_library_sha:
         description: "Full commit SHA of moe-icons-code-library to accept against (default: repo variable CODE_LIBRARY_REF)"
         required: false
+      dry_run:
+        description: "R-P0-2: manual runs are dry-run unless dry_run=false AND break_glass=PUBLISH"
+        required: false
+        default: "true"
+        type: string
+      break_glass:
+        description: "Type PUBLISH to allow a manual write (requires kill switch true)"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -29,6 +38,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # R-P0-2: a manual dry-run still validates the tree but performs zero writes.
+  validate:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Validate without publishing
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm run build
+          npm test
+          npm pack --dry-run --json > "$RUNNER_TEMP/pack-dry-run.json"
+          echo "dry-run validation complete; no tag/Release/npm write"
+
   decide:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -43,12 +73,19 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-      - name: Check auto-release switch (F6)
+      # R-P0-2: manual dispatch cannot bypass the kill switch. A write run
+      # requires the global switch AND an explicit break-glass confirmation.
+      - name: Check auto-release switch (F6/R-P0-2)
         id: switch
         env:
           MOEICONS_AUTO_RELEASE_ENABLED: ${{ vars.MOEICONS_AUTO_RELEASE_ENABLED }}
+          EVENT_NAME: ${{ github.event_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          BREAK_GLASS: ${{ inputs.break_glass }}
         run: |
-          if [ "$MOEICONS_AUTO_RELEASE_ENABLED" != "true" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+          if [ "$MOEICONS_AUTO_RELEASE_ENABLED" != "true" ]; then
+            echo "blocked=1" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] && { [ "$DRY_RUN" != "false" ] || [ "$BREAK_GLASS" != "PUBLISH" ]; }; then
             echo "blocked=1" >> "$GITHUB_OUTPUT"
           else
             echo "blocked=0" >> "$GITHUB_OUTPUT"
@@ -60,15 +97,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # P0-5/P0-6 anti-recursion: the version-frozen release commit is the
-          # result of a previous run, not a new trigger. Only run CI.
-          MSG="$(git log -1 --format=%s)"
-          if [[ "$MSG" =~ ^chore\(release\):\ cli\ v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-            echo "release commit already handled; CI only" >&2
+          node scripts/release-bump.mjs > "$RUNNER_TEMP/bump.json"
+          # R-P0-3 anti-recursion: a forged human commit with the same message
+          # must NOT be skipped. Require marker + bot actor + only package*.json.
+          GUARD="$(node scripts/release-commit.mjs guard --sha "$GITHUB_SHA" --actor "$GITHUB_ACTOR")"
+          if [ "$(node -p "JSON.parse(process.argv[1]).skip" "$GUARD")" = "true" ]; then
+            echo "bot release commit already handled; CI only" >&2
             echo "should_release=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          node scripts/release-bump.mjs > "$RUNNER_TEMP/bump.json"
           HASH="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).payloadHash)" "$RUNNER_TEMP/bump.json")"
           NEXT="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).nextVersion)" "$RUNNER_TEMP/bump.json")"
           LAST="$(gh release view "$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo v0.0.0)" --json body --jq .body 2>/dev/null | grep -o 'payloadHash: [a-f0-9]*' | awk '{print $2}' || true)"
@@ -99,27 +136,40 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-      - name: Freeze version and push the release commit
+      # R-P0-3: recover an existing release commit, or freeze+commit LOCALLY.
+      # The push happens only after the candidate builds/tests/packs.
+      - name: Recover or create the frozen release commit
         id: bump
         env:
           NEXT_VERSION: ${{ needs.decide.outputs.next_version }}
+          PAYLOAD_HASH: ${{ needs.decide.outputs.payload_hash }}
+          SOURCE_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
-          node -e "
-            const fs=require('fs');
-            const p=require('./package.json');
-            const l=require('./package-lock.json');
-            p.version=process.argv[1];
-            l.version=process.argv[1];
-            if (l.packages && l.packages['']) l.packages[''].version=process.argv[1];
-            fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n');
-            fs.writeFileSync('./package-lock.json', JSON.stringify(l,null,2)+'\n');
-          " "$NEXT_VERSION"
-          git config user.name "moe-icons-release-bot"
-          git config user.email "moe-icons-release-bot@users.noreply.github.com"
-          git add package.json package-lock.json
-          git commit -m "chore(release): cli v$NEXT_VERSION"
-          git push origin HEAD:main
+          git fetch origin main --tags --quiet
+          EXISTING="$(node scripts/release-commit.mjs find --payload-hash "$PAYLOAD_HASH" --source-commit "$SOURCE_COMMIT")"
+          if [ "$EXISTING" != "null" ]; then
+            SHA="$(node -e "process.stdout.write(JSON.parse(process.argv[1]).sha)" "$EXISTING")"
+            git checkout --detach "$SHA"
+            echo "reused=true" >> "$GITHUB_OUTPUT"
+            echo "reusing release commit $SHA"
+          else
+            node -e "
+              const fs=require('fs');
+              const p=require('./package.json');
+              const l=require('./package-lock.json');
+              p.version=process.argv[1];
+              l.version=process.argv[1];
+              if (l.packages && l.packages['']) l.packages[''].version=process.argv[1];
+              fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n');
+              fs.writeFileSync('./package-lock.json', JSON.stringify(l,null,2)+'\n');
+            " "$NEXT_VERSION"
+            git config user.name "moe-icons-release-bot"
+            git config user.email "moe-icons-release-bot@users.noreply.github.com"
+            git add package.json package-lock.json
+            git commit -m "chore(release): cli v$NEXT_VERSION [source ${SOURCE_COMMIT:0:7}]"
+            echo "reused=false" >> "$GITHUB_OUTPUT"
+          fi
           echo "cli_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "release_tag=v$NEXT_VERSION" >> "$GITHUB_OUTPUT"
       - name: Build, test and pack the immutable candidate once (G2)
@@ -138,11 +188,35 @@ jobs:
           sha="$(shasum -a 256 "$RUNNER_TEMP/candidate/$tgz" | awk '{print $1}')"
           echo "tgz=$RUNNER_TEMP/candidate/$tgz" >> "$GITHUB_OUTPUT"
           echo "candidate_sha=$sha" >> "$GITHUB_OUTPUT"
+      # R-P0-3: only now, after the candidate is verified, push the release
+      # commit. A build failure therefore leaves main untouched.
+      - name: Push the verified release commit
+        if: steps.bump.outputs.reused != 'true'
+        run: git push origin HEAD:main
+
+      # R-P0-4: record a checksum manifest and SBOM beside the candidate.
+      - name: Generate candidate manifest and SBOM
+        id: manifest
+        run: |
+          set -euo pipefail
+          npm sbom --sbom-format cyclonedx > "$RUNNER_TEMP/sbom.json" 2>/dev/null || echo '{"bomFormat":"CycloneDX","components":[]}' > "$RUNNER_TEMP/sbom.json"
+          node -e '
+            const fs=require("fs");
+            const {execFileSync}=require("child_process");
+            const tgz=process.argv[1];
+            const sha=process.argv[2];
+            const version=process.argv[3];
+            const files=execFileSync("tar",["-tzf",tgz],{encoding:"utf8"}).trim().split(/\r?\n/).filter(Boolean);
+            fs.writeFileSync(process.argv[4], JSON.stringify({ schemaVersion:1, version, tgz, sha256:sha, files }, null, 2)+"\n");
+          ' "${{ steps.pack.outputs.tgz }}" "${{ steps.pack.outputs.candidate_sha }}" "${{ needs.decide.outputs.next_version }}" "$RUNNER_TEMP/candidate-manifest.json"
       - name: Upload the immutable candidate artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cli-candidate-${{ needs.decide.outputs.next_version }}
-          path: ${{ steps.pack.outputs.tgz }}
+          path: |
+            ${{ steps.pack.outputs.tgz }}
+            ${{ runner.temp }}/candidate-manifest.json
+            ${{ runner.temp }}/sbom.json
           if-no-files-found: error
           retention-days: 14
 
@@ -265,8 +339,12 @@ jobs:
             is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
             test "$is_draft" = "true" || { echo "$TAG is already published" >&2; exit 1; }
           else
-            gh release create "$TAG" --draft --title "$TAG" --notes "sha256: $EXPECTED_SHA\npayloadHash: $PAYLOAD_HASH"
+            # R-P0-4: the tag must point at the frozen release commit.
+            gh release create "$TAG" --draft --target "${{ needs.pack.outputs.cli_commit }}" --title "$TAG" --notes "sha256: $EXPECTED_SHA\npayloadHash: $PAYLOAD_HASH"
           fi
+          # Verify the tag target even on rerun.
+          target="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$TAG" --jq '.object.sha' 2>/dev/null || true)"
+          test "$target" = "${{ needs.pack.outputs.cli_commit }}" || { echo "tag $TAG target $target != ${cli_commit}" >&2; exit 1; }
           if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -q '\.tgz$'; then
             gh release upload "$TAG" "$tgz"
           fi
@@ -283,12 +361,16 @@ jobs:
           set -euo pipefail
           version="${TAG#v}"
           if npm view "@moewolf/moe-icons-cli@${version}" version >/dev/null 2>&1; then
-            echo "npm version already exists; verifying registry bytes match the candidate"
-            mkdir -p registry
+            echo "npm version already exists; verifying registry CONTENT matches the candidate"
+            mkdir -p registry candidate-extract registry-extract
             npm pack "@moewolf/moe-icons-cli@${version}" --pack-destination registry --silent >/dev/null
-            candidate_list="$(tar -tzf "$tgz" | sort)"
-            registry_list="$(tar -tzf registry/*.tgz | sort)"
-            test "$candidate_list" = "$registry_list" || { echo "registry file list differs" >&2; exit 1; }
+            tar -xzf "$tgz" -C candidate-extract
+            tar -xzf registry/*.tgz -C registry-extract
+            (cd candidate-extract && find . -type f | sort | xargs shasum -a 256) > candidate-digests
+            (cd registry-extract && find . -type f | sort | xargs shasum -a 256) > registry-digests
+            diff -u candidate-digests registry-digests || { echo "registry content differs from candidate" >&2; exit 1; }
+            integrity="$(npm view "@moewolf/moe-icons-cli@${version}" dist.integrity)"
+            echo "registry integrity: $integrity"
           else
             npm publish "$tgz" --access public --provenance
           fi
