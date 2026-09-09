@@ -2,6 +2,15 @@ import { gzipSync, gunzipSync } from "node:zlib";
 
 const BLOCK = 512;
 
+/**
+ * Combined release archives contain all four target trees. The current Pro
+ * contract is roughly 60k regular files (9 groups × 554 icons), so the former
+ * 20k cap rejected valid official packages. Keep a finite ceiling above the
+ * full release matrix while retaining zip-bomb/path protections.
+ */
+export const ICON_ARCHIVE_MAX_ENTRIES = 100_000;
+export const ICON_ARCHIVE_MAX_EXPANDED_BYTES = 128 * 1024 * 1024;
+
 function checksumHeader(header: Buffer): number {
   let sum = 0;
   for (let i = 0; i < BLOCK; i += 1) sum += header[i] ?? 0;

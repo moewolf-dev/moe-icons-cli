@@ -10,7 +10,7 @@ import { readMoeiconsConfig, type MoeiconsConfigFile } from "../project/config.j
 import { planGeneratedFiles } from "../generator/generate.js";
 import { ensureClassMergeDependencies, planTailwindIntegration } from "../project/tailwind.js";
 import { CliError, isCliError } from "../errors/index.js";
-import { extractTarGz } from "../project/tar-gz.js";
+import { extractTarGz, ICON_ARCHIVE_MAX_ENTRIES, ICON_ARCHIVE_MAX_EXPANDED_BYTES } from "../project/tar-gz.js";
 import { artifactCachePath } from "./free-download.js";
 import { resolveThemes } from "../generator/theme-resolve.js";
 import type { CommandContext } from "./context.js";
@@ -115,8 +115,8 @@ export function loadArchiveFiles(
   const fixtureTgz = env.MOEICONS_BITMAP_ARCHIVE;
   if (fixtureTgz && fs_.existsSync(fixtureTgz)) {
     const unpacked = extractTarGz(readBinaryFile(fs_, fixtureTgz), {
-      maxEntries: 20_000,
-      maxExpandedBytes: 64 * 1024 * 1024,
+      maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
+      maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
     });
     if (unpacked.errors.length > 0)
       return { ok: false, reason: unpacked.errors[0] ?? "invalid bitmap archive fixture" };
@@ -159,8 +159,8 @@ export function loadArchiveFiles(
     const cached = artifactCachePath(cacheDir, meta.artifactVersion, meta.artifactSha256);
     if (fs_.existsSync(cached)) {
       const unpacked = extractTarGz(readBinaryFile(fs_, cached), {
-        maxEntries: 20_000,
-        maxExpandedBytes: 64 * 1024 * 1024,
+        maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
+        maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
       });
       if (unpacked.errors.length > 0)
         return { ok: false, reason: unpacked.errors[0] ?? "invalid cached artifact" };

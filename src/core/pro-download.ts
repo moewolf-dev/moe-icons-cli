@@ -1,5 +1,5 @@
 import { CliError } from "../errors/index.js";
-import { extractTarGz, decodeUtf8 } from "../project/tar-gz.js";
+import { extractTarGz, decodeUtf8, ICON_ARCHIVE_MAX_ENTRIES, ICON_ARCHIVE_MAX_EXPANDED_BYTES } from "../project/tar-gz.js";
 import { sha256Bytes } from "../project/install-metadata.js";
 import {
   downloadSignedArtifact,
@@ -181,7 +181,7 @@ export async function downloadProArtifact(context: CommandContext, auth: AuthUse
   const descriptor = await fetchProDescriptor(context, auth, expected, { fetch: fetchFn });
   const downloadOptions = proSignedDownloadOptions(context, deps);
   const artifactBytes = await downloadSignedArtifact({ url: descriptor.url, expiresAt: descriptor.expiresAt, size: descriptor.size, sha256: descriptor.sha256 }, downloadOptions);
-  const extracted = extractTarGz(artifactBytes, { maxEntries: 20_000, maxExpandedBytes: 64 * 1024 * 1024 });
+  const extracted = extractTarGz(artifactBytes, { maxEntries: ICON_ARCHIVE_MAX_ENTRIES, maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES });
   if (extracted.errors.length > 0) throw new CliError("VALIDATION_ERROR", extracted.errors[0] ?? "invalid pro archive");
   const catalog = extracted.files[descriptor.catalogFilename] ?? extracted.files[`./${descriptor.catalogFilename}`];
   if (!catalog || sha256Bytes(catalog) !== descriptor.catalogSha256) throw new CliError("VALIDATION_ERROR", "pro catalog SHA-256 mismatch");

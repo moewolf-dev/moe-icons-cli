@@ -14,7 +14,7 @@ import {
 } from "../project/install-metadata.js";
 import { withProjectLock } from "../project/project-lock.js";
 import { ensureClassMergeDependencies, planTailwindIntegration } from "../project/tailwind.js";
-import { extractTarGz } from "../project/tar-gz.js";
+import { extractTarGz, ICON_ARCHIVE_MAX_ENTRIES, ICON_ARCHIVE_MAX_EXPANDED_BYTES } from "../project/tar-gz.js";
 import type { AuthUseCaseDependencies } from "./auth.js";
 import type { CommandContext } from "./context.js";
 import { artifactCachePath, downloadFreeRelease, metadataCachePath, type FreeDownloadIo } from "./free-download.js";
@@ -137,8 +137,8 @@ export async function runLibraryUpdateUseCase(
   if (loaded.kind !== "ok" || loaded.config.tier !== expected.tier)
     throw new CliError("VALIDATION_ERROR", `config is invalid for the ${expected.tier} candidate`);
   const unpacked = extractTarGz(archiveBytes, {
-    maxEntries: 20_000,
-    maxExpandedBytes: 64 * 1024 * 1024,
+    maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
+    maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
   });
   if (unpacked.errors.length)
     throw new CliError("VALIDATION_ERROR", unpacked.errors[0] ?? "invalid artifact");

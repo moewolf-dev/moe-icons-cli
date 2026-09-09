@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { gzipSync } from "node:zlib";
-import { extractTarGz } from "../src/project/tar-gz.js";
+import { extractTarGz, ICON_ARCHIVE_MAX_ENTRIES, ICON_ARCHIVE_MAX_EXPANDED_BYTES } from "../src/project/tar-gz.js";
 import { createTarGz } from "../src/project/tar-gz.js";
 
 const BLOCK = 512;
@@ -37,6 +37,16 @@ function rawTar(name: string, typeflag: number, body = ""): Uint8Array {
 }
 
 describe("tar-gz extraction hardening (R3/R6)", () => {
+  it("allows the current full Pro release matrix without removing the finite cap", () => {
+    // Current production shape: 9 groups × 554 icons × about 12 files across
+    // React/Vue/Vanilla/Assets, plus package and metadata entries.
+    const currentProEntries = 9 * 554 * 12 + 128;
+    expect(ICON_ARCHIVE_MAX_ENTRIES).toBeGreaterThan(currentProEntries);
+    expect(ICON_ARCHIVE_MAX_ENTRIES).toBeLessThanOrEqual(100_000);
+    expect(ICON_ARCHIVE_MAX_EXPANDED_BYTES).toBeGreaterThan(58_423_609);
+    expect(ICON_ARCHIVE_MAX_EXPANDED_BYTES).toBeLessThanOrEqual(128 * 1024 * 1024);
+  });
+
   it("rejects symlink entries instead of silently skipping them", () => {
     const result = extractTarGz(rawTar("evil-link", 0x32), { maxEntries: 100, maxExpandedBytes: 1024 });
     expect(result.errors.length).toBeGreaterThan(0);

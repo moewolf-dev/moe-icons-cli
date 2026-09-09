@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { extractTarGz } from "../project/tar-gz.js";
+import { extractTarGz, ICON_ARCHIVE_MAX_ENTRIES, ICON_ARCHIVE_MAX_EXPANDED_BYTES } from "../project/tar-gz.js";
 import type { ReleaseTarget, ReleaseTargetMetadata } from "./release-descriptor.js";
 import type { Target } from "../commands/parser.js";
 
@@ -109,8 +109,8 @@ export function selectTargetSubtree(
   target: Target,
 ): TargetSubtreeResult {
   const extracted = extractTarGz(archiveBytes, {
-    maxEntries: 20_000,
-    maxExpandedBytes: 64 * 1024 * 1024,
+    maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
+    maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
   });
   if (extracted.errors.length > 0) {
     return { ok: false, reason: "validation", message: extracted.errors[0] ?? "invalid archive" };

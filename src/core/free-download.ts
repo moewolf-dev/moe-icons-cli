@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { downloadArtifact, verifyArtifact, type DownloadLimits } from "../project/install.js";
-import { decodeUtf8, extractTarGz } from "../project/tar-gz.js";
+import { decodeUtf8, extractTarGz, ICON_ARCHIVE_MAX_ENTRIES, ICON_ARCHIVE_MAX_EXPANDED_BYTES } from "../project/tar-gz.js";
 import { catalog as bundledCatalog } from "../catalog/catalog.js";
 import { cacheArtifact, type CacheIo } from "./cache.js";
 import { extractAndVerifyMetadataArchive, type MetadataArchiveFiles } from "../metadata/archive.js";
@@ -167,7 +167,7 @@ async function loadBytes(
 function catalogFromArchive(artifactBytes: Uint8Array, catalogFilename: string, expectedSha: string):
   | { ok: true; json: string }
   | FreeDownloadFailure {
-  const unpacked = extractTarGz(artifactBytes, { maxEntries: 20_000, maxExpandedBytes: ARTIFACT_MAX_BYTES });
+  const unpacked = extractTarGz(artifactBytes, { maxEntries: ICON_ARCHIVE_MAX_ENTRIES, maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES });
   if (unpacked.errors.length > 0) {
     return { ok: false, reason: "validation", message: unpacked.errors[0] ?? "extract failed" };
   }
