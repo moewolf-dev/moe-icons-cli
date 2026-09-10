@@ -24,42 +24,39 @@ export interface MatchBitmapOptions {
 }
 
 function normalizeArchivePath(rel: string): string {
-  return rel.replace(/\\/g, "/").replace(/^\.\//, "");
+  return rel.replace(/^\.\//, "");
 }
 
 /**
- * Identify a bitmap file inside a free/pro archive by parsing a directory
- * segment as a resourceVariantId. v2 uses controlled keyword tokens; v1 uses the
- * explicit legacy `<group>-<format>-<size>` branch.
+ * Identify a bitmap file at its canonical archive location
+ * `assets/<resourceVariantId>/<iconId>.<format>`. v2 uses controlled keyword
+ * tokens; v1 uses the explicit legacy `<group>-<format>-<size>` branch.
  */
 export function matchArchiveBitmapFile(
   archivePath: string,
   options: MatchBitmapOptions = {},
 ): { readonly variant: ResourceVariant; readonly iconId: string } | undefined {
   const mediaContractVersion = options.mediaContractVersion ?? 2;
+  if (archivePath.includes("\\")) return undefined;
   const cleaned = normalizeArchivePath(archivePath);
-  const parts = cleaned.split("/").filter(Boolean);
-  if (parts.length < 2) return undefined;
-  const file = parts[parts.length - 1] ?? "";
+  const parts = cleaned.split("/");
+  if (parts.length !== 3 || parts[0] !== "assets") return undefined;
+  const file = parts[2] ?? "";
   const dot = file.lastIndexOf(".");
   if (dot <= 0) return undefined;
   const format = file.slice(dot + 1) as BitmapFormat;
   const iconId = file.slice(0, dot);
-  if (!iconId || iconId.includes("..")) return undefined;
-  for (let i = 0; i < parts.length - 1; i += 1) {
-    const segment = parts[i] ?? "";
-    try {
-      const variant =
-        mediaContractVersion === 1
-          ? parseLegacyResourceVariantId(segment)
-          : parseResourceVariantId(segment);
-      if (variant.format !== format) continue;
-      return { variant, iconId };
-    } catch {
-      continue;
-    }
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(iconId)) return undefined;
+  try {
+    const variant =
+      mediaContractVersion === 1
+        ? parseLegacyResourceVariantId(parts[1] ?? "")
+        : parseResourceVariantId(parts[1] ?? "");
+    if (variant.format !== format) return undefined;
+    return { variant, iconId };
+  } catch {
+    return undefined;
   }
-  return undefined;
 }
 
 export type SelectBitmapAssetsResult =
@@ -80,6 +77,7 @@ export function selectBitmapVariantAssets(
   const iconSet = new Set(iconIds);
   const skipped: string[] = [];
   const chosen = new Map<string, SelectedBitmapAsset>();
+  const errors: string[] = [];
 
   for (const [archivePath, bytes] of Object.entries(archiveFiles)) {
     const matched = matchArchiveBitmapFile(archivePath, options);
@@ -93,6 +91,10 @@ export function selectBitmapVariantAssets(
       continue;
     }
     const destRel = assetRelativePath(matched.variant.resourceVariantId, matched.iconId, matched.variant.format);
+    if (chosen.has(destRel)) {
+      errors.push(`duplicate bitmap asset for "${destRel}"`);
+      continue;
+    }
     chosen.set(destRel, {
       destRel,
       bytes,
@@ -101,7 +103,6 @@ export function selectBitmapVariantAssets(
     });
   }
 
-  const errors: string[] = [];
   for (const variant of variants) {
     for (const iconId of iconIds) {
       const destRel = assetRelativePath(variant.resourceVariantId, iconId, variant.format);

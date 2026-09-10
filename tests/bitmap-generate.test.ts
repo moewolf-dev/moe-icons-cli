@@ -103,13 +103,15 @@ function fakeUi(): CommandUi {
 
 describe("bitmap asset selection (G5)", () => {
   it("matches archive paths by parsing a directory segment as resourceVariantId", () => {
-    expect(matchArchiveBitmapFile("moe-cute-3d-256-webp/ui-search.webp")).toMatchObject({
+    expect(matchArchiveBitmapFile("assets/moe-cute-3d-256-webp/ui-search.webp")).toMatchObject({
       iconId: "ui-search",
       variant: { resourceVariantId: "moe-cute-3d-256-webp" },
     });
-    expect(matchArchiveBitmapFile("prefix/assets/moe-cute-3d-512-png/ui-search.png")?.variant.resourceVariantId).toBe(
+    expect(matchArchiveBitmapFile("assets/moe-cute-3d-512-png/ui-search.png")?.variant.resourceVariantId).toBe(
       "moe-cute-3d-512-png",
     );
+    expect(matchArchiveBitmapFile("prefix/assets/moe-cute-3d-512-png/ui-search.png")).toBeUndefined();
+    expect(matchArchiveBitmapFile("assets/moe-cute-3d-512-png/not_canonical.png")).toBeUndefined();
     expect(matchArchiveBitmapFile("catalog.json")).toBeUndefined();
   });
 
@@ -143,6 +145,23 @@ describe("bitmap asset selection (G5)", () => {
     expect(selected.ok).toBe(false);
     if (selected.ok) return;
     expect(selected.errors[0]).toMatch(/bitmap asset missing/);
+  });
+
+  it("fails closed when two archive paths map to one managed bitmap asset", () => {
+    const variant = resolveResourceVariant("moe-cute-3d", { format: "webp", imageSize: 256 });
+    const selected = selectBitmapVariantAssets(
+      {
+        "assets/moe-cute-3d-256-webp/arrow-bold-right.webp": webpBytes,
+        "./assets/moe-cute-3d-256-webp/arrow-bold-right.webp": new Uint8Array([0x01]),
+      },
+      [variant],
+      ["arrow-bold-right"],
+    );
+    expect(selected.ok).toBe(false);
+    if (selected.ok) return;
+    expect(selected.errors).toContain(
+      'duplicate bitmap asset for "assets/moe-cute-3d-256-webp/arrow-bold-right.webp"',
+    );
   });
 });
 
