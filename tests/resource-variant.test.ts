@@ -2,54 +2,69 @@ import { describe, expect, it } from "vitest";
 import {
   assetRelativePath,
   buildResourceVariantId,
-  isBitmapStyleGroupId,
+  parseBitmapName,
+  parseLegacyResourceVariantId,
   parseResourceVariantId,
   resolveResourceVariant,
 } from "../src/core/resource-variant.js";
 
-describe("resourceVariantId (G1/G2)", () => {
-  it("accepts bitmap style group ids ending in -3d", () => {
-    expect(isBitmapStyleGroupId("moe-cute-3d")).toBe(true);
-    expect(isBitmapStyleGroupId("moe-outline")).toBe(false);
-    expect(isBitmapStyleGroupId("moe-cute-3d-extra")).toBe(false);
+describe("resourceVariantId (MEDIA-FORMAT-V2)", () => {
+  it("builds canonical actual-directory ids (<group>-<size>-<format>)", () => {
+    expect(buildResourceVariantId("moe-3d-metal")).toBe("moe-3d-metal-256-webp");
+    expect(buildResourceVariantId("moe-3d-metal", "png", 128)).toBe("moe-3d-metal-128-png");
+    expect(buildResourceVariantId("moe-cute-3d", "webp", 512)).toBe("moe-cute-3d-512-webp");
   });
 
-  it("builds deterministic variant ids with defaults webp/256", () => {
-    expect(buildResourceVariantId("moe-cute-3d")).toBe("moe-cute-3d-webp-256");
-    expect(buildResourceVariantId("moe-cute-3d", "png", 128)).toBe("moe-cute-3d-png-128");
+  it("accepts 3d anywhere and parses by complete keyword tokens", () => {
+    expect(parseResourceVariantId("moe-3d-metal-256-webp")).toEqual({
+      styleGroupId: "moe-3d-metal",
+      format: "webp",
+      imageSize: 256,
+      resourceVariantId: "moe-3d-metal-256-webp",
+    });
+    expect(parseResourceVariantId("moe-3d-metal-128-png").styleGroupId).toBe("moe-3d-metal");
+    expect(parseResourceVariantId("moe-cute-3d-512-png").styleGroupId).toBe("moe-cute-3d");
   });
 
-  it("parses from the right and keeps styleGroupId intact when it contains -3d", () => {
-    expect(parseResourceVariantId("moe-cute-3d-webp-256")).toEqual({
+  it("does not guess: legacy order, vector names and bare substrings are not v2", () => {
+    expect(parseBitmapName("moe-3d-metal-webp-256")).toBeUndefined();
+    expect(parseBitmapName("moe-outline")).toBeUndefined();
+    expect(parseBitmapName("moe-3d-metal-pngish")).toBeUndefined();
+    expect(parseBitmapName("moe-3d-metal-gif-256")).toBeUndefined();
+    expect(() => parseResourceVariantId("moe-cute-3d-webp-256")).toThrow(/invalid/);
+  });
+
+  it("fails closed on duplicate/conflicting keywords", () => {
+    expect(() => parseResourceVariantId("moe-3d-metal-256-png-webp")).toThrow(/exactly one format token/);
+    expect(() => parseResourceVariantId("moe-3d-metal-128-256-png")).toThrow(/exactly one format token and one size token/);
+    expect(() => parseResourceVariantId("moe-3d-metal-png")).toThrow(/exactly one/);
+  });
+
+  it("reads frozen v1 artifacts only through the explicit legacy parser", () => {
+    expect(parseLegacyResourceVariantId("moe-cute-3d-webp-256")).toEqual({
       styleGroupId: "moe-cute-3d",
       format: "webp",
       imageSize: 256,
       resourceVariantId: "moe-cute-3d-webp-256",
     });
-    expect(parseResourceVariantId("moe-pixel-lite-3d-png-64").styleGroupId).toBe("moe-pixel-lite-3d");
+    expect(() => parseLegacyResourceVariantId("moe-outline-webp-256")).toThrow(/legacy styleGroupId/);
+    expect(() => parseLegacyResourceVariantId("moe-cute-3d-gif-256")).toThrow(/format/);
   });
 
-  it("rejects guessing by mid-string -3d and rejects invalid tokens", () => {
-    expect(() => parseResourceVariantId("moe-cute-3d")).toThrow(/invalid/);
-    expect(() => parseResourceVariantId("moe-outline-webp-256")).toThrow(/styleGroupId/);
-    expect(() => parseResourceVariantId("moe-cute-3d-gif-256")).toThrow(/format/);
-    expect(() => parseResourceVariantId("moe-cute-3d-webp-48")).toThrow(/imageSize/);
-  });
-
-  it("resolves omitted format/size to catalog defaults", () => {
-    expect(resolveResourceVariant("moe-cute-3d")).toMatchObject({
+  it("resolves omitted format/size to webp/256", () => {
+    expect(resolveResourceVariant("moe-3d-metal")).toMatchObject({
       format: "webp",
       imageSize: 256,
-      resourceVariantId: "moe-cute-3d-webp-256",
+      resourceVariantId: "moe-3d-metal-256-webp",
     });
-    expect(resolveResourceVariant("moe-cute-3d", { format: "png", imageSize: 512 }).resourceVariantId).toBe(
-      "moe-cute-3d-png-512",
+    expect(resolveResourceVariant("moe-3d-metal", { format: "png", imageSize: 512 }).resourceVariantId).toBe(
+      "moe-3d-metal-512-png",
     );
   });
 
   it("builds POSIX asset paths under outputDir/assets", () => {
-    expect(assetRelativePath("moe-cute-3d-webp-256", "ui-search", "webp")).toBe(
-      "assets/moe-cute-3d-webp-256/ui-search.webp",
+    expect(assetRelativePath("moe-3d-metal-256-webp", "ui-search", "webp")).toBe(
+      "assets/moe-3d-metal-256-webp/ui-search.webp",
     );
   });
 });

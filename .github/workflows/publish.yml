@@ -52,6 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           npm ci
+          npm run policy:verify-remote
           npm run lint
           npm run typecheck
           npm run build
@@ -177,6 +178,7 @@ jobs:
         run: |
           set -euo pipefail
           npm ci
+          npm run policy:verify-remote
           npm run lint
           npm run typecheck
           npm run build
@@ -283,7 +285,7 @@ jobs:
         working-directory: code-library
         env:
           MOE_ICONS_SOURCE_DIR: tests/fixtures/icon-source
-          MOE_ICONS_FREE_STYLE_GROUPS: moe-outline,moe-solid,moe-lite-outline
+          MOE_ICONS_FREE_STYLE_GROUPS: moe-colored,moe-lite-outline,moe-outline,moe-solid
         run: |
           npm ci
           npm run clean && npm run generate && npm run build:free && npm run build:pro && npm run build:ent && npm run build:main && npm run postbuild
@@ -352,9 +354,11 @@ jobs:
           gh release download "$TAG" --pattern '*.tgz' --dir verify --clobber
           actual="$(shasum -a 256 verify/*.tgz | awk '{print $1}')"
           test "$actual" = "$EXPECTED_SHA" || { echo "draft asset digest mismatch" >&2; exit 1; }
+      # SEC-A2-05: npm OIDC Trusted Publishing only. No NPM_TOKEN /
+      # NODE_AUTH_TOKEN fallback exists; `id-token: write` + the protected
+      # `npm-publish` environment + `--provenance` are the only auth path.
       - name: Publish to npm or verify the existing registry package
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           TAG: ${{ needs.pack.outputs.release_tag }}
           EXPECTED_SHA: ${{ needs.pack.outputs.candidate_sha }}
         run: |

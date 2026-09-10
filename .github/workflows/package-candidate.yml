@@ -28,6 +28,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # AUD-BLOCK-02: prove the vendored contract matches the pinned public commit.
+      - run: npm run policy:verify-remote
       - run: npm run typecheck
       - run: npm run build
       - run: npm test

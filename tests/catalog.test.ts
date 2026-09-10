@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { catalog, findCatalogIcon, findCatalogStyleGroup } from "../src/catalog/catalog.js";
+import { catalog, findCatalogIcon, findCatalogStyleGroup, parseCatalog } from "../src/catalog/catalog.js";
 
 describe("bundled catalog", () => {
   it("contains the frozen v1 metadata and deterministic style groups", () => {
@@ -19,5 +19,31 @@ describe("bundled catalog", () => {
     expect(icon?.prefix).toBe("ui");
     expect(icon?.availableIn).toContain("moe-outline");
     expect(findCatalogIcon("search")).toBeUndefined();
+  });
+});
+
+describe("bitmap catalog variants", () => {
+  const base = {
+    schemaVersion: 1,
+    catalogVersion: "1.0.0",
+    sourceVersion: "1.0.0",
+    sourceCommit: "a".repeat(40),
+    generatorCommit: "b".repeat(40),
+    icons: [],
+  };
+
+  it("rejects malformed, duplicate and cross-group variants", () => {
+    expect(() => parseCatalog({
+      ...base,
+      styleGroups: [{ id: "moe-3d-metal", type: "bitmap", tiers: ["pro"], formats: ["webp"], imageSizes: [256], variants: "bad" }],
+    })).toThrow(/invalid variants/);
+    expect(() => parseCatalog({
+      ...base,
+      styleGroups: [{ id: "moe-3d-metal", type: "bitmap", tiers: ["pro"], formats: ["webp"], imageSizes: [256], variants: ["moe-3d-metal-256-webp", "moe-3d-metal-256-webp"] }],
+    })).toThrow(/duplicate variants/);
+    expect(() => parseCatalog({
+      ...base,
+      styleGroups: [{ id: "moe-3d-metal", type: "bitmap", tiers: ["pro"], formats: ["webp"], imageSizes: [256], variants: ["moe-other-256-webp"] }],
+    })).toThrow(/inconsistent variant/);
   });
 });

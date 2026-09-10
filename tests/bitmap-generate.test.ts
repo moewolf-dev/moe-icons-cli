@@ -25,6 +25,16 @@ vi.mock("../src/catalog/catalog.js", async (importOriginal) => {
           tiers: ["free", "pro"] as const,
           formats: ["webp", "png"] as const,
           imageSizes: [64, 128, 256, 512],
+          variants: [
+            "moe-cute-3d-64-png",
+            "moe-cute-3d-64-webp",
+            "moe-cute-3d-128-png",
+            "moe-cute-3d-128-webp",
+            "moe-cute-3d-256-png",
+            "moe-cute-3d-256-webp",
+            "moe-cute-3d-512-png",
+            "moe-cute-3d-512-webp",
+          ],
         };
       }
       return actual.findCatalogStyleGroup(id);
@@ -51,9 +61,9 @@ const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x02]);
 
 function archiveWithBothVariants(): Record<string, Uint8Array> {
   return {
-    "assets/moe-cute-3d-webp-256/arrow-bold-right.webp": webpBytes,
-    "assets/moe-cute-3d-png-512/arrow-bold-right.png": pngBytes,
-    "assets/moe-cute-3d-webp-256/other-icon.webp": new Uint8Array([0x03]),
+    "assets/moe-cute-3d-256-webp/arrow-bold-right.webp": webpBytes,
+    "assets/moe-cute-3d-512-png/arrow-bold-right.png": pngBytes,
+    "assets/moe-cute-3d-256-webp/other-icon.webp": new Uint8Array([0x03]),
   };
 }
 
@@ -93,14 +103,22 @@ function fakeUi(): CommandUi {
 
 describe("bitmap asset selection (G5)", () => {
   it("matches archive paths by parsing a directory segment as resourceVariantId", () => {
-    expect(matchArchiveBitmapFile("moe-cute-3d-webp-256/ui-search.webp")).toMatchObject({
+    expect(matchArchiveBitmapFile("moe-cute-3d-256-webp/ui-search.webp")).toMatchObject({
       iconId: "ui-search",
-      variant: { resourceVariantId: "moe-cute-3d-webp-256" },
+      variant: { resourceVariantId: "moe-cute-3d-256-webp" },
     });
-    expect(matchArchiveBitmapFile("prefix/assets/moe-cute-3d-png-512/ui-search.png")?.variant.resourceVariantId).toBe(
-      "moe-cute-3d-png-512",
+    expect(matchArchiveBitmapFile("prefix/assets/moe-cute-3d-512-png/ui-search.png")?.variant.resourceVariantId).toBe(
+      "moe-cute-3d-512-png",
     );
     expect(matchArchiveBitmapFile("catalog.json")).toBeUndefined();
+  });
+
+  it("reads frozen v1 archive names only when the legacy contract is explicit", () => {
+    expect(matchArchiveBitmapFile(
+      "assets/moe-cute-3d-webp-256/ui-search.webp",
+      { mediaContractVersion: 1 },
+    )?.variant.resourceVariantId).toBe("moe-cute-3d-webp-256");
+    expect(matchArchiveBitmapFile("assets/moe-cute-3d-webp-256/ui-search.webp")).toBeUndefined();
   });
 
   it("keeps only the requested variant and selected icons", () => {
@@ -109,16 +127,16 @@ describe("bitmap asset selection (G5)", () => {
     expect(selected.ok).toBe(true);
     if (!selected.ok) return;
     expect(selected.assets).toHaveLength(1);
-    expect(selected.assets[0]?.destRel).toBe("assets/moe-cute-3d-webp-256/arrow-bold-right.webp");
+    expect(selected.assets[0]?.destRel).toBe("assets/moe-cute-3d-256-webp/arrow-bold-right.webp");
     expect(selected.assets[0]?.bytes).toEqual(webpBytes);
-    expect(selected.skipped.some((path) => path.includes("png-512"))).toBe(true);
+    expect(selected.skipped.some((path) => path.includes("512-png"))).toBe(true);
     expect(selected.skipped.some((path) => path.includes("other-icon"))).toBe(true);
   });
 
   it("errors when a selected icon is missing from the requested variant", () => {
     const variant = resolveResourceVariant("moe-cute-3d", { format: "webp", imageSize: 256 });
     const selected = selectBitmapVariantAssets(
-      { "assets/moe-cute-3d-png-512/arrow-bold-right.png": pngBytes },
+      { "assets/moe-cute-3d-512-png/arrow-bold-right.png": pngBytes },
       [variant],
       ["arrow-bold-right"],
     );
@@ -141,14 +159,14 @@ describe("bitmap wrapper + asset plan (G4/G5)", () => {
     if (!plan.ok) return;
     const paths = plan.files.map((file) => file.path);
     expect(paths.some((path) => path.includes("wrappers/CuteArrowBoldRightBitmap.tsx"))).toBe(true);
-    expect(paths).toContain("src/moeicons/assets/moe-cute-3d-webp-256/arrow-bold-right.webp");
-    expect(paths.some((path) => path.includes("png-512"))).toBe(false);
+    expect(paths).toContain("src/moeicons/assets/moe-cute-3d-256-webp/arrow-bold-right.webp");
+    expect(paths.some((path) => path.includes("512-png"))).toBe(false);
     const asset = plan.files.find((file) => file.path.endsWith("arrow-bold-right.webp"));
     expect(asset?.content).toEqual(webpBytes);
     const registry = plan.files.find((file) => file.path.endsWith("registry.ts"))?.content ?? "";
     expect(typeof registry).toBe("string");
     expect(registry).toContain('"cute"');
-    expect(registry).not.toContain('"moe-cute-3d-webp-256"');
+    expect(registry).not.toContain('"moe-cute-3d-256-webp"');
   });
 
   it("rejects bitmap plans without an archive instead of silently skipping assets", () => {
@@ -160,7 +178,7 @@ describe("bitmap wrapper + asset plan (G4/G5)", () => {
 
   it("rejects missing assets before any generate write", () => {
     const plan = planGeneratedFiles(bitmapConfig(), "src/moeicons", {
-      archiveFiles: { "assets/moe-cute-3d-png-512/arrow-bold-right.png": pngBytes },
+      archiveFiles: { "assets/moe-cute-3d-512-png/arrow-bold-right.png": pngBytes },
     });
     expect(plan.ok).toBe(false);
     if (plan.ok) return;
@@ -192,8 +210,8 @@ describe("bitmap assets transaction (G5)", () => {
 
   it("writes only the selected variant and drops stale assets/ on regenerate", () => {
     const output = join(dir, "src", "moeicons");
-    mkdirSync(join(output, "assets", "moe-cute-3d-png-512"), { recursive: true });
-    writeFileSync(join(output, "assets", "moe-cute-3d-png-512", "arrow-bold-right.png"), Buffer.from(pngBytes));
+    mkdirSync(join(output, "assets", "moe-cute-3d-512-png"), { recursive: true });
+    writeFileSync(join(output, "assets", "moe-cute-3d-512-png", "arrow-bold-right.png"), Buffer.from(pngBytes));
     writeFileSync(join(output, "user-note.md"), "keep me");
 
     const plan = planGeneratedFiles(bitmapConfig(), "src/moeicons", { archiveFiles: archiveWithBothVariants() });
@@ -202,11 +220,11 @@ describe("bitmap assets transaction (G5)", () => {
 
     executeGeneratedFilesDir(plan.files, dir, "src/moeicons", fs_);
 
-    expect(existsSync(join(output, "assets", "moe-cute-3d-webp-256", "arrow-bold-right.webp"))).toBe(true);
-    expect(readFileSync(join(output, "assets", "moe-cute-3d-webp-256", "arrow-bold-right.webp"))).toEqual(
+    expect(existsSync(join(output, "assets", "moe-cute-3d-256-webp", "arrow-bold-right.webp"))).toBe(true);
+    expect(readFileSync(join(output, "assets", "moe-cute-3d-256-webp", "arrow-bold-right.webp"))).toEqual(
       Buffer.from(webpBytes),
     );
-    expect(existsSync(join(output, "assets", "moe-cute-3d-png-512", "arrow-bold-right.png"))).toBe(false);
+    expect(existsSync(join(output, "assets", "moe-cute-3d-512-png", "arrow-bold-right.png"))).toBe(false);
     expect(readFileSync(join(output, "user-note.md"), "utf8")).toBe("keep me");
   });
 

@@ -241,6 +241,14 @@ function requireCommonConfigFields(obj: Record<string, unknown>, sourceCatalog: 
     ) {
       throw new Error(`imageSize ${imageSize} is unavailable for ${group.id}`);
     }
+    if (group.type === "bitmap" && group.variants && group.variants.length > 0) {
+      const effectiveFormat = format ?? "webp";
+      const effectiveSize = imageSize ?? 256;
+      const variantId = `${group.id}-${effectiveSize}-${effectiveFormat}`;
+      if (!group.variants.includes(variantId)) {
+        throw new Error(`variant ${variantId} is unavailable for ${group.id}`);
+      }
+    }
     themes[name] = {
       styleGroup: theme.styleGroup,
       ...(format !== undefined ? { format } : {}),

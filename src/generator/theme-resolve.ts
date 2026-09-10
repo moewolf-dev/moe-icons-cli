@@ -2,6 +2,9 @@ import { catalog, findCatalogStyleGroup, type CatalogStyleGroup, type IconCatalo
 import type { MoeiconsConfigFile, MoeiconsThemeConfig } from "../project/config.js";
 import {
   assetRelativePath,
+  buildResourceVariantId,
+  DEFAULT_BITMAP_FORMAT,
+  DEFAULT_BITMAP_SIZE,
   resolveResourceVariant,
   type ResourceVariant,
 } from "../core/resource-variant.js";
@@ -17,6 +20,15 @@ export interface ResolvedTheme {
   readonly variant?: ResourceVariant;
 }
 
+/** Exact availability check: catalog `variants` is authoritative when present. */
+export function isVariantAvailable(group: CatalogStyleGroup, resourceVariantId: string): boolean {
+  if (group.variants && group.variants.length > 0) return group.variants.includes(resourceVariantId);
+  const parts = resourceVariantId.split("-");
+  const format = parts[parts.length - 1];
+  const imageSize = Number(parts[parts.length - 2]);
+  return group.formats.includes(format as "svg" | "webp" | "png") && group.imageSizes.includes(imageSize);
+}
+
 export function resolveThemes(config: MoeiconsConfigFile, sourceCatalog: IconCatalog = catalog): { readonly ok: true; readonly themes: ResolvedTheme[] } | { readonly ok: false; readonly errors: string[] } {
   const errors: string[] = [];
   const themes: ResolvedTheme[] = [];
@@ -28,15 +40,26 @@ export function resolveThemes(config: MoeiconsConfigFile, sourceCatalog: IconCat
     }
     if (group.type === "bitmap") {
       try {
-        const variant = resolveResourceVariant(entry.styleGroup, {
-          ...(entry.format !== undefined ? { format: entry.format } : {}),
-          ...(entry.imageSize !== undefined ? { imageSize: entry.imageSize } : {}),
-        });
-        if (!group.formats.includes(variant.format)) {
-          errors.push(`format ${variant.format} is unavailable for ${group.id}`);
+        let variant: ResourceVariant;
+        if (entry.format === undefined && entry.imageSize === undefined) {
+          // B6: the default is only usable when the group truly declares it.
+          const defaultId = buildResourceVariantId(group.id, DEFAULT_BITMAP_FORMAT, DEFAULT_BITMAP_SIZE);
+          if (!isVariantAvailable(group, defaultId)) {
+            errors.push(
+              `bitmap group "${group.id}" does not include the default ${DEFAULT_BITMAP_FORMAT}/${String(DEFAULT_BITMAP_SIZE)} variant; set format and imageSize explicitly`,
+            );
+            continue;
+          }
+          variant = resolveResourceVariant(group.id);
+        } else {
+          variant = resolveResourceVariant(group.id, {
+            ...(entry.format !== undefined ? { format: entry.format } : {}),
+            ...(entry.imageSize !== undefined ? { imageSize: entry.imageSize } : {}),
+          });
         }
-        if (!group.imageSizes.includes(variant.imageSize)) {
-          errors.push(`imageSize ${String(variant.imageSize)} is unavailable for ${group.id}`);
+        if (!isVariantAvailable(group, variant.resourceVariantId)) {
+          errors.push(`variant ${variant.resourceVariantId} is unavailable for ${group.id}`);
+          continue;
         }
         themes.push({ theme, entry, kind: "bitmap", group, variant });
       } catch (error) {

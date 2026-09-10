@@ -5,6 +5,7 @@ node_modules/
 # Build output
 dist/
 coverage/
+*.tgz
 
 # Editor
 .DS_Store

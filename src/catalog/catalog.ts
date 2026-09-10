@@ -1,4 +1,5 @@
 import bundledCatalog from "./catalog.json" with { type: "json" };
+import { parseResourceVariantId } from "../core/resource-variant.js";
 
 export type CatalogStyleGroupType = "outline" | "solid" | "mixed" | "bitmap";
 export type CatalogTier = "free" | "pro";
@@ -10,6 +11,12 @@ export interface CatalogStyleGroup {
   readonly tiers: readonly CatalogTier[];
   readonly formats: readonly CatalogFormat[];
   readonly imageSizes: readonly number[];
+  /**
+   * MEDIA-FORMAT-V2: canonical bitmap resourceVariantIds declared by the
+   * catalog. This is the exact availability authority; a format/size pair that
+   * is not in this list must fail even when it is inside `formats`/`imageSizes`.
+   */
+  readonly variants?: readonly string[];
 }
 
 export interface CatalogIcon {
@@ -76,12 +83,37 @@ export function parseCatalog(value: unknown): IconCatalog {
     if (!["outline", "solid", "mixed", "bitmap"].includes(group.type)) {
       throw new Error(`catalog style group ${group.id} has invalid type`);
     }
+    if (group.variants !== undefined && !isStringArray(group.variants)) {
+      throw new Error(`catalog style group ${group.id} has invalid variants`);
+    }
+    const groupVariants = group.variants;
+    if (groupVariants && (groupVariants.length === 0 || new Set(groupVariants).size !== groupVariants.length)) {
+      throw new Error(`catalog style group ${group.id} has empty or duplicate variants`);
+    }
+    if (group.type !== "bitmap" && groupVariants !== undefined) {
+      throw new Error(`catalog SVG style group ${group.id} must not declare bitmap variants`);
+    }
+    if (group.type === "bitmap" && groupVariants) {
+      for (const variantId of groupVariants) {
+        let variant;
+        try {
+          variant = parseResourceVariantId(variantId);
+        } catch {
+          throw new Error(`catalog style group ${group.id} has inconsistent variant ${variantId}`);
+        }
+        if (variant.styleGroupId !== group.id || !group.formats.includes(variant.format)
+          || !group.imageSizes.includes(variant.imageSize)) {
+          throw new Error(`catalog style group ${group.id} has inconsistent variant ${variantId}`);
+        }
+      }
+    }
     return {
       id: group.id,
       type: group.type as CatalogStyleGroupType,
       tiers: group.tiers as readonly CatalogTier[],
       formats: group.formats as readonly CatalogFormat[],
       imageSizes: group.imageSizes,
+      ...(groupVariants ? { variants: groupVariants } : {}),
     };
   });
   const groupIds = new Set(groups.map((group) => group.id));

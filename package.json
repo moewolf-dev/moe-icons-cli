@@ -44,6 +44,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src --ext .ts",
     "test": "vitest run",
+    "policy:verify-remote": "node scripts/verify-release-policy-remote.mjs",
     "release:preflight": "node scripts/release-preflight.mjs",
     "release:bump": "node scripts/release-bump.mjs",
     "prepublishOnly": "npm run release:preflight",

@@ -730,7 +730,21 @@ export function planGeneratedFiles(
         ],
       };
     }
-    const selected = selectBitmapVariantAssets(options.archiveFiles, unique, config.icons);
+    // Exact catalog variants are the v2 evidence. Frozen v1 catalogs did not
+    // carry this field and therefore use only the explicit legacy parser. A
+    // mixed archive/catalog state is ambiguous and must not be guessed.
+    const mediaModes = new Set(bitmapThemes.map((theme) =>
+      theme.group.variants && theme.group.variants.length > 0 ? 2 : 1));
+    if (mediaModes.size !== 1) {
+      return { ok: false, errors: ["bitmap themes mix v1 and v2 catalog contracts"] };
+    }
+    const mediaContractVersion = [...mediaModes][0] as 1 | 2;
+    const selected = selectBitmapVariantAssets(
+      options.archiveFiles,
+      unique,
+      config.icons,
+      { mediaContractVersion },
+    );
     if (!selected.ok) return { ok: false, errors: [...selected.errors] };
     for (const asset of selected.assets) {
       files.push({ path: rel(asset.destRel), content: asset.bytes });
