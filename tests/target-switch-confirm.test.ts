@@ -51,6 +51,18 @@ function makeRuntime() {
   };
 }
 
+function validCatalog(): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    catalogVersion: "1.0.0",
+    sourceVersion: "1.0.0",
+    sourceCommit: "a".repeat(40),
+    generatorCommit: "b".repeat(40),
+    styleGroups: [{ id: "moe-outline", type: "outline", tiers: ["free", "pro"], formats: ["svg"], imageSizes: [] }],
+    icons: [{ id: "ui-search", prefix: "ui", label: "Search", aliases: [], availableIn: ["moe-outline"] }],
+  });
+}
+
 function writeConfig(dir: string, target: Target, icons: readonly string[] = ["ui-search"]): void {
   writeFileSync(
     join(dir, "moeicons.config.json"),
@@ -68,7 +80,8 @@ function writeConfig(dir: string, target: Target, icons: readonly string[] = ["u
 
 function writeMetadata(dir: string, target: Target): void {
   mkdirSync(join(dir, ".moeicons"), { recursive: true });
-  writeFileSync(join(dir, ".moeicons", "catalog.json"), "catalog");
+  const catalog = validCatalog();
+  writeFileSync(join(dir, ".moeicons", "catalog.json"), catalog);
   writeFileSync(
     join(dir, ".moeicons", "install-metadata.json"),
     serializeInstallMetadata({
@@ -78,9 +91,9 @@ function writeMetadata(dir: string, target: Target): void {
       target,
       descriptorSha256: "a".repeat(64),
       artifactSha256: "b".repeat(64),
-      catalogSha256: sha256Bytes("catalog"),
+      catalogSha256: sha256Bytes(catalog),
       installedAt: "2026-08-24T00:00:00Z",
-      managedFiles: { ".moeicons/catalog.json": sha256Bytes("catalog") },
+      managedFiles: { ".moeicons/catalog.json": sha256Bytes(catalog) },
     }),
   );
 }
@@ -209,7 +222,8 @@ describe("B5: destructive target-switch confirmation", () => {
     writeConfig(dir, "vue");
     mkdirSync(join(dir, ".moeicons"), { recursive: true });
     mkdirSync(join(dir, "src", "moeicons"), { recursive: true });
-    writeFileSync(join(dir, ".moeicons", "catalog.json"), "catalog");
+    const catalog = validCatalog();
+    writeFileSync(join(dir, ".moeicons", "catalog.json"), catalog);
     writeFileSync(
       join(dir, ".moeicons", "install-metadata.json"),
       serializeInstallMetadata({
@@ -219,9 +233,9 @@ describe("B5: destructive target-switch confirmation", () => {
         target: "react",
         descriptorSha256: "a".repeat(64),
         artifactSha256: "b".repeat(64),
-        catalogSha256: sha256Bytes("catalog"),
+        catalogSha256: sha256Bytes(catalog),
         installedAt: "2026-08-24T00:00:00Z",
-        managedFiles: { ".moeicons/catalog.json": sha256Bytes("catalog") },
+        managedFiles: { ".moeicons/catalog.json": sha256Bytes(catalog) },
       }),
     );
     const { context, confirmSpy } = makeContext(async () => false, dir);

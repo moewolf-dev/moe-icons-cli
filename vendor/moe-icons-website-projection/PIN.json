@@ -1,0 +1,13 @@
+{
+  "sourceRepo": "moewolf-dev/moe-icons",
+  "sourceCommit": "cdfb63efe1bdd692a83fd73f6e3873e46fb12652",
+  "sourcePath": "contracts/website-projection",
+  "schemaVersion": 1,
+  "files": {
+    "website-icon-projection-v1.md": "22571b70eee75de5cfd864fa340f1a76660f452000ddcea07e367e3c8f132a83",
+    "website-catalog-v1.schema.json": "bd5fdb66cbbb17efb7202193fd9976ffea2c5f0f896bcf360a8d94900492d3a4",
+    "website-release-v1.schema.json": "59895202885088965975852d5d8ca90f120071aa21f4e7992fdfd5fc60cc3210",
+    "website-activation-receipt-v1.schema.json": "22930d9a40694b6f39e9014fd9155a0f61fa9e1588894ba5a1c4ff834b0645f3",
+    "website-api-v1.schema.json": "411c4ca48829b146513f6809522b49164552c21e737a6c1caaa5bc4773cd1a59"
+  }
+}

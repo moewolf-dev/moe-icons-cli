@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://moeicons.com/contracts/website-catalog-v1.schema.json",
+  "title": "website-catalog-v1",
+  "description": "Activation-neutral per-tier website icon catalog (RELEASE-BITMAP-0912, DEC-34/35, section 4.2).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "resourceVersion", "tier", "styleGroups", "icons"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "resourceVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-(?:alpha|beta))?$"
+    },
+    "tier": { "enum": ["free", "pro"] },
+    "styleGroups": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/styleGroup" }
+    },
+    "icons": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/icon" }
+    }
+  },
+  "definitions": {
+    "styleGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "order", "mediaType", "tiers", "previewVariantId", "variants"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^moe-[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "label": { "type": "string", "minLength": 1 },
+        "order": { "type": "integer", "minimum": 0 },
+        "mediaType": { "enum": ["vector", "bitmap"] },
+        "tiers": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["free", "pro"] }
+        },
+        "previewVariantId": { "type": "string", "minLength": 1 },
+        "variants": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/variant" }
+        }
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "format", "imageSize"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^moe-[a-z0-9-]+$" },
+        "format": { "enum": ["svg", "png", "webp"] },
+        "imageSize": {
+          "oneOf": [
+            { "type": "null" },
+            { "enum": [64, 128, 256, 512] }
+          ]
+        }
+      }
+    },
+    "icon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "aliases", "keywords", "categories", "styleGroupIds", "targets"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "label": { "type": "string", "minLength": 1 },
+        "aliases": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "keywords": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "categories": { "type": "array", "items": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }, "uniqueItems": true },
+        "styleGroupIds": { "type": "array", "items": { "type": "string", "pattern": "^moe-[a-z0-9-]+$" }, "uniqueItems": true },
+        "targets": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["react", "vue", "vanilla", "assets"] }
+        }
+      }
+    }
+  }
+}

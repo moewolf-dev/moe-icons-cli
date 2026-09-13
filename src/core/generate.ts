@@ -7,6 +7,7 @@ import {
 } from "../project/install.js";
 import { detectProject } from "../project/detect.js";
 import { readMoeiconsConfig, type MoeiconsConfigFile } from "../project/config.js";
+import { parseCatalog, type IconCatalog } from "../catalog/catalog.js";
 import { planGeneratedFiles } from "../generator/generate.js";
 import { ensureClassMergeDependencies, planTailwindIntegration } from "../project/tailwind.js";
 import { CliError, isCliError } from "../errors/index.js";
@@ -37,15 +38,100 @@ export type GenerateResult =
       readonly code?: string;
     };
 
-function hasBitmapThemes(config: MoeiconsConfigFile): boolean {
-  const resolved = resolveThemes(config);
+function hasBitmapThemes(config: MoeiconsConfigFile, sourceCatalog?: IconCatalog): boolean {
+  const resolved = resolveThemes(config, sourceCatalog);
   return resolved.ok && resolved.themes.some((theme) => theme.kind === "bitmap");
 }
 
+/**
+ * B7A/B5: prefer the catalog written by install / pro-install / library update
+ * (`.moeicons/catalog.json`) over the bundled catalog. The installed catalog
+ * carries the resourceVersion's real style groups (including migrated
+ * `moe-colored` free+pro and bitmap variants), so generate/reconcile must not
+ * validate against a stale bundled allowlist. Missing/corrupt catalogs fall
+ * back to the bundled catalog; the reconcile path still hash-verifies it.
+ */
+export type InstalledCatalogState =
+  | { readonly status: "absent" }
+  | { readonly status: "ok"; readonly catalog: IconCatalog }
+  | { readonly status: "invalid"; readonly message: string };
+
+/**
+ * B7A/B5/DEV-20-02: load the catalog written by install / pro-install / library
+ * update and verify it against the install metadata hash. A missing catalog
+ * falls back to the bundled contract; a corrupt or drifting one must surface a
+ * repair/reinstall error instead of silently switching entitlement semantics.
+ */
+export function loadInstalledCatalogState(
+  projectRoot: string,
+  fs_: Pick<TransactionalFsWithCopy, "readFileSync" | "existsSync">,
+): InstalledCatalogState {
+  const catalogPath = join(projectRoot, ".moeicons", "catalog.json");
+  const metadataPath = join(projectRoot, ".moeicons", "install-metadata.json");
+  const catalogExists = fs_.existsSync(catalogPath);
+  const metadataExists = fs_.existsSync(metadataPath);
+
+  // FIX-22-B: an installed project (metadata present) must have a parseable,
+  // hash-consistent catalog. Only a truly un-installed project falls back to
+  // the bundled contract.
+  if (!catalogExists) {
+    if (metadataExists) {
+      return { status: "invalid", message: "install metadata exists but the catalog is missing; run repair or reinstall" };
+    }
+    return { status: "absent" };
+  }
+
+  let catalog: IconCatalog;
+  let catalogBytes: string;
+  try {
+    catalogBytes = fs_.readFileSync(catalogPath, "utf8");
+    if (typeof catalogBytes !== "string") return { status: "invalid", message: "installed catalog is not text" };
+    catalog = parseCatalog(JSON.parse(catalogBytes));
+  } catch (error) {
+    return { status: "invalid", message: `installed catalog cannot be parsed: ${error instanceof Error ? error.message : String(error)}; run repair or reinstall` };
+  }
+
+  if (!metadataExists) {
+    return { status: "invalid", message: "installed catalog is present without install metadata; run repair or reinstall" };
+  }
+  let metadata;
+  try {
+    const rawMetadata = fs_.readFileSync(metadataPath, "utf8");
+    if (typeof rawMetadata !== "string") throw new Error("metadata is not text");
+    metadata = parseInstallMetadata(rawMetadata);
+  } catch (error) {
+    return { status: "invalid", message: `install metadata is invalid: ${error instanceof Error ? error.message : String(error)}; run repair or reinstall` };
+  }
+  if (!metadata) {
+    return { status: "invalid", message: "install metadata could not be parsed; run repair or reinstall" };
+  }
+  const actual = sha256Bytes(catalogBytes);
+  const managed = metadata.managedFiles?.[".moeicons/catalog.json"];
+  if (typeof metadata.catalogSha256 !== "string" || typeof managed !== "string") {
+    return { status: "invalid", message: "install metadata is missing the catalog digest; run repair or reinstall" };
+  }
+  if (metadata.catalogSha256 !== managed) {
+    return { status: "invalid", message: "install metadata catalog digest is inconsistent; run repair or reinstall" };
+  }
+  if (actual !== metadata.catalogSha256) {
+    return { status: "invalid", message: "installed catalog hash does not match install metadata; run repair or reinstall" };
+  }
+  return { status: "ok", catalog };
+}
+
+/** Backwards-compatible accessor used by tests: returns the catalog or undefined. */
+export function loadInstalledCatalog(
+  projectRoot: string,
+  fs_: Pick<TransactionalFsWithCopy, "readFileSync" | "existsSync">,
+): IconCatalog | undefined {
+  const state = loadInstalledCatalogState(projectRoot, fs_);
+  return state.status === "ok" ? state.catalog : undefined;
+}
+
 /** Vanilla/Assets generate from raw SVG; bitmap themes need variant binaries. */
-function needsArchiveFiles(config: MoeiconsConfigFile): boolean {
+function needsArchiveFiles(config: MoeiconsConfigFile, sourceCatalog?: IconCatalog): boolean {
   if (config.target === "vanilla" || config.target === "assets") return true;
-  return hasBitmapThemes(config);
+  return hasBitmapThemes(config, sourceCatalog);
 }
 
 function archiveHasAssetsManifest(files: Readonly<Record<string, Uint8Array>>): boolean {
@@ -211,7 +297,12 @@ export async function runGenerateUseCase(
 ): Promise<GenerateResult> {
   const project = detectProject(context.cwd);
   if (!project) return { ok: false, reason: "no-project" };
-  const loaded = readMoeiconsConfig(project.root);
+  const catalogState = loadInstalledCatalogState(project.root, fs_);
+  if (catalogState.status === "invalid") {
+    return { ok: false, reason: "validation", errors: [catalogState.message] };
+  }
+  const sourceCatalog = catalogState.status === "ok" ? catalogState.catalog : undefined;
+  const loaded = readMoeiconsConfig(project.root, sourceCatalog);
   if (loaded.kind !== "ok") return { ok: false, reason: `config state: ${loaded.kind}` };
 
   const effectiveConfig = options.target
@@ -232,7 +323,7 @@ export async function runGenerateUseCase(
       };
   }
   let archiveFiles: Readonly<Record<string, Uint8Array>> | undefined = options.archiveFiles;
-  if (needsArchiveFiles(effectiveConfig) && archiveFiles === undefined) {
+  if (needsArchiveFiles(effectiveConfig, sourceCatalog) && archiveFiles === undefined) {
     const loadedArchive = loadArchiveFiles(project.root, context.env, fs_, undefined);
     if (!loadedArchive.ok) {
       return {
@@ -247,7 +338,10 @@ export async function runGenerateUseCase(
   const plan = planGeneratedFiles(
     effectiveConfig,
     effectiveConfig.outputDir,
-    archiveFiles ? { archiveFiles } : {},
+    {
+      ...(archiveFiles ? { archiveFiles } : {}),
+      ...(sourceCatalog ? { catalog: sourceCatalog } : {}),
+    },
   );
   if (!plan.ok) return { ok: false, reason: "validation", errors: plan.errors };
 

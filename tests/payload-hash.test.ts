@@ -28,6 +28,17 @@ test("G1A: version bumps alone do not change the payload hash", () => {
   assert.equal(hashA, hashB, "version-only change must not require a new payload");
 });
 
+test("BLOCK-4: the recorded payloadHash marker does not feed the payload hash", () => {
+  const files = { "dist/cli.js": "console.log(1)\n" };
+  const without = computePayloadHash({ files, packageJson: { name: "n", version: "0.0.1" } });
+  const withMarker = computePayloadHash({
+    files,
+    packageJson: { name: "n", version: "0.0.1", payloadHash: "f".repeat(64) },
+  });
+  assert.equal(withMarker, without, "recording payloadHash must not change the hash");
+  assert.equal(normalizePackageJsonForPayload({ version: "1.0.0", payloadHash: "x", name: "n" }).payloadHash, undefined);
+});
+
 test("G1A: a real byte change in a shipped file changes the payload hash", () => {
   const files = (body: string): Record<string, string> => ({ "dist/cli.js": body, "bin/moeicons.js": "#!/usr/bin/env node\n" });
   const a = computePayloadHash({ files: files("a"), packageJson: { version: "0.0.1" } });

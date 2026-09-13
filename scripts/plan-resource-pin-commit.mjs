@@ -15,8 +15,13 @@ export function nextPatch(version) {
   return `${match[1]}.${match[2]}.${Number(match[3]) + 1}${match[4] ? `-${match[4]}` : ""}`;
 }
 
-export function buildPinCommitMessage(cliVersion, resourceVersion) {
-  return `chore(release): cli v${cliVersion} for resources ${resourceVersion}`;
+/**
+ * AUD-BLOCK(CLI-version-owner): the resource pin must NOT bump the CLI version.
+ * `Publish CLI` owns the single patch increment; if both did it the CLI would
+ * jump two patches (pin commit then its push-triggered publish).
+ */
+export function buildPinCommitMessage(resourceVersion) {
+  return `chore(release): pin cli resources ${resourceVersion}`;
 }
 
 export function planPinCommit({ currentCliVersion, resourceVersion, skip = false }) {
@@ -29,12 +34,12 @@ export function planPinCommit({ currentCliVersion, resourceVersion, skip = false
       resourceVersion,
     };
   }
-  const nextCliVersion = nextPatch(currentCliVersion);
   return {
-    action: "bump",
+    action: "pin",
     currentCliVersion,
-    nextCliVersion,
-    commitMessage: buildPinCommitMessage(nextCliVersion, resourceVersion),
+    // The CLI version is intentionally unchanged; `Publish CLI` bumps it once.
+    nextCliVersion: currentCliVersion,
+    commitMessage: buildPinCommitMessage(resourceVersion),
     resourceVersion,
   };
 }

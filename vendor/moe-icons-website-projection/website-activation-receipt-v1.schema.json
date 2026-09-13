@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://moeicons.com/contracts/website-activation-receipt-v1.schema.json",
+  "title": "website-activation-receipt-v1",
+  "description": "Website projection activation receipt (DEC-05/06/48, section 4.3). Never contains bucket names, object-key lists, tokens or signed URLs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "websiteActivationId",
+    "previousWebsiteActivationId",
+    "productionActivationId",
+    "resourceVersion",
+    "sourceCommit",
+    "generatorCommit",
+    "privateDescriptorSha256",
+    "publicDescriptorSha256",
+    "websiteReleaseSha256",
+    "websiteBucketIdentityId",
+    "objectCount",
+    "totalBytes",
+    "workflow",
+    "createdAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "websiteActivationId": { "type": "string", "pattern": "^wact-[a-f0-9]{64}$" },
+    "previousWebsiteActivationId": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "pattern": "^wact-[a-f0-9]{64}$" }
+      ]
+    },
+    "productionActivationId": { "type": "string", "pattern": "^act-[a-f0-9]{64}$" },
+    "resourceVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-(?:alpha|beta))?$"
+    },
+    "sourceCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "generatorCommit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "privateDescriptorSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "publicDescriptorSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "websiteReleaseSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "websiteBucketIdentityId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "objectCount": { "type": "integer", "minimum": 1 },
+    "totalBytes": { "type": "integer", "minimum": 1 },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "workflowPath", "runId", "runAttempt", "headSha"],
+      "properties": {
+        "repository": { "type": "string", "pattern": "^[\\w.-]+/[\\w.-]+$" },
+        "workflowPath": { "type": "string", "pattern": "^[.]github/workflows/[\\w.-]+[.]yml$" },
+        "runId": { "type": "string", "pattern": "^[0-9]+$" },
+        "runAttempt": { "type": "string", "pattern": "^[0-9]+$" },
+        "headSha": { "type": "string", "pattern": "^[a-f0-9]{40}$" }
+      }
+    },
+    "createdAt": { "type": "string", "format": "date-time" }
+  }
+}

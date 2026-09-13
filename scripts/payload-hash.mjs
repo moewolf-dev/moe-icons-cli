@@ -14,7 +14,9 @@ import { createHash } from "node:crypto";
  * recorded payloadHash. Equal => run CI only, do not publish.
  */
 
-const EXCLUDE_KEYS = new Set(["version", "resolved", "integrity"]);
+// `payloadHash` is the release-commit recovery marker written back into
+// package.json; it must not feed the payload it describes (recursion).
+const EXCLUDE_KEYS = new Set(["version", "payloadHash", "resolved", "integrity"]);
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -32,6 +34,7 @@ function canonicalJson(value) {
 export function normalizePackageJsonForPayload(pkg) {
   const clone = { ...pkg };
   delete clone.version;
+  delete clone.payloadHash;
   return clone;
 }
 

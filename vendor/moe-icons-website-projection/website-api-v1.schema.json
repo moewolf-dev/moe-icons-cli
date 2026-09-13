@@ -1,0 +1,150 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://moeicons.com/contracts/website-api-v1.schema.json",
+  "title": "website-api-v1",
+  "description": "Strict success/error response bodies for /v1/website-icons/* and /v1/account/* (section 5). Each success body is closed (additionalProperties:false); Website must not display raw message.",
+  "definitions": {
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "code", "message", "requestId"],
+      "properties": {
+        "ok": { "const": false },
+        "code": {
+          "enum": [
+            "AUTH_REQUIRED",
+            "TOKEN_INVALID",
+            "PRO_REQUIRED",
+            "ORIGIN_DENIED",
+            "NOT_FOUND",
+            "TARGET_UNSUPPORTED",
+            "VERSION_CHANGED",
+            "RATE_LIMITED",
+            "UPSTREAM_UNAVAILABLE"
+          ]
+        },
+        "message": { "type": "string" },
+        "requestId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "format", "imageSize"],
+      "properties": {
+        "id": { "type": "string" },
+        "format": { "enum": ["svg", "png", "webp"] },
+        "imageSize": { "oneOf": [{ "type": "null" }, { "enum": [64, 128, 256, 512] }] }
+      }
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "order", "mediaType", "tiers", "locked"],
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "order": { "type": "integer", "minimum": 0 },
+        "mediaType": { "enum": ["vector", "bitmap"] },
+        "tiers": { "type": "array", "items": { "enum": ["free", "pro"] } },
+        "locked": { "type": "boolean" },
+        "previewVariantId": { "type": ["string", "null"] },
+        "variants": { "type": "array", "items": { "$ref": "#/definitions/variant" } }
+      }
+    },
+    "groups": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "resourceVersion", "releaseSha256", "websiteActivationId", "groups"],
+      "properties": {
+        "ok": { "const": true },
+        "resourceVersion": { "type": "string" },
+        "releaseSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "websiteActivationId": { "type": "string", "pattern": "^wact-[a-f0-9]{64}$" },
+        "groups": { "type": "array", "items": { "$ref": "#/definitions/group" } }
+      }
+    },
+    "iconSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "categories", "styleGroupIds"],
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "categories": { "type": "array", "items": { "type": "string" } },
+        "styleGroupIds": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "categoryCount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["categoryId", "count"],
+      "properties": {
+        "categoryId": { "type": "string" },
+        "count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "icons": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "resourceVersion", "releaseSha256", "styleGroupId", "categoryId", "query", "items", "total", "categoryCounts", "nextCursor"],
+      "properties": {
+        "ok": { "const": true },
+        "resourceVersion": { "type": "string" },
+        "releaseSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "styleGroupId": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "query": { "type": "string" },
+        "items": { "type": "array", "items": { "$ref": "#/definitions/iconSummary" } },
+        "total": { "type": "integer", "minimum": 0 },
+        "categoryCounts": { "type": "array", "items": { "$ref": "#/definitions/categoryCount" } },
+        "nextCursor": { "type": ["string", "null"] }
+      }
+    },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "resourceVersion", "releaseSha256", "styleGroupId", "id", "label", "mediaType", "variants", "targets"],
+      "properties": {
+        "ok": { "const": true },
+        "resourceVersion": { "type": "string" },
+        "releaseSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "styleGroupId": { "type": "string" },
+        "id": { "type": "string" },
+        "label": { "type": "string" },
+        "mediaType": { "enum": ["vector", "bitmap"] },
+        "variants": { "type": "array", "items": { "$ref": "#/definitions/variant" } },
+        "targets": { "type": "array", "items": { "enum": ["react", "vue", "vanilla", "assets"] } }
+      }
+    },
+    "snippet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "resourceVersion", "releaseSha256", "styleGroupId", "iconId", "target", "language", "code", "packageVersion", "sha256"],
+      "properties": {
+        "ok": { "const": true },
+        "resourceVersion": { "type": "string" },
+        "releaseSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "styleGroupId": { "type": "string" },
+        "iconId": { "type": "string" },
+        "target": { "enum": ["react", "vue", "vanilla", "assets"] },
+        "language": { "type": "string" },
+        "code": { "type": "string" },
+        "packageVersion": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "entitlement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "tier", "status", "validUntil", "checkedAt"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "tier": { "enum": ["free", "pro"] },
+        "status": { "enum": ["none", "active", "expired", "revoked"] },
+        "validUntil": { "oneOf": [{ "type": "null" }, { "type": "string", "format": "date-time" }] },
+        "checkedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

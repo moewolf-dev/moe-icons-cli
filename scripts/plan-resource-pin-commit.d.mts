@@ -1,5 +1,5 @@
 export function nextPatch(version: string): string;
-export function buildPinCommitMessage(cliVersion: string, resourceVersion: string): string;
+export function buildPinCommitMessage(resourceVersion: string): string;
 export function planPinCommit(input: {
   currentCliVersion: string;
   resourceVersion: string;

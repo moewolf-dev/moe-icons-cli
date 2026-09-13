@@ -17,13 +17,20 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { validateCodeLibraryReleaseEvent } from "./validate-code-library-event.mjs";
+import { validateCodeLibraryReleaseEvent, bindingMatchesPolicy } from "./validate-code-library-event.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ALLOWED_WRITE_PATHS = [
   "src/catalog/catalog.json",
   "src/catalog/resource-release.json",
 ];
+
+/** DEV-20-01: the vendored entitlement PIN the event must match before pinning. */
+function readVendoredPin() {
+  const pinPath = join(root, "vendor/moe-icons-release-policy/PIN.json");
+  if (!existsSync(pinPath)) return null;
+  return JSON.parse(readFileSync(pinPath, "utf8"));
+}
 
 function arg(name) {
   const i = process.argv.indexOf(name);
@@ -71,6 +78,7 @@ export function buildResourceRelease(event, options = {}) {
     freeCandidateArtifactId: event.freeCandidateArtifactId,
     upstreamRunId: event.upstreamRunId,
     correlationId: event.correlationId,
+    binding: event.binding || null,
     catalogSha256: options.catalogSha256 || null,
     appliedAt: options.appliedAt || new Date().toISOString(),
   };
@@ -96,6 +104,21 @@ export function assertAllowedPinDiff(changedPaths) {
 
 export function applyResourcePin({ event, catalog, catalogSha256, dryRun = false, nowIso }) {
   assertCatalogShape(catalog, event);
+  // DEV-20-01: an actual pin write must carry a binding that matches the
+  // vendored entitlement PIN and the Pro action scope. Dry-run may preview an
+  // unbound/legacy event, but a writer may not.
+  if (event.binding) {
+    const pin = readVendoredPin();
+    if (!pin) throw new Error("vendored release policy PIN is missing");
+    if (!bindingMatchesPolicy(event.binding, pin)) {
+      throw new Error("event binding does not match the vendored release PIN");
+    }
+    if (event.binding.releaseScope !== "pro") {
+      throw new Error(`CLI resource pin requires releaseScope pro (got ${event.binding.releaseScope})`);
+    }
+  } else if (!dryRun) {
+    throw new Error("unbound release event cannot pin resources; entitlement binding is required");
+  }
   const catalogJson = `${JSON.stringify(catalog, null, 2)}\n`;
   const actualSha = sha256Text(catalogJson);
   if (catalogSha256 && catalogSha256.toLowerCase() !== actualSha) {
