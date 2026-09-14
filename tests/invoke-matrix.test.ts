@@ -14,11 +14,27 @@ import { tmpdir } from "node:os";
 let cwd: string;
 let fixture: string;
 
-function run(command: string, args: string[], opts: { cwd?: string } = {}): string {
+function run(command: string, args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): string {
   return execFileSync(command, args, {
     cwd: opts.cwd ?? cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
+    env: opts.env ?? process.env,
+  });
+}
+
+/**
+ * npm/npx bin resolution differs across npm versions: a bare `npx <bin>` can
+ * fall through to the public registry when the local bin is not resolved from
+ * node_modules. The `moeicons` package does not exist upstream, so that path
+ * fails with a 404 instead of exercising the locally installed tarball. Force
+ * local-only, no-install resolution plus an offline cache so a registry fetch
+ * can never stand in for the packed artifact.
+ */
+function runLocal(command: string, args: string[], opts: { cwd?: string } = {}): string {
+  return run(command, args, {
+    ...(opts.cwd === undefined ? {} : { cwd: opts.cwd }),
+    env: { ...process.env, npm_config_offline: "true" },
   });
 }
 
@@ -66,16 +82,25 @@ describe.sequential("CLI-16 packed-tarball invocation matrix", () => {
     }
   });
 
-  it("npm install of the tarball then invokes moeicons --version without modifying a real project", () => {
+  it("npm exec/npx resolve the installed tarball locally without registry fallback", () => {
     // fresh project fixture
     writeFileSync(join(fixture, "package.json"), JSON.stringify({ name: "invoke-fixture", version: "1.0.0" }));
     const packDir = mkdtempSync(join(fixture, "pack-"));
     try {
       const tarball = packCli(packDir);
       run("npm", ["install", tarball], { cwd: fixture });
-      const version = run("npx", ["moeicons", "--version"], { cwd: fixture }).trim();
-      expect(version).toMatch(/^\d+\.\d+\.\d+$/);
-      const help = run("npx", ["moeicons", "--help"], { cwd: fixture });
+      expect(existsSync(join(fixture, "node_modules", ".bin", "moeicons"))).toBe(true);
+
+      // `npm exec --no` must resolve the local bin, never install from a registry.
+      const npmExecVersion = runLocal("npm", ["exec", "--no", "--", "moeicons", "--version"], { cwd: fixture }).trim();
+      expect(npmExecVersion).toMatch(/^\d+\.\d+\.\d+$/);
+
+      // `npx --no-install` must resolve the same local bin.
+      const npxVersion = runLocal("npx", ["--no-install", "moeicons", "--version"], { cwd: fixture }).trim();
+      expect(npxVersion).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(npxVersion).toBe(npmExecVersion);
+
+      const help = runLocal("npm", ["exec", "--no", "--", "moeicons", "--help"], { cwd: fixture });
       expect(help.toLowerCase()).toContain("usage");
     } finally {
       rmSync(packDir, { recursive: true, force: true });
