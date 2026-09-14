@@ -52,6 +52,8 @@ export async function runProInstallUseCase(
     readonly version: string;
     readonly descriptorSha256: string;
     readonly target?: Target;
+    /** A-1b: allow a declared local-test candidate (never true for production). */
+    readonly allowLocalTest?: boolean;
   },
 ): Promise<{
   readonly projectRoot: string;
@@ -70,11 +72,16 @@ export async function runProInstallUseCase(
   if (config.kind !== "ok" || config.config.tier !== "pro")
     throw new CliError("VALIDATION_ERROR", "pro install requires a valid tier=pro config");
   const target = expected.target ?? config.config.target;
-  const downloaded = await downloadProArtifact(context, deps.auth, expected, {
-    ...(deps.fetch ? { fetch: deps.fetch } : {}),
-    ...(deps.allowedHosts ? { allowedHosts: deps.allowedHosts } : {}),
-    ...(deps.onProgress ? { onProgress: deps.onProgress } : {}),
-  });
+  const downloaded = await downloadProArtifact(
+    context,
+    deps.auth,
+    { version: expected.version, descriptorSha256: expected.descriptorSha256, ...(expected.allowLocalTest === true ? { allowLocalTest: true } : {}) },
+    {
+      ...(deps.fetch ? { fetch: deps.fetch } : {}),
+      ...(deps.allowedHosts ? { allowedHosts: deps.allowedHosts } : {}),
+      ...(deps.onProgress ? { onProgress: deps.onProgress } : {}),
+    },
+  );
   const subtree = selectTargetSubtree(downloaded.artifactBytes, downloaded.descriptor, target);
   if (!subtree.ok) {
     throw new CliError("VALIDATION_ERROR", subtree.message);
@@ -122,6 +129,8 @@ export async function runProInstallUseCase(
     targetSha256: subtree.sha256,
     targetFileCount: subtree.fileCount,
     targetByteCount: subtree.byteCount,
+    // A-1b: record the accepted local-test model so a later generate can verify it.
+    ...(downloaded.descriptor.channel === "local-test" ? { channel: "local-test" as const, publishable: false } : {}),
   });
   await withProjectLock(project.root, "install", () =>
     executeInstallPlan(createInstallPlan(project.root, files), deps.fs),

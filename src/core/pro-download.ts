@@ -15,6 +15,8 @@ const ENDPOINT = "https://api.moeicons.com/v1/icon-library/pro/artifact-descript
 export const PRO_DOWNLOAD_HOSTS = ["06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com"] as const;
 const SHA = /^[a-f0-9]{64}$/;
 const VERSION = /^\d+\.\d+\.\d+(?:-(?:alpha|beta))?$/;
+/** A-1b: local-test candidate version; only accepted with an explicit local context. */
+const LOCAL_TEST_VERSION = /^\d+\.\d+\.\d+-test$/;
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1"]);
 
 /**
@@ -50,6 +52,20 @@ export interface ProArtifactDescriptor extends SignedArtifactDescriptor {
   readonly metadata?: SignedArtifactDescriptor;
   /** Optional per-target subtree metadata; verified when the API provides it. */
   readonly targetMetadata?: Readonly<Partial<Record<ReleaseTarget, ReleaseTargetMetadata>>>;
+  /** A-1b: present only for an accepted local-test candidate. */
+  readonly channel?: "local-test";
+  readonly publishable?: boolean;
+}
+
+/** A-1b: the descriptor is an accepted local-test candidate. */
+function isLocalTestDescriptor(item: Record<string, unknown>, allowLocalTest: boolean): boolean {
+  return (
+    allowLocalTest &&
+    typeof item.version === "string" &&
+    LOCAL_TEST_VERSION.test(item.version) &&
+    item.channel === "local-test" &&
+    item.publishable === false
+  );
 }
 
 function parseTargetMetadata(
@@ -83,26 +99,36 @@ function parseTargetMetadata(
   return result;
 }
 
-function parse(value: unknown, expected: { version: string; descriptorSha256: string }, now: number, allowLoopback: boolean): ProArtifactDescriptor {
+function parse(value: unknown, expected: { version: string; descriptorSha256: string; allowLocalTest?: boolean }, now: number, allowLoopback: boolean): ProArtifactDescriptor {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new CliError("VALIDATION_ERROR", "invalid pro artifact descriptor");
   const item = value as Record<string, unknown>;
-  const allowed = ["ok", "tier", "version", "descriptorSha256", "catalogFilename", "catalogSha256", "url", "expiresAt", "size", "sha256", "targetMetadata", "metadata"];
+  const allowLocalTest = expected.allowLocalTest === true;
+  const baseAllowed = ["ok", "tier", "version", "descriptorSha256", "catalogFilename", "catalogSha256", "url", "expiresAt", "size", "sha256", "targetMetadata", "metadata"];
+  const allowed = allowLocalTest ? [...baseAllowed, "channel", "publishable"] : baseAllowed;
+  const strictVersion = typeof item.version === "string" && VERSION.test(item.version);
+  // A formal (stable/alpha/beta) version must never carry the local-test marker.
+  if (strictVersion && (item.channel !== undefined || item.publishable !== undefined)) {
+    throw new CliError("VALIDATION_ERROR", "invalid or changed pro artifact descriptor");
+  }
+  const versionAllowed = typeof item.version === "string" && (strictVersion || isLocalTestDescriptor(item, allowLocalTest));
   if (Object.keys(item).some((key) => !allowed.includes(key)) || item.ok !== true || item.tier !== "pro" || item.version !== expected.version || item.descriptorSha256 !== expected.descriptorSha256 ||
-      typeof item.version !== "string" || !VERSION.test(item.version) || typeof item.descriptorSha256 !== "string" || !SHA.test(item.descriptorSha256) ||
+      !versionAllowed || typeof item.descriptorSha256 !== "string" || !SHA.test(item.descriptorSha256) ||
       item.catalogFilename !== "catalog.json" || typeof item.catalogSha256 !== "string" || !SHA.test(item.catalogSha256) || typeof item.url !== "string" ||
       typeof item.expiresAt !== "string" || typeof item.size !== "number" || !Number.isSafeInteger(item.size) || item.size < 1 || typeof item.sha256 !== "string" || !SHA.test(item.sha256)) {
     throw new CliError("VALIDATION_ERROR", "invalid or changed pro artifact descriptor");
   }
   const targetMetadata = item.targetMetadata !== undefined ? parseTargetMetadata(item.targetMetadata) : undefined;
   const metadata = item.metadata !== undefined ? parseSignedDescriptor(item.metadata, now, { allowLoopback }) : undefined;
+  const localTest = isLocalTestDescriptor(item, allowLocalTest);
   return {
     ...(item as unknown as ProArtifactDescriptor),
     ...(targetMetadata ? { targetMetadata } : {}),
     ...(metadata ? { metadata } : {}),
+    ...(localTest ? { channel: "local-test" as const, publishable: false } : {}),
   };
 }
 
-async function requestDescriptor(token: string, endpoint: string, expected: { version: string; descriptorSha256: string }, deps: { fetch: typeof fetch; signal: AbortSignal; now: number; allowLoopback: boolean }): Promise<{ status: number; value?: ProArtifactDescriptor }> {
+async function requestDescriptor(token: string, endpoint: string, expected: { version: string; descriptorSha256: string; allowLocalTest?: boolean }, deps: { fetch: typeof fetch; signal: AbortSignal; now: number; allowLoopback: boolean }): Promise<{ status: number; value?: ProArtifactDescriptor }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5_000);
   const abort = () => controller.abort();
@@ -123,7 +149,7 @@ async function requestDescriptor(token: string, endpoint: string, expected: { ve
 }
 
 /** Exchange auth for the Pro descriptor (token dance + error mapping). */
-export async function fetchProDescriptor(context: CommandContext, auth: AuthUseCaseDependencies, expected: { version: string; descriptorSha256: string }, deps: {
+export async function fetchProDescriptor(context: CommandContext, auth: AuthUseCaseDependencies, expected: { version: string; descriptorSha256: string; allowLocalTest?: boolean }, deps: {
   readonly fetch?: typeof fetch;
 } = {}): Promise<ProArtifactDescriptor> {
   const fetchFn = deps.fetch ?? fetch;
@@ -144,12 +170,13 @@ export async function fetchProDescriptor(context: CommandContext, auth: AuthUseC
 }
 
 /** Extract + verify the pro metadata archive; the manifest must match the pro release. */
-export function extractProMetadata(artifactBytes: Uint8Array, catalogSha256: string, version: string):
+export function extractProMetadata(artifactBytes: Uint8Array, catalogSha256: string, version: string, allowLocalTest = false):
   { readonly manifestJson: string; readonly manualMd: string; readonly catalogJson: string } {
   const result = extractAndVerifyMetadataArchive(artifactBytes, {
     expectedCatalogSha: catalogSha256,
     expectedTier: "pro",
     expectedVersion: version,
+    allowLocalTest,
   });
   if (result.kind !== "ok") throw new CliError("VALIDATION_ERROR", result.message);
   return result.value;
@@ -172,7 +199,7 @@ export function proSignedDownloadOptions(context: CommandContext, deps: {
   };
 }
 
-export async function downloadProArtifact(context: CommandContext, auth: AuthUseCaseDependencies, expected: { version: string; descriptorSha256: string }, deps: {
+export async function downloadProArtifact(context: CommandContext, auth: AuthUseCaseDependencies, expected: { version: string; descriptorSha256: string; allowLocalTest?: boolean }, deps: {
   readonly fetch?: typeof fetch;
   readonly allowedHosts?: readonly string[];
   readonly onProgress?: (event: { readonly downloadedBytes: number; readonly totalBytes?: number }) => void;
@@ -190,7 +217,7 @@ export async function downloadProArtifact(context: CommandContext, auth: AuthUse
   let metadataBytes: Uint8Array | undefined;
   if (descriptor.metadata) {
     metadataBytes = await downloadSignedArtifact(descriptor.metadata, downloadOptions);
-    metadata = extractProMetadata(metadataBytes, descriptor.catalogSha256, descriptor.version);
+    metadata = extractProMetadata(metadataBytes, descriptor.catalogSha256, descriptor.version, expected.allowLocalTest === true);
   } else {
     throw new CliError("VALIDATION_ERROR", "pro release descriptor is missing the metadata archive");
   }

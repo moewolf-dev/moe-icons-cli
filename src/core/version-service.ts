@@ -4,6 +4,8 @@ import { parseVersion } from "./update-policy.js";
 const LIBRARY_VERSIONS_URL = "https://api.moeicons.com/v1/icon-library/versions";
 const NPM_PACKAGE_URL = "https://registry.npmjs.org/@moewolf%2fmoe-icons-cli";
 const SHA256 = /^[a-f0-9]{64}$/;
+/** A-1b: local-test candidate versions; only accepted with an explicit local context. */
+const LOCAL_TEST_VERSION = /^\d+\.\d+\.\d+-test$/;
 const CLI_VERSION_CACHE_TTL_MS = 5 * 60 * 1_000;
 let cliVersionCache: { readonly expiresAt: number; readonly versions: readonly string[] } | undefined;
 
@@ -28,7 +30,14 @@ export function resolveVersionsEndpoint(env: Readonly<Record<string, string | un
   return override;
 }
 
-export interface PublicTierVersion { readonly version: string; readonly releasedAt: string; readonly descriptorSha256: string }
+export interface PublicTierVersion {
+  readonly version: string;
+  readonly releasedAt: string;
+  readonly descriptorSha256: string;
+  /** A-1b: present only for an accepted local-test candidate. */
+  readonly channel?: "local-test";
+  readonly publishable?: boolean;
+}
 export interface PublicLibraryVersions { readonly schemaVersion: 1; readonly free: PublicTierVersion | null; readonly pro: PublicTierVersion | null }
 
 async function fixedFetch(url: string, fetchFn: typeof fetch, signal?: AbortSignal, timeoutMs = 5_000): Promise<Response> {
@@ -42,21 +51,34 @@ async function fixedFetch(url: string, fetchFn: typeof fetch, signal?: AbortSign
   finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
 }
 
-function tier(value: unknown): PublicTierVersion | null | undefined {
+function tier(value: unknown, allowLocalTest: boolean): PublicTierVersion | null | undefined {
   if (value === null) return null;
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const item = value as Record<string, unknown>;
-  return typeof item.version === "string" && parseVersion(item.version) && typeof item.releasedAt === "string" &&
-    /^\d{4}-\d{2}-\d{2}T.*Z$/.test(item.releasedAt) && typeof item.descriptorSha256 === "string" && SHA256.test(item.descriptorSha256)
-    ? item as unknown as PublicTierVersion : undefined;
+  const baseValid = typeof item.version === "string" && typeof item.releasedAt === "string" &&
+    /^\d{4}-\d{2}-\d{2}T.*Z$/.test(item.releasedAt) && typeof item.descriptorSha256 === "string" && SHA256.test(item.descriptorSha256);
+  if (!baseValid) return undefined;
+  const version = item.version as string;
+  if (parseVersion(version)) {
+    // A formal (stable/alpha/beta) version must never carry the local-test marker.
+    if (item.channel !== undefined || item.publishable !== undefined) return undefined;
+    return item as unknown as PublicTierVersion;
+  }
+  // A-1b: an `X.Y.Z-test` version is only accepted when the caller proved a
+  // local-only context and the release explicitly declares the local-test model.
+  if (allowLocalTest && LOCAL_TEST_VERSION.test(version) && item.channel === "local-test" && item.publishable === false) {
+    return item as unknown as PublicTierVersion;
+  }
+  return undefined;
 }
 
-export async function fetchLibraryVersions(deps: { fetch?: typeof fetch; signal?: AbortSignal; timeoutMs?: number; env?: Readonly<Record<string, string | undefined>> } = {}): Promise<PublicLibraryVersions> {
+export async function fetchLibraryVersions(deps: { fetch?: typeof fetch; signal?: AbortSignal; timeoutMs?: number; env?: Readonly<Record<string, string | undefined>>; allowLocalTest?: boolean } = {}): Promise<PublicLibraryVersions> {
   const url = resolveVersionsEndpoint(deps.env ?? {});
+  const allowLocalTest = deps.allowLocalTest === true;
   const response = await fixedFetch(url, deps.fetch ?? fetch, deps.signal, deps.timeoutMs);
   if (!response.ok) throw new CliError("NETWORK_ERROR", `version check failed with ${response.status}`);
   const value = await response.json() as Record<string, unknown>;
-  const free = tier(value.free); const pro = tier(value.pro);
+  const free = tier(value.free, allowLocalTest); const pro = tier(value.pro, allowLocalTest);
   if (value.schemaVersion !== 1 || free === undefined || pro === undefined || Object.keys(value).some((key) => !["schemaVersion", "free", "pro"].includes(key))) {
     throw new CliError("VALIDATION_ERROR", "invalid icon library versions response");
   }

@@ -154,6 +154,9 @@ export async function runInstallUseCase(
     targetSha256: subtree.sha256,
     targetFileCount: subtree.fileCount,
     targetByteCount: subtree.byteCount,
+    // Local-test candidates record the declared model so a later generate can
+    // verify the install state (mirrors the Pro install path).
+    ...(downloaded.descriptor.channel === "local-test" ? { channel: "local-test" as const, publishable: false } : {}),
   });
 
   const plan = createInstallPlan(project.root, files);

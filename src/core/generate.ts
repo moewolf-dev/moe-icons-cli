@@ -20,9 +20,11 @@ import {
   serializeInstallMetadata,
   sha256Bytes,
   type InstallMetadata,
+  type InstallMetadataParseOptions,
 } from "../project/install-metadata.js";
 import { withProjectLockSync } from "../project/project-lock.js";
 import type { Target } from "../commands/parser.js";
+import { allowLocalTestFromEnv } from "./local-test-env.js";
 
 export type GenerateResult =
   | {
@@ -65,6 +67,7 @@ export type InstalledCatalogState =
 export function loadInstalledCatalogState(
   projectRoot: string,
   fs_: Pick<TransactionalFsWithCopy, "readFileSync" | "existsSync">,
+  opts: InstallMetadataParseOptions = {},
 ): InstalledCatalogState {
   const catalogPath = join(projectRoot, ".moeicons", "catalog.json");
   const metadataPath = join(projectRoot, ".moeicons", "install-metadata.json");
@@ -98,7 +101,7 @@ export function loadInstalledCatalogState(
   try {
     const rawMetadata = fs_.readFileSync(metadataPath, "utf8");
     if (typeof rawMetadata !== "string") throw new Error("metadata is not text");
-    metadata = parseInstallMetadata(rawMetadata);
+    metadata = parseInstallMetadata(rawMetadata, opts);
   } catch (error) {
     return { status: "invalid", message: `install metadata is invalid: ${error instanceof Error ? error.message : String(error)}; run repair or reinstall` };
   }
@@ -297,7 +300,8 @@ export async function runGenerateUseCase(
 ): Promise<GenerateResult> {
   const project = detectProject(context.cwd);
   if (!project) return { ok: false, reason: "no-project" };
-  const catalogState = loadInstalledCatalogState(project.root, fs_);
+  const allowLocalTest = allowLocalTestFromEnv(context.env);
+  const catalogState = loadInstalledCatalogState(project.root, fs_, { allowLocalTest });
   if (catalogState.status === "invalid") {
     return { ok: false, reason: "validation", errors: [catalogState.message] };
   }
@@ -388,7 +392,7 @@ export async function runGenerateUseCase(
           ok: false,
           reason: "managed install metadata is missing; run repair or reinstall",
         };
-      const metadata = parseInstallMetadata(fs_.readFileSync(metadataPath, "utf8"));
+      const metadata = parseInstallMetadata(fs_.readFileSync(metadataPath, "utf8"), { allowLocalTest });
       if (!metadata || metadata.tier !== loaded.config.tier)
         return {
           ok: false,

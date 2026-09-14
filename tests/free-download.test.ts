@@ -17,7 +17,7 @@ function sha256(bytes: Uint8Array): string {
 describe("tar-gz roundtrip", () => {
   it("packs and unpacks catalog.json", () => {
     const packed = createTarGz({ "catalog.json": "{\"ok\":true}\n" });
-    const unpacked = extractTarGz(packed, { maxEntries: 10, maxExpandedBytes: 1024 });
+    const unpacked = extractTarGz(packed, { maxEntries: 10, maxExpandedBytes: 4096 });
     expect(unpacked.errors).toEqual([]);
     expect(Buffer.from(unpacked.files["catalog.json"] ?? []).toString("utf8")).toBe('{"ok":true}\n');
   });

@@ -5,11 +5,21 @@ const BLOCK = 512;
 /**
  * Combined release archives contain all four target trees. The current Pro
  * contract is roughly 60k regular files (9 groups × 554 icons), so the former
- * 20k cap rejected valid official packages. Keep a finite ceiling above the
- * full release matrix while retaining zip-bomb/path protections.
+ * 20k cap rejected valid official packages. The six-spec bitmap matrix expands
+ * to ~205 MiB (tar stream ~257 MiB), so the expanded ceiling covers that with
+ * headroom while staying finite for zip-bomb protection. `extractTarGz` enforces
+ * the same bound during gunzip via `maxOutputLength`, before the tar stream is
+ * materialised.
  */
 export const ICON_ARCHIVE_MAX_ENTRIES = 100_000;
-export const ICON_ARCHIVE_MAX_EXPANDED_BYTES = 128 * 1024 * 1024;
+export const ICON_ARCHIVE_MAX_EXPANDED_BYTES = 512 * 1024 * 1024;
+
+/** True when a zlib gunzip failure means the bounded output was exceeded. */
+function isOutputLimitError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  const message = error instanceof Error ? error.message : "";
+  return code === "ERR_BUFFER_TOO_LARGE" || /larger than|maxOutputLength|output length/i.test(message);
+}
 
 function checksumHeader(header: Buffer): number {
   let sum = 0;
@@ -80,8 +90,11 @@ export function extractTarGz(
   const errors: string[] = [];
   let data: Buffer;
   try {
-    data = gunzipSync(bytes);
-  } catch {
+    // Bound the decompressed stream itself so a zip bomb fails during gunzip,
+    // before the tar bytes are materialised.
+    data = gunzipSync(bytes, { maxOutputLength: limits.maxExpandedBytes });
+  } catch (error) {
+    if (isOutputLimitError(error)) return { files, errors: ["expanded size exceeds limit"] };
     return { files, errors: ["invalid gzip"] };
   }
 

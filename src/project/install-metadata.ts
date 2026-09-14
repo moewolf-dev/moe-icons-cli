@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const VERSION = /^\d+\.\d+\.\d+(?:-(?:alpha|beta))?$/;
+const LOCAL_TEST_VERSION = /^\d+\.\d+\.\d+-test$/;
 const UTC_RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 
 export interface InstallMetadata {
@@ -20,6 +21,14 @@ export interface InstallMetadata {
   readonly targetSha256?: string;
   readonly targetFileCount?: number;
   readonly targetByteCount?: number;
+  /** A-1b: present only for an installed local-test candidate. */
+  readonly channel?: "local-test";
+  readonly publishable?: boolean;
+}
+
+export interface InstallMetadataParseOptions {
+  /** A-1b: accept a declared `X.Y.Z-test` local-test candidate (local context only). */
+  readonly allowLocalTest?: boolean;
 }
 
 export type InstalledResourceState =
@@ -41,9 +50,10 @@ function safeManagedPath(path: string): boolean {
   );
 }
 
-export function parseInstallMetadata(raw: string): InstallMetadata | undefined {
+export function parseInstallMetadata(raw: string, opts: InstallMetadataParseOptions = {}): InstallMetadata | undefined {
   try {
     const value = JSON.parse(raw) as Record<string, unknown>;
+    const allowLocalTest = opts.allowLocalTest === true;
     const allowed = new Set([
       "schemaVersion",
       "artifactVersion",
@@ -57,11 +67,17 @@ export function parseInstallMetadata(raw: string): InstallMetadata | undefined {
       "targetSha256",
       "targetFileCount",
       "targetByteCount",
+      ...(allowLocalTest ? ["channel", "publishable"] : []),
     ]);
     if (Object.keys(value).some((key) => !allowed.has(key)) || value.schemaVersion !== 1)
       return undefined;
-    if (typeof value.artifactVersion !== "string" || !VERSION.test(value.artifactVersion))
-      return undefined;
+    const localTestMarked = value.channel === "local-test" && value.publishable === false;
+    const strictVersion = typeof value.artifactVersion === "string" && VERSION.test(value.artifactVersion);
+    // A formal (stable/alpha/beta) version must never carry the local-test marker.
+    if (strictVersion && (value.channel !== undefined || value.publishable !== undefined)) return undefined;
+    const versionAllowed =
+      strictVersion || (allowLocalTest && localTestMarked && LOCAL_TEST_VERSION.test(value.artifactVersion as string));
+    if (!versionAllowed) return undefined;
     if (value.tier !== "free" && value.tier !== "pro") return undefined;
     if (!["react", "vue", "vanilla", "assets"].includes(value.target as string))
       return undefined;
@@ -119,6 +135,7 @@ export function serializeInstallMetadata(metadata: InstallMetadata): string {
 export function readInstalledResourceState(
   projectRoot: string,
   expectedTier?: "free" | "pro",
+  opts: InstallMetadataParseOptions = {},
 ): InstalledResourceState {
   const metadataPath = join(projectRoot, ".moeicons", "install-metadata.json");
   if (!existsSync(metadataPath))
@@ -126,7 +143,7 @@ export function readInstalledResourceState(
       kind: "missing",
       message: "managed install metadata is missing; run repair or reinstall",
     };
-  const metadata = parseInstallMetadata(readFileSync(metadataPath, "utf8"));
+  const metadata = parseInstallMetadata(readFileSync(metadataPath, "utf8"), opts);
   if (!metadata)
     return {
       kind: "invalid",

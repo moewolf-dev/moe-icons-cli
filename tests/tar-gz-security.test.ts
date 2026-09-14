@@ -37,25 +37,38 @@ function rawTar(name: string, typeflag: number, body = ""): Uint8Array {
 }
 
 describe("tar-gz extraction hardening (R3/R6)", () => {
-  it("allows the current full Pro release matrix without removing the finite cap", () => {
+  it("allows the six-spec Pro release matrix with a finite 512 MiB cap", () => {
     // Current production shape: 9 groups × 554 icons × about 12 files across
     // React/Vue/Vanilla/Assets, plus package and metadata entries.
     const currentProEntries = 9 * 554 * 12 + 128;
     expect(ICON_ARCHIVE_MAX_ENTRIES).toBeGreaterThan(currentProEntries);
-    expect(ICON_ARCHIVE_MAX_ENTRIES).toBeLessThanOrEqual(100_000);
-    expect(ICON_ARCHIVE_MAX_EXPANDED_BYTES).toBeGreaterThan(58_423_609);
-    expect(ICON_ARCHIVE_MAX_EXPANDED_BYTES).toBeLessThanOrEqual(128 * 1024 * 1024);
+    expect(ICON_ARCHIVE_MAX_ENTRIES).toBe(100_000);
+    // The six-spec bitmap candidate expands to ~205 MiB; the cap covers it with
+    // headroom while remaining finite and bounded (no unbounded gunzip).
+    expect(ICON_ARCHIVE_MAX_EXPANDED_BYTES).toBeGreaterThan(205 * 1024 * 1024);
+    expect(ICON_ARCHIVE_MAX_EXPANDED_BYTES).toBe(512 * 1024 * 1024);
+  });
+
+  it("fails closed during gunzip when the bounded output is exceeded", () => {
+    // The tar stream (~2.5 KiB) itself exceeds a 512-byte bound, so the failure
+    // must be reported from the gunzip stage, not after materialising the tar.
+    const result = extractTarGz(createTarGz({ "big.bin": "x".repeat(2048) }), {
+      maxEntries: 100,
+      maxExpandedBytes: 512,
+    });
+    expect(result.errors[0]).toBe("expanded size exceeds limit");
+    expect(result.files).toEqual({});
   });
 
   it("rejects symlink entries instead of silently skipping them", () => {
-    const result = extractTarGz(rawTar("evil-link", 0x32), { maxEntries: 100, maxExpandedBytes: 1024 });
+    const result = extractTarGz(rawTar("evil-link", 0x32), { maxEntries: 100, maxExpandedBytes: 4096 });
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.errors[0]).toMatch(/link/);
     expect(result.files["evil-link"]).toBeUndefined();
   });
 
   it("rejects hard-link entries explicitly", () => {
-    const result = extractTarGz(rawTar("hard-link", 0x31), { maxEntries: 100, maxExpandedBytes: 1024 });
+    const result = extractTarGz(rawTar("hard-link", 0x31), { maxEntries: 100, maxExpandedBytes: 4096 });
     expect(result.errors.some((error) => /link/.test(error))).toBe(true);
     expect(result.files["hard-link"]).toBeUndefined();
   });
@@ -68,23 +81,23 @@ describe("tar-gz extraction hardening (R3/R6)", () => {
         Buffer.alloc(2 * BLOCK, 0),
       ]),
     );
-    const result = extractTarGz(dup, { maxEntries: 100, maxExpandedBytes: 1024 });
+    const result = extractTarGz(dup, { maxEntries: 100, maxExpandedBytes: 4096 });
     expect(result.errors.some((error) => error.includes("duplicate entry"))).toBe(true);
     expect(Buffer.from(result.files["same.txt"] ?? []).toString("utf8")).toBe("first");
   });
 
   it("rejects absolute paths", () => {
-    const result = extractTarGz(rawTar("/etc/passwd", 0x30, "x"), { maxEntries: 100, maxExpandedBytes: 1024 });
+    const result = extractTarGz(rawTar("/etc/passwd", 0x30, "x"), { maxEntries: 100, maxExpandedBytes: 4096 });
     expect(result.errors.some((error) => error.includes("unsafe path"))).toBe(true);
   });
 
   it("rejects parent-directory traversal", () => {
-    const result = extractTarGz(rawTar("../escape", 0x30, "x"), { maxEntries: 100, maxExpandedBytes: 1024 });
+    const result = extractTarGz(rawTar("../escape", 0x30, "x"), { maxEntries: 100, maxExpandedBytes: 4096 });
     expect(result.errors.some((error) => error.includes("unsafe path"))).toBe(true);
   });
 
   it("treats a backslash name as a literal filename (POSIX separator assumption)", () => {
-    const result = extractTarGz(rawTar("..\\escape", 0x30, "x"), { maxEntries: 100, maxExpandedBytes: 1024 });
+    const result = extractTarGz(rawTar("..\\escape", 0x30, "x"), { maxEntries: 100, maxExpandedBytes: 4096 });
     expect(result.errors).toEqual([]);
     expect(result.files["..\\escape"]).toBeDefined();
   });

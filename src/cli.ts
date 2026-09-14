@@ -35,6 +35,7 @@ import { formatLibraryVersionStatus, getLibraryVersionStatus } from "./core/mana
 import { runCliUpdateCheck } from "./core/cli-update.js";
 import { fetchLibraryVersions } from "./core/version-service.js";
 import { runProInstallUseCase } from "./core/pro-install.js";
+import { resolveLocalTestContext } from "./core/local-test-env.js";
 import { runLibraryUpdateUseCase } from "./core/library-update.js";
 import { runMetadataSyncUseCase } from "./core/metadata-sync.js";
 import { runBootstrapUseCase } from "./core/bootstrap.js";
@@ -899,12 +900,14 @@ async function runInstall(
   const context = commandContext(runtime, { json, yes: false });
   const progress = context.ui.progress("Downloading icon library", context.signal);
   if (group === "pro" || group === "ent") {
+    const { allowLocalTest } = resolveLocalTestContext(runtime.env);
     const identity =
       sourceVersion && expectedDescriptorSha256
         ? { version: sourceVersion, descriptorSha256: expectedDescriptorSha256 }
         : await fetchLibraryVersions({
             signal: context.signal,
             env: runtime.env,
+            allowLocalTest,
             ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
           }).then((versions) => {
             if (!versions.pro) throw new CliError("NOT_FOUND", "no pro release is published");
@@ -929,7 +932,7 @@ async function runInstall(
             );
           },
         },
-        { ...identity, ...(target ? { target } : {}) },
+        { ...identity, ...(allowLocalTest ? { allowLocalTest: true } : {}), ...(target ? { target } : {}) },
       );
       progress.stop("Icon library download complete");
       if (json) writeJson(runtime, { ok: true, group: "pro", ...result });
