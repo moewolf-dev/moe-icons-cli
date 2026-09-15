@@ -14,6 +14,8 @@ import { CliError, isCliError } from "../errors/index.js";
 import { extractTarGz, ICON_ARCHIVE_MAX_ENTRIES, ICON_ARCHIVE_MAX_EXPANDED_BYTES } from "../project/tar-gz.js";
 import { artifactCachePath } from "./free-download.js";
 import { resolveThemes } from "../generator/theme-resolve.js";
+import type { ResourceVariant } from "./resource-variant.js";
+import { loadPinnedBitmapShardAssets } from "./bitmap-shard-resolver.js";
 import type { CommandContext } from "./context.js";
 import {
   parseInstallMetadata,
@@ -79,7 +81,7 @@ export function loadInstalledCatalogState(
   // the bundled contract.
   if (!catalogExists) {
     if (metadataExists) {
-      return { status: "invalid", message: "install metadata exists but the catalog is missing; run repair or reinstall" };
+      return { status: "invalid", message: "install metadata exists but the catalog is missing; run 'moeicons install' to repair or reinstall" };
     }
     return { status: "absent" };
   }
@@ -91,11 +93,11 @@ export function loadInstalledCatalogState(
     if (typeof catalogBytes !== "string") return { status: "invalid", message: "installed catalog is not text" };
     catalog = parseCatalog(JSON.parse(catalogBytes));
   } catch (error) {
-    return { status: "invalid", message: `installed catalog cannot be parsed: ${error instanceof Error ? error.message : String(error)}; run repair or reinstall` };
+    return { status: "invalid", message: `installed catalog cannot be parsed: ${error instanceof Error ? error.message : String(error)}; run 'moeicons install' to repair or reinstall` };
   }
 
   if (!metadataExists) {
-    return { status: "invalid", message: "installed catalog is present without install metadata; run repair or reinstall" };
+    return { status: "invalid", message: "installed catalog is present without install metadata; run 'moeicons install' to repair or reinstall" };
   }
   let metadata;
   try {
@@ -103,21 +105,21 @@ export function loadInstalledCatalogState(
     if (typeof rawMetadata !== "string") throw new Error("metadata is not text");
     metadata = parseInstallMetadata(rawMetadata, opts);
   } catch (error) {
-    return { status: "invalid", message: `install metadata is invalid: ${error instanceof Error ? error.message : String(error)}; run repair or reinstall` };
+    return { status: "invalid", message: `install metadata is invalid: ${error instanceof Error ? error.message : String(error)}; run 'moeicons install' to repair or reinstall` };
   }
   if (!metadata) {
-    return { status: "invalid", message: "install metadata could not be parsed; run repair or reinstall" };
+    return { status: "invalid", message: "install metadata could not be parsed; run 'moeicons install' to repair or reinstall" };
   }
   const actual = sha256Bytes(catalogBytes);
   const managed = metadata.managedFiles?.[".moeicons/catalog.json"];
   if (typeof metadata.catalogSha256 !== "string" || typeof managed !== "string") {
-    return { status: "invalid", message: "install metadata is missing the catalog digest; run repair or reinstall" };
+    return { status: "invalid", message: "install metadata is missing the catalog digest; run 'moeicons install' to repair or reinstall" };
   }
   if (metadata.catalogSha256 !== managed) {
-    return { status: "invalid", message: "install metadata catalog digest is inconsistent; run repair or reinstall" };
+    return { status: "invalid", message: "install metadata catalog digest is inconsistent; run 'moeicons install' to repair or reinstall" };
   }
   if (actual !== metadata.catalogSha256) {
-    return { status: "invalid", message: "installed catalog hash does not match install metadata; run repair or reinstall" };
+    return { status: "invalid", message: "installed catalog hash does not match install metadata; run 'moeicons install' to repair or reinstall" };
   }
   return { status: "ok", catalog };
 }
@@ -186,6 +188,83 @@ function readBinaryFile(
   return typeof data === "string" ? Buffer.from(data, "utf8") : new Uint8Array(data);
 }
 
+/** Unique bitmap variants the config selects, in canonical order. */
+function requiredBitmapVariants(
+  config: MoeiconsConfigFile,
+  sourceCatalog?: IconCatalog,
+): ResourceVariant[] {
+  const resolved = resolveThemes(config, sourceCatalog);
+  if (!resolved.ok) return [];
+  const variants = resolved.themes
+    .filter((theme) => theme.kind === "bitmap" && theme.variant)
+    .flatMap((theme) => (theme.variant ? [theme.variant] : []));
+  return [...new Map(variants.map((variant) => [variant.resourceVariantId, variant])).values()];
+}
+
+function archiveHasVariantAssets(
+  archiveFiles: Readonly<Record<string, Uint8Array>>,
+  variant: ResourceVariant,
+  icons: readonly string[],
+): boolean {
+  return icons.every(
+    (iconId) => archiveFiles[`assets/${variant.resourceVariantId}/${iconId}.${variant.format}`] !== undefined,
+  );
+}
+
+/**
+ * DEV-G07: a v4 code archive carries no bitmap payload, so bitmap variants are
+ * restored from the pinned shards. Only the config's selected tuples are read;
+ * each cached shard is re-verified against its pinned identity (archive SHA,
+ * manifest SHA, size, dimensions) before any bytes are handed to the generator.
+ */
+function mergePinnedBitmapShardAssets(
+  archiveFiles: Record<string, Uint8Array>,
+  effectiveConfig: MoeiconsConfigFile,
+  sourceCatalog: IconCatalog | undefined,
+  projectRoot: string,
+  env: Readonly<Record<string, string | undefined>>,
+  fs_: TransactionalFsWithCopy,
+): { readonly ok: true } | { readonly ok: false; readonly errors: readonly string[] } {
+  const variants = requiredBitmapVariants(effectiveConfig, sourceCatalog);
+  const missing = variants.filter(
+    (variant) => !archiveHasVariantAssets(archiveFiles, variant, effectiveConfig.icons),
+  );
+  if (missing.length === 0) return { ok: true };
+
+  const metadataPath = join(projectRoot, ".moeicons", "install-metadata.json");
+  if (!fs_.existsSync(metadataPath)) {
+    return { ok: false, errors: ["bitmap shards require an installed pro artifact; run `moeicons install` first"] };
+  }
+  const metadata = parseInstallMetadata(fs_.readFileSync(metadataPath, "utf8"), {
+    allowLocalTest: allowLocalTestFromEnv(env),
+  });
+  if (!metadata) {
+    return { ok: false, errors: ["install metadata is invalid; run 'moeicons install' to repair or reinstall"] };
+  }
+  if (!metadata.bitmapShards || metadata.bitmapShards.length === 0) {
+    return {
+      ok: false,
+      errors: ["bitmap shards are not pinned in install metadata; run 'moeicons install' to repair or reinstall"],
+    };
+  }
+  const missingTuples = missing.map((variant) => ({
+    styleGroupId: variant.styleGroupId,
+    imageSize: { width: variant.imageSize, height: variant.imageSize },
+    format: variant.format,
+  }));
+  const cacheDir = env.MOEICONS_CACHE_DIR ?? join(homedir(), ".moeicons", "cache");
+  try {
+    const loaded = loadPinnedBitmapShardAssets(metadata.bitmapShards, missingTuples, cacheDir, fs_);
+    Object.assign(archiveFiles, loaded.files);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      errors: [error instanceof Error ? error.message : "bitmap shard verification failed"],
+    };
+  }
+}
+
 /**
  * Load installed artifact bytes for generate. Prefers `.moeicons/artifact/<target>/`
  * when that subtree already contains the assets the generator needs (assets target).
@@ -202,6 +281,12 @@ export function loadArchiveFiles(
   | { readonly ok: false; readonly reason: string } {
   if (injected) return { ok: true, files: injected };
   const fixtureTgz = env.MOEICONS_BITMAP_ARCHIVE;
+  // DEV-G08: the aggregate-archive fixture is a local-test-only seam. It must
+  // never bypass the shard contract in a production context, so a set variable
+  // outside a local environment fails closed instead of being silently used.
+  if (fixtureTgz && !allowLocalTestFromEnv(env)) {
+    return { ok: false, reason: "MOEICONS_BITMAP_ARCHIVE is only honored in a local-test context" };
+  }
   if (fixtureTgz && fs_.existsSync(fixtureTgz)) {
     const unpacked = extractTarGz(readBinaryFile(fs_, fixtureTgz), {
       maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
@@ -338,6 +423,19 @@ export async function runGenerateUseCase(
     }
     archiveFiles = loadedArchive.files;
   }
+  if (archiveFiles !== undefined) {
+    const merged: Record<string, Uint8Array> = { ...archiveFiles };
+    const shardMerge = mergePinnedBitmapShardAssets(
+      merged,
+      effectiveConfig,
+      sourceCatalog,
+      project.root,
+      context.env,
+      fs_,
+    );
+    if (!shardMerge.ok) return { ok: false, reason: "validation", errors: [...shardMerge.errors] };
+    archiveFiles = merged;
+  }
 
   const plan = planGeneratedFiles(
     effectiveConfig,
@@ -390,14 +488,14 @@ export async function runGenerateUseCase(
       if (!fs_.existsSync(metadataPath))
         return {
           ok: false,
-          reason: "managed install metadata is missing; run repair or reinstall",
+          reason: "managed install metadata is missing; run 'moeicons install' to repair or reinstall",
         };
       const metadata = parseInstallMetadata(fs_.readFileSync(metadataPath, "utf8"), { allowLocalTest });
       if (!metadata || metadata.tier !== loaded.config.tier)
         return {
           ok: false,
           reason:
-            "managed install metadata is invalid or does not match config tier; run repair or reinstall",
+            "managed install metadata is invalid or does not match config tier; run 'moeicons install' to repair or reinstall",
         };
       for (const [managedPath, expected] of Object.entries(metadata.managedFiles)) {
         const absolute = join(project.root, managedPath);
@@ -411,7 +509,7 @@ export async function runGenerateUseCase(
       if (metadata.managedFiles[".moeicons/catalog.json"] !== metadata.catalogSha256)
         return {
           ok: false,
-          reason: "managed catalog hash is inconsistent; run repair or reinstall",
+          reason: "managed catalog hash is inconsistent; run 'moeicons install' to repair or reinstall",
         };
 
       const outputPrefix = loaded.config.outputDir.replace(/\\/g, "/").replace(/\/$/, "") + "/";

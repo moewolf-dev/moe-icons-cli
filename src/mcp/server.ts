@@ -161,10 +161,16 @@ export function createMcpServer(deps: McpDeps) {
               groupId,
               projectPath,
             });
+            // AUD-CL-01-R1: a failed tool result MUST be a protocol-level error
+            // (`isError: true`), not an ordinary success carrying `{ok:false}`,
+            // so automated clients never treat it as success.
             return {
               jsonrpc: "2.0",
               id: message.id,
-              result: { content: [{ type: "text", text: JSON.stringify(result) }] },
+              result: {
+                content: [{ type: "text", text: JSON.stringify(result) }],
+                ...(result.ok === false ? { isError: true } : {}),
+              },
             };
           }
           return {

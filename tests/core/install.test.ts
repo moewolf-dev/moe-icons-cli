@@ -108,6 +108,17 @@ describe("runInstallUseCase", () => {
     expect(readInstalledResourceState(project, "free").kind).toBe("ok");
   });
 
+  it("AUD-CL-01: single style-group install fails closed with explicit guidance", async () => {
+    const result = await runInstallUseCase(context(project), deps(), { group: "moe-outline" });
+    expect(result.ok).toBe(false);
+    if (result.ok || result.reason === "no-project") return;
+    expect(result.reason).toBe("validation");
+    expect(result.message).toContain("single style-group install is not supported");
+    expect(result.message).toContain('"moeicons install free"');
+    // No project state is written for a rejected group.
+    expect(existsSync(join(project, ".moeicons", "install-metadata.json"))).toBe(false);
+  });
+
   it("routes pro/ent away from the free download path", async () => {
     expect(await runInstallUseCase(context(project), deps(), { group: "pro" })).toEqual({
       ok: false,

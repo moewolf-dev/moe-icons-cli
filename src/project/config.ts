@@ -163,7 +163,22 @@ function asRecord(raw: unknown): Record<string, unknown> {
   return raw as Record<string, unknown>;
 }
 
-function requireCommonConfigFields(obj: Record<string, unknown>, sourceCatalog: IconCatalog): {
+/**
+ * DEV-G10-R1: two-phase Pro validation. The bootstrap phase parses only the
+ * catalog-independent fields (tier/target/syntax) so a Pro bitmap config can be
+ * read BEFORE the release catalog is available; the strict phase re-validates
+ * the same config against the verified release catalog and fails closed on any
+ * style group / icon / variant the release does not actually ship.
+ */
+export interface ConfigReadOptions {
+  readonly lenientCatalog?: boolean;
+}
+
+function requireCommonConfigFields(
+  obj: Record<string, unknown>,
+  sourceCatalog: IconCatalog,
+  lenientCatalog: boolean,
+): {
   warnings: string[];
   tier: "free" | "pro";
   outputDir: string;
@@ -205,9 +220,11 @@ function requireCommonConfigFields(obj: Record<string, unknown>, sourceCatalog: 
     if (typeof theme.styleGroup !== "string")
       throw new Error(`theme ${name}.styleGroup is required`);
     const group = findCatalogStyleGroup(theme.styleGroup, sourceCatalog);
-    if (!group) throw new Error(`unknown style group "${theme.styleGroup}"`);
-    if (!group.tiers.includes(tier)) {
-      throw new Error(`style group "${group.id}" is not available in ${tier} tier`);
+    if (!lenientCatalog) {
+      if (!group) throw new Error(`unknown style group "${theme.styleGroup}"`);
+      if (!group.tiers.includes(tier)) {
+        throw new Error(`style group "${group.id}" is not available in ${tier} tier`);
+      }
     }
 
     // styles[] is deprecated — still accepted for migration but warns.
@@ -225,28 +242,30 @@ function requireCommonConfigFields(obj: Record<string, unknown>, sourceCatalog: 
     if (imageSize !== undefined && ![64, 128, 256, 512].includes(imageSize)) {
       throw new Error(`theme ${name}.imageSize is invalid`);
     }
-    if (
-      group.type !== "bitmap" &&
-      ((format !== undefined && format !== "svg") || imageSize !== undefined)
-    ) {
-      throw new Error(`SVG theme ${name} cannot define bitmap options`);
-    }
-    if (group.type === "bitmap" && format !== undefined && !group.formats.includes(format)) {
-      throw new Error(`format ${format} is unavailable for ${group.id}`);
-    }
-    if (
-      group.type === "bitmap" &&
-      imageSize !== undefined &&
-      !group.imageSizes.includes(imageSize)
-    ) {
-      throw new Error(`imageSize ${imageSize} is unavailable for ${group.id}`);
-    }
-    if (group.type === "bitmap" && group.variants && group.variants.length > 0) {
-      const effectiveFormat = format ?? "webp";
-      const effectiveSize = imageSize ?? 256;
-      const variantId = `${group.id}-${effectiveSize}-${effectiveFormat}`;
-      if (!group.variants.includes(variantId)) {
-        throw new Error(`variant ${variantId} is unavailable for ${group.id}`);
+    if (!lenientCatalog && group) {
+      if (
+        group.type !== "bitmap" &&
+        ((format !== undefined && format !== "svg") || imageSize !== undefined)
+      ) {
+        throw new Error(`SVG theme ${name} cannot define bitmap options`);
+      }
+      if (group.type === "bitmap" && format !== undefined && !group.formats.includes(format)) {
+        throw new Error(`format ${format} is unavailable for ${group.id}`);
+      }
+      if (
+        group.type === "bitmap" &&
+        imageSize !== undefined &&
+        !group.imageSizes.includes(imageSize)
+      ) {
+        throw new Error(`imageSize ${imageSize} is unavailable for ${group.id}`);
+      }
+      if (group.type === "bitmap" && group.variants && group.variants.length > 0) {
+        const effectiveFormat = format ?? "webp";
+        const effectiveSize = imageSize ?? 256;
+        const variantId = `${group.id}-${effectiveSize}-${effectiveFormat}`;
+        if (!group.variants.includes(variantId)) {
+          throw new Error(`variant ${variantId} is unavailable for ${group.id}`);
+        }
       }
     }
     themes[name] = {
@@ -261,8 +280,10 @@ function requireCommonConfigFields(obj: Record<string, unknown>, sourceCatalog: 
   if (!(obj.defaultTheme in themes))
     throw new Error(`defaultTheme "${obj.defaultTheme}" is not defined`);
   const icons = flattenIcons(obj.icons);
-  for (const iconId of icons)
-    if (!findCatalogIcon(iconId, sourceCatalog)) throw new Error(`unknown icon "${iconId}"`);
+  if (!lenientCatalog) {
+    for (const iconId of icons)
+      if (!findCatalogIcon(iconId, sourceCatalog)) throw new Error(`unknown icon "${iconId}"`);
+  }
   return {
     warnings,
     tier,
@@ -288,6 +309,7 @@ function validateV2Config(
   raw: unknown,
   sourceCatalog: IconCatalog,
   schemaVersion: 2 | 3 = 2,
+  lenientCatalog = false,
 ): ValidatedConfig {
   const obj = asRecord(raw);
   if (obj.framework !== undefined)
@@ -299,7 +321,7 @@ function validateV2Config(
   }
   if (obj.target === undefined) throw new Error("target is required");
   const target = normalizeTarget(obj.target);
-  const common = requireCommonConfigFields(obj, sourceCatalog);
+  const common = requireCommonConfigFields(obj, sourceCatalog, lenientCatalog);
   return {
     config: {
       schemaVersion,
@@ -353,7 +375,7 @@ function validateIntegration(value: unknown): MoeiconsIntegration {
 }
 
 /** Validate a legacy schema version 1 config: framework is required, target is rejected. */
-function validateV1Config(raw: unknown, sourceCatalog: IconCatalog): ValidatedConfig {
+function validateV1Config(raw: unknown, sourceCatalog: IconCatalog, lenientCatalog = false): ValidatedConfig {
   const obj = asRecord(raw);
   for (const key of Object.keys(obj)) {
     if (!ALLOWED_COMMON_KEYS.has(key) && key !== "framework") {
@@ -364,7 +386,7 @@ function validateV1Config(raw: unknown, sourceCatalog: IconCatalog): ValidatedCo
     throw new Error("v1 config cannot set target or integration; migrate to schema v2/v3");
   if (obj.framework !== "react" && obj.framework !== "vue")
     throw new Error("framework must be react or vue");
-  const common = requireCommonConfigFields(obj, sourceCatalog);
+  const common = requireCommonConfigFields(obj, sourceCatalog, lenientCatalog);
   return {
     config: {
       schemaVersion: 2,
@@ -382,10 +404,20 @@ function validateV1Config(raw: unknown, sourceCatalog: IconCatalog): ValidatedCo
   };
 }
 
-export function readMoeiconsConfig(
-  root: string,
-  sourceCatalog: IconCatalog = catalog,
-): ConfigLoadResult {
+/**
+ * A single immutable read of the on-disk config. DEV-G10-R2: Pro install takes
+ * one document snapshot and validates it twice (lenient, then strict). The
+ * target subtree and the bitmap tuples therefore always come from the SAME
+ * config bytes; a rewrite during download can never mix an old target with new
+ * tuples.
+ */
+export type ConfigDocument =
+  | { readonly kind: "missing" }
+  | { readonly kind: "invalid"; readonly message: string }
+  | { readonly kind: "unsupported"; readonly version: number }
+  | { readonly kind: "ok"; readonly value: unknown; readonly version: 1 | 2 | 3 };
+
+export function loadConfigDocument(root: string): ConfigDocument {
   const configPath = findConfigFile(root);
   if (!configPath) return { kind: "missing" };
   if (!configPath.endsWith(".json") && !configPath.endsWith(".jsonc")) {
@@ -405,17 +437,35 @@ export function readMoeiconsConfig(
     return { kind: "invalid", message: "schemaVersion must be 1, 2, or 3" };
   }
   if (version !== 1 && version !== 2 && version !== 3) return { kind: "unsupported", version };
+  return { kind: "ok", value: parsed.value, version };
+}
+
+/** Validate a previously loaded document (never re-reads the filesystem). */
+export function validateConfigDocument(
+  document: ConfigDocument,
+  sourceCatalog: IconCatalog = catalog,
+  options: ConfigReadOptions = {},
+): ConfigLoadResult {
+  if (document.kind !== "ok") return document;
   try {
-    if (version === 1) {
-      const validated = validateV1Config(parsed.value, sourceCatalog);
+    if (document.version === 1) {
+      const validated = validateV1Config(document.value, sourceCatalog, options.lenientCatalog === true);
       validated.warnings.unshift('config schema v1 migrated "framework" to "target"');
       return { kind: "ok", config: validated.config, warnings: validated.warnings };
     }
-    const validated = validateV2Config(parsed.value, sourceCatalog, version);
+    const validated = validateV2Config(document.value, sourceCatalog, document.version, options.lenientCatalog === true);
     return { kind: "ok", config: validated.config, warnings: validated.warnings };
   } catch (error) {
     return { kind: "invalid", message: error instanceof Error ? error.message : String(error) };
   }
+}
+
+export function readMoeiconsConfig(
+  root: string,
+  sourceCatalog: IconCatalog = catalog,
+  options: ConfigReadOptions = {},
+): ConfigLoadResult {
+  return validateConfigDocument(loadConfigDocument(root), sourceCatalog, options);
 }
 
 /** Resolve the canonical v2 target from either a normalized v2 or legacy v1 input. */

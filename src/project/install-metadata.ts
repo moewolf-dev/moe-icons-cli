@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { bitmapShardSetSha256, parseBitmapShard, type BitmapShard } from "../core/bitmap-shards.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const VERSION = /^\d+\.\d+\.\d+(?:-(?:alpha|beta))?$/;
@@ -21,6 +22,12 @@ export interface InstallMetadata {
   readonly targetSha256?: string;
   readonly targetFileCount?: number;
   readonly targetByteCount?: number;
+  /**
+   * DEV-G07: the exact bitmap shard identities selected by the config at
+   * install time. generate/repair/offline re-verify these pins before reuse.
+   */
+  readonly bitmapShards?: readonly BitmapShard[];
+  readonly bitmapShardSetSha256?: string;
   /** A-1b: present only for an installed local-test candidate. */
   readonly channel?: "local-test";
   readonly publishable?: boolean;
@@ -67,6 +74,8 @@ export function parseInstallMetadata(raw: string, opts: InstallMetadataParseOpti
       "targetSha256",
       "targetFileCount",
       "targetByteCount",
+      "bitmapShards",
+      "bitmapShardSetSha256",
       ...(allowLocalTest ? ["channel", "publishable"] : []),
     ]);
     if (Object.keys(value).some((key) => !allowed.has(key)) || value.schemaVersion !== 1)
@@ -122,6 +131,16 @@ export function parseInstallMetadata(raw: string, opts: InstallMetadataParseOpti
       )
     )
       return undefined;
+    if (value.bitmapShards !== undefined || value.bitmapShardSetSha256 !== undefined) {
+      if (!Array.isArray(value.bitmapShards) || value.bitmapShards.length === 0) return undefined;
+      const shards = value.bitmapShards.map((entry) => parseBitmapShard(entry));
+      for (const shard of shards) {
+        if (shard.resourceVersion !== value.artifactVersion) return undefined;
+      }
+      const digest = value.bitmapShardSetSha256;
+      if (typeof digest !== "string" || !SHA256.test(digest)) return undefined;
+      if (bitmapShardSetSha256(shards) !== digest) return undefined;
+    }
     return value as unknown as InstallMetadata;
   } catch {
     return undefined;
@@ -141,13 +160,13 @@ export function readInstalledResourceState(
   if (!existsSync(metadataPath))
     return {
       kind: "missing",
-      message: "managed install metadata is missing; run repair or reinstall",
+      message: "managed install metadata is missing; run 'moeicons install' to repair or reinstall",
     };
   const metadata = parseInstallMetadata(readFileSync(metadataPath, "utf8"), opts);
   if (!metadata)
     return {
       kind: "invalid",
-      message: "managed install metadata is invalid; run repair or reinstall",
+      message: "managed install metadata is invalid; run 'moeicons install' to repair or reinstall",
     };
   if (expectedTier && metadata.tier !== expectedTier)
     return {

@@ -98,6 +98,8 @@ export function writeFreeReleaseFixture(
     readonly corruptMetadata?: boolean;
     readonly tier?: "free" | "pro";
     readonly localTest?: boolean;
+    /** DEV-G10-R1: exact catalog JSON for a release that ships Pro bitmap groups. */
+    readonly catalogOverride?: unknown;
   } = {},
 ): {
   readonly version: string;
@@ -109,7 +111,9 @@ export function writeFreeReleaseFixture(
   readonly metadataName: string;
 } {
   const version = options.version ?? bundledSourceVersion();
-  const catalog = options.useBundledCatalog
+  const catalog = options.catalogOverride
+    ? `${JSON.stringify(options.catalogOverride)}\n`
+    : options.useBundledCatalog
     ? `${JSON.stringify({ ...JSON.parse(readFileSync(join(import.meta.dirname, "../../src/catalog/catalog.json"), "utf8")), catalogVersion: version, sourceVersion: version })}\n`
     : JSON.stringify({
     schemaVersion: 1,

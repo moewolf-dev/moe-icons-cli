@@ -79,7 +79,14 @@ export async function runInstallUseCase(
 
   const groupArg = options.group;
   if (groupArg !== undefined && groupArg !== "free" && groupArg !== "pro" && groupArg !== "ent") {
-    return { ok: false, reason: "validation", message: `unknown install group: ${groupArg}` };
+    // AUD-CL-01: single style-group install (`moeicons install <styleGroupId>`)
+    // is not supported. Fail closed with explicit guidance instead of silently
+    // treating an unknown group as Free.
+    return {
+      ok: false,
+      reason: "validation",
+      message: `unknown install group "${groupArg}"; single style-group install is not supported — run "moeicons install free" or "moeicons install pro"`,
+    };
   }
   const group = normalizeGroup(groupArg);
   if (group === "pro") {

@@ -107,7 +107,7 @@ describe("E2E-03 free CLI flow", () => {
   });
 
   it("installs pro through authenticated descriptor and signed bytes", async () => {
-    const meta = writeFreeReleaseFixture(releaseDir, { tier: "pro" });
+    const meta = writeFreeReleaseFixture(releaseDir, { tier: "pro", useBundledCatalog: true });
     const archive = new Uint8Array(readFileSync(join(releaseDir, meta.freeName)));
     const metadataArchive = new Uint8Array(readFileSync(join(releaseDir, meta.metadataName)));
     const session: StoredSession = { accountId: "auth0|user", accessToken: "access", refreshToken: "refresh", expiresAt: Date.now() + 60_000, scope: "openid", storedAt: 1 };

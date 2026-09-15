@@ -240,6 +240,29 @@ describe("CLI-15 disposable-project install via MCP", () => {
     expect(existsSync(join(dir, "sub", "src", "moeicons", ".moeicons-free.marker"))).toBe(true);
   });
 
+  it("AUD-CL-01-R1: a failed tool result is a protocol-level isError", async () => {
+    const deps = {
+      services: {
+        listIconGroups: async () => [],
+        getAccount: async () => undefined,
+        installIconGroup: async () => ({ ok: false, message: "single style-group install is not supported" }),
+      },
+      stdout: () => undefined,
+      stderr: () => undefined,
+    };
+    const server = createMcpServer(deps);
+    const response = await server.handle({
+      jsonrpc: "2.0",
+      id: 13,
+      method: "tools/call",
+      params: { name: "install_icon_group", arguments: { groupId: "moe-outline", projectPath: dir } },
+    });
+    expect(response?.error).toBeUndefined();
+    const result = response?.result as { isError?: boolean; content: { text: string }[] };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('"ok":false');
+  });
+
   it("rejects a project path that escapes the workspace root", async () => {
     const deps = {
       services: {

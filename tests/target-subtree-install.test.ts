@@ -136,7 +136,7 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
   it("routes pro installs for all four targets through the authenticated flow with a local mock", async () => {
     writeConfig({ schemaVersion: 2, tier: "pro", target: "react", outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"] });
     for (const target of TARGETS) {
-      const meta = writeFreeReleaseFixture(fixture, { tier: "pro" });
+      const meta = writeFreeReleaseFixture(fixture, { tier: "pro", useBundledCatalog: true });
       const archive = new Uint8Array(readFileSync(join(fixture, meta.freeName)));
       const metadataArchive = new Uint8Array(readFileSync(join(fixture, meta.metadataName)));
       const descriptor = JSON.parse(readFileSync(join(fixture, DESCRIPTOR_NAME), "utf8")) as {
@@ -188,7 +188,7 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
 
   it("never forwards API credentials to the signed pro host while landing the subtree", async () => {
     writeConfig({ schemaVersion: 2, tier: "pro", target: "assets", outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"] });
-    const meta = writeFreeReleaseFixture(fixture, { tier: "pro" });
+    const meta = writeFreeReleaseFixture(fixture, { tier: "pro", useBundledCatalog: true });
     const archive = new Uint8Array(readFileSync(join(fixture, meta.freeName)));
     const metadataArchive = new Uint8Array(readFileSync(join(fixture, meta.metadataName)));
     const descriptor = JSON.parse(readFileSync(join(fixture, DESCRIPTOR_NAME), "utf8")) as {

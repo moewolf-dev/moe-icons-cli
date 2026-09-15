@@ -546,10 +546,12 @@ function runDoctor(
 }
 
 /** Start the MCP stdio server; protocol data to stdout, logs to stderr. */
-async function runMcp(runtime: CliRuntime): Promise<void> {
-  const { runMcpStdio } = await import("./mcp/server.js");
-  const readline = await import("node:readline");
-  const services = {
+/**
+ * AUD-CL-01: the MCP surface exposes no single style-group install. It fails
+ * closed with guidance rather than reporting a fake success.
+ */
+export function createMcpServices(runtime: CliRuntime) {
+  return {
     listIconGroups: () =>
       Promise.resolve([
         { id: "free", displayName: "Free icons" },
@@ -557,10 +559,19 @@ async function runMcp(runtime: CliRuntime): Promise<void> {
       ]),
     getAccount: () => Promise.resolve(undefined),
     installIconGroup: (args: { groupId: string; projectPath: string }) => {
-      runtime.stderr(`installing ${args.groupId} into ${args.projectPath} (stub)\n`);
-      return Promise.resolve({ ok: true, message: `installed ${args.groupId}` });
+      runtime.stderr(`install_icon_group is not supported: ${args.groupId}\n`);
+      return Promise.resolve({
+        ok: false,
+        message: `single style-group install is not supported — run "moeicons install free" or "moeicons install pro"`,
+      });
     },
   };
+}
+
+async function runMcp(runtime: CliRuntime): Promise<void> {
+  const { runMcpStdio } = await import("./mcp/server.js");
+  const readline = await import("node:readline");
+  const services = createMcpServices(runtime);
   const rl = readline.createInterface({ input: process.stdin });
   await runMcpStdio({ services, stdout: runtime.stdout, stderr: runtime.stderr, lines: rl });
 }
@@ -920,7 +931,7 @@ async function runInstall(
       const result = await runProInstallUseCase(
         context,
         {
-          fs: { mkdirSync, writeFileSync, existsSync, renameSync, rmSync },
+          fs: { mkdirSync, writeFileSync, existsSync, renameSync, rmSync, readFileSync, readdirSync, copyFileSync },
           auth: runtime.auth ?? {},
           fetch: runtime.auth?.fetch ?? globalThis.fetch.bind(globalThis),
           onProgress: ({ downloadedBytes, totalBytes }) => {

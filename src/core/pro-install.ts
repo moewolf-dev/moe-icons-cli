@@ -1,16 +1,37 @@
 import { detectProject } from "../project/detect.js";
-import { readMoeiconsConfig } from "../project/config.js";
-import { createInstallPlan, executeInstallPlan, type TransactionalFs } from "../project/install.js";
-import { serializeInstallMetadata, sha256Bytes } from "../project/install-metadata.js";
+import { loadConfigDocument, validateConfigDocument } from "../project/config.js";
+import { createInstallPlan, executeInstallPlan, type TransactionalFs, type TransactionalFsWithCopy } from "../project/install.js";
+import { parseInstallMetadata, serializeInstallMetadata, sha256Bytes } from "../project/install-metadata.js";
 import { withProjectLock } from "../project/project-lock.js";
-import type { AuthUseCaseDependencies } from "./auth.js";
+import { runAccessTokenUseCase, type AuthUseCaseDependencies } from "./auth.js";
 import type { CommandContext } from "./context.js";
-import { downloadProArtifact } from "./pro-download.js";
+import { downloadProArtifact, PRO_DOWNLOAD_HOSTS, resolveProDescriptorEndpoint } from "./pro-download.js";
 import { artifactCachePath, metadataCachePath } from "./free-download.js";
 import { selectTargetSubtree } from "./target-subtree.js";
 import { typesReexport } from "./install.js";
 import { CliError } from "../errors/index.js";
 import type { Target } from "../commands/parser.js";
+import { catalog as bundledCatalog, parseCatalog } from "../catalog/catalog.js";
+import { resolveBitmapTuples, resolveConfiguredBitmapShards } from "./bitmap-shard-resolver.js";
+import type { BitmapShard } from "./bitmap-shards.js";
+import type { CacheIo } from "./cache.js";
+import { allowLocalTestFromEnv } from "./local-test-env.js";
+
+type ProInstallFs = TransactionalFs & Partial<Pick<TransactionalFsWithCopy, "readFileSync" | "readdirSync" | "copyFileSync">>;
+
+function toCacheIo(fs_: ProInstallFs): CacheIo {
+  return {
+    // Shard cache keys are nested several levels deep; the CacheIo contract
+    // requires recursive creation.
+    mkdirSync: (path: string) => { fs_.mkdirSync(path, { recursive: true }); },
+    writeFileSync: fs_.writeFileSync,
+    renameSync: fs_.renameSync,
+    existsSync: fs_.existsSync,
+    rmSync: fs_.rmSync,
+    ...(fs_.readFileSync ? { readFileSync: fs_.readFileSync } : {}),
+    ...(fs_.readdirSync ? { readdirSync: fs_.readdirSync } : {}),
+  };
+}
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -39,7 +60,7 @@ function cacheVerifiedArtifact(
 export async function runProInstallUseCase(
   context: CommandContext,
   deps: {
-    readonly fs: TransactionalFs;
+    readonly fs: ProInstallFs;
     readonly auth: AuthUseCaseDependencies;
     readonly fetch?: typeof fetch;
     readonly allowedHosts?: readonly string[];
@@ -68,10 +89,17 @@ export async function runProInstallUseCase(
       "VALIDATION_ERROR",
       "no package.json found in the current directory or parents",
     );
-  const config = readMoeiconsConfig(project.root);
-  if (config.kind !== "ok" || config.config.tier !== "pro")
+  // DEV-G10-R2: snapshot the config ONCE. Both the bootstrap and the strict
+  // phase validate this same document, so a rewrite during download can never
+  // combine an old target with new bitmap tuples.
+  const document = loadConfigDocument(project.root);
+  // DEV-G10-R1 phase 1: catalog-independent bootstrap. A Pro bitmap config
+  // references groups the bundled catalog does not ship, so validate only the
+  // safe fields (tier/target/syntax) before the release catalog is available.
+  const bootstrap = validateConfigDocument(document, bundledCatalog, { lenientCatalog: true });
+  if (bootstrap.kind !== "ok" || bootstrap.config.tier !== "pro")
     throw new CliError("VALIDATION_ERROR", "pro install requires a valid tier=pro config");
-  const target = expected.target ?? config.config.target;
+  const target = expected.target ?? bootstrap.config.target;
   const downloaded = await downloadProArtifact(
     context,
     deps.auth,
@@ -86,22 +114,64 @@ export async function runProInstallUseCase(
   if (!subtree.ok) {
     throw new CliError("VALIDATION_ERROR", subtree.message);
   }
-  cacheVerifiedArtifact(
-    deps.fs,
-    resolveCacheDir(context.env),
-    downloaded.descriptor.version,
-    downloaded.descriptor.sha256,
-    downloaded.artifactBytes,
-  );
-  if (downloaded.metadataBytes && downloaded.descriptor.metadata) {
-    cacheVerifiedArtifact(
-      deps.fs,
-      resolveCacheDir(context.env),
-      downloaded.descriptor.version,
-      downloaded.descriptor.metadata.sha256,
-      downloaded.metadataBytes,
-      "metadata",
+  const cacheDir = resolveCacheDir(context.env);
+  let bitmapPins: readonly BitmapShard[] | undefined;
+  let bitmapShardSetSha256Value: string | undefined;
+  let installedCatalog;
+  try {
+    installedCatalog = parseCatalog(JSON.parse(downloaded.catalogJson));
+  } catch (error) {
+    throw new CliError("VALIDATION_ERROR", error instanceof Error ? error.message : "invalid pro catalog");
+  }
+  // DEV-G10-R1 phase 2: re-validate the SAME snapshot against the verified
+  // release catalog. A style group / icon / variant the release does not ship
+  // fails closed here, before ANY cache write, shard fetch or metadata write.
+  const strict = validateConfigDocument(document, installedCatalog);
+  if (strict.kind !== "ok") {
+    throw new CliError(
+      "VALIDATION_ERROR",
+      strict.kind === "invalid" ? strict.message : `config state: ${strict.kind}`,
     );
+  }
+  const config = strict.config;
+  // Only after the snapshot passes strict validation do we persist the
+  // content-addressed code/metadata caches. A rejected config writes nothing.
+  cacheVerifiedArtifact(deps.fs, cacheDir, downloaded.descriptor.version, downloaded.descriptor.sha256, downloaded.artifactBytes);
+  if (downloaded.metadataBytes && downloaded.descriptor.metadata) {
+    cacheVerifiedArtifact(deps.fs, cacheDir, downloaded.descriptor.version, downloaded.descriptor.metadata.sha256, downloaded.metadataBytes, "metadata");
+  }
+  const resolvedTuples = resolveBitmapTuples(config, installedCatalog);
+  if (!resolvedTuples.ok) throw new CliError("VALIDATION_ERROR", resolvedTuples.errors.join("; "));
+  if (resolvedTuples.tuples.length > 0 && downloaded.descriptor.channel !== "local-test") {
+    const accessToken = await runAccessTokenUseCase(context, deps.auth);
+    const { loopbackHost } = resolveProDescriptorEndpoint(context.env);
+    const allowedHosts = loopbackHost ? [...PRO_DOWNLOAD_HOSTS, loopbackHost] : PRO_DOWNLOAD_HOSTS;
+    // DEV-G10: reuse verified pinned shards at the same resourceVersion so a
+    // size switch only fetches the newly selected tuple. A version bump always
+    // yields new shard identities, so no cross-version reuse is possible.
+    let existingPins: readonly BitmapShard[] = [];
+    const metadataPath = join(project.root, ".moeicons", "install-metadata.json");
+    if (deps.fs.existsSync(metadataPath) && deps.fs.readFileSync) {
+      const existing = parseInstallMetadata(deps.fs.readFileSync(metadataPath, "utf8"), { allowLocalTest: allowLocalTestFromEnv(context.env) });
+      existingPins = (existing?.bitmapShards ?? []).filter((pin) => pin.resourceVersion === downloaded.descriptor.version);
+    }
+    const shards = await resolveConfiguredBitmapShards({
+      existingPins,
+      config,
+      catalog: installedCatalog,
+      version: downloaded.descriptor.version,
+      descriptorSha256: downloaded.descriptor.descriptorSha256,
+      cacheDir,
+      io: toCacheIo(deps.fs),
+      accessToken,
+      allowedHosts,
+      env: context.env,
+      now: context.now().getTime(),
+      signal: context.signal,
+      ...(deps.fetch ? { fetch: deps.fetch } : {}),
+    });
+    bitmapPins = shards.pins;
+    bitmapShardSetSha256Value = shards.bitmapShardSetSha256;
   }
   const files: Record<string, string | Uint8Array> = {
     ".moeicons/catalog.json": downloaded.catalogJson,
@@ -129,6 +199,9 @@ export async function runProInstallUseCase(
     targetSha256: subtree.sha256,
     targetFileCount: subtree.fileCount,
     targetByteCount: subtree.byteCount,
+    ...(bitmapPins && bitmapShardSetSha256Value
+      ? { bitmapShards: bitmapPins, bitmapShardSetSha256: bitmapShardSetSha256Value }
+      : {}),
     // A-1b: record the accepted local-test model so a later generate can verify it.
     ...(downloaded.descriptor.channel === "local-test" ? { channel: "local-test" as const, publishable: false } : {}),
   });
