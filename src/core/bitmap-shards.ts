@@ -239,7 +239,7 @@ export function parseBitmapShard(raw: unknown): BitmapShard {
     imageSize: { width: tuple.width, height: tuple.height },
     format: tuple.format,
     resourceVersion,
-    filename: raw.filename as string,
+    filename: raw.filename,
   });
   if (raw.objectKey !== expectedKey) fail(`bitmapShard objectKey is not canonical: ${String(raw.objectKey)}`);
   if (typeof raw.sha256 !== "string" || !SHA256_RE.test(raw.sha256)) fail("bitmapShard sha256 must be 64 lowercase hex");
