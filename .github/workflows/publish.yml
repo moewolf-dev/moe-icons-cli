@@ -247,7 +247,9 @@ jobs:
   acceptance:
     needs: [decide, pack]
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # Release acceptance must run the complete sandbox suite (test:sandbox:full),
+    # which performs 8 code-package installs; allow build + full suite.
+    timeout-minutes: 90
     outputs:
       candidate_sha: ${{ needs.pack.outputs.candidate_sha }}
     steps:
@@ -318,7 +320,7 @@ jobs:
         run: |
           node scripts/prime-candidate-cache.mjs
           npm run test:package
-          npm run test:sandbox
+          npm run test:sandbox:full
       - name: Record acceptance evidence
         run: |
           echo "## CLI acceptance (G3)" >> "$GITHUB_STEP_SUMMARY"
