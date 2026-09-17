@@ -242,7 +242,7 @@ jobs:
           # is flat (tgz + sidecars at the same level); download keeps that layout.
           path: ${{ runner.temp }}/candidate
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
   acceptance:
     needs: [decide, pack]
@@ -481,4 +481,4 @@ jobs:
           name: cli-publish-receipt-${{ needs.pack.outputs.release_tag }}
           path: receipt/cli-publish-receipt.json
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1

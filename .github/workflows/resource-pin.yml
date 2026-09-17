@@ -243,7 +243,7 @@ jobs:
           name: cli-resource-pin-receipt-${{ github.event.client_payload.resourceVersion || inputs.resourceVersion }}
           path: ${{ runner.temp }}/pin-receipt/cli-pin-receipt.json
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
       - name: Dry-run / blocked conclusion
         if: steps.switch.outputs.blocked == '1'
