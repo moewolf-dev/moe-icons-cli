@@ -104,4 +104,22 @@ describe("DEV-G08 frozen budget shape", () => {
     }
     expect(BITMAP_SHARD_BUDGET.expandedBytes).toBeLessThanOrEqual(BITMAP_SHARD_BUDGET.tempDiskBytes * 2);
   });
+
+  // OPS-04-06: the calibrated budget must admit the real release 0.0.17
+  // six-shard matrix; the 512x512 png shard is the worst case and previously
+  // exceeded the untested 64 MiB compressed cap.
+  it("admits the measured OPS-04-06 worst-case shard", () => {
+    const measured = {
+      compressedBytes: 93_843_123, // 512x512 png moe-3d-metal
+      expandedBytes: 94_408_209,
+      singleFileBytes: 338_828, // largest icon payload
+      totalDownloadBytes: 141_019_248, // six shards
+      entries: 554,
+    };
+    expect(measured.compressedBytes).toBeLessThanOrEqual(BITMAP_SHARD_BUDGET.compressedBytes);
+    expect(measured.expandedBytes).toBeLessThanOrEqual(BITMAP_SHARD_BUDGET.expandedBytes);
+    expect(measured.singleFileBytes).toBeLessThanOrEqual(BITMAP_SHARD_BUDGET.singleFileBytes);
+    expect(measured.totalDownloadBytes).toBeLessThanOrEqual(BITMAP_SHARD_BUDGET.totalDownloadBytes);
+    expect(measured.entries).toBeLessThanOrEqual(BITMAP_SHARD_BUDGET.entries);
+  });
 });
