@@ -3,8 +3,19 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { downloadFreeRelease, bundledSourceVersion } from "../src/core/free-download.js";
-import { assertLocalCandidateAllowed, githubReleaseAssetUrl, isLocalTestVersion, parseReleaseDescriptor, PUBLIC_FREE_REPO } from "../src/core/release-descriptor.js";
+import {
+  downloadFreeRelease,
+  bundledSourceVersion,
+  RELEASE_LATEST_NAME,
+} from "../src/core/free-download.js";
+import {
+  assertLocalCandidateAllowed,
+  FREE_DOWNLOAD_HOSTS,
+  githubReleaseAssetUrl,
+  isLocalTestVersion,
+  parseReleaseDescriptor,
+  PUBLIC_FREE_REPO,
+} from "../src/core/release-descriptor.js";
 import { writeFreeReleaseFixture } from "./helpers/free-release-fixture.js";
 import { downloadArtifact } from "../src/project/install.js";
 import { createTarGz, extractTarGz } from "../src/project/tar-gz.js";
@@ -208,6 +219,10 @@ describe("local-test candidate descriptor guard (E2E-E3)", () => {
 });
 
 describe("downloadArtifact redirect host policy", () => {
+  it("allows GitHub's current Release asset CDN host", () => {
+    expect(FREE_DOWNLOAD_HOSTS).toContain("release-assets.githubusercontent.com");
+  });
+
   it("rejects redirects to hosts outside the allowlist", async () => {
     const result = await downloadArtifact(
       "https://github.com/moewolf-dev/moe-icons/releases/download/v0.0.17/start",
@@ -310,7 +325,7 @@ describe("downloadFreeRelease", () => {
   it("uses injected fetch against GitHub release URLs without guessing the archive name", async () => {
     const meta = writeFreeReleaseFixture(fixture);
     const served = new Map<string, Uint8Array>([
-      [githubReleaseAssetUrl(`v${meta.version}`, "release-descriptor.json.sha256"), new Uint8Array(readFileSync(join(fixture, "release-descriptor.json.sha256")))],
+      [githubReleaseAssetUrl(`v${meta.version}`, RELEASE_LATEST_NAME), new Uint8Array(readFileSync(join(fixture, RELEASE_LATEST_NAME)))],
       [githubReleaseAssetUrl(`v${meta.version}`, "release-descriptor.json"), new Uint8Array(readFileSync(join(fixture, "release-descriptor.json")))],
       [githubReleaseAssetUrl(`v${meta.version}`, meta.freeName), new Uint8Array(readFileSync(join(fixture, meta.freeName)))],
       [githubReleaseAssetUrl(`v${meta.version}`, meta.metadataName), new Uint8Array(readFileSync(join(fixture, meta.metadataName)))],
@@ -344,7 +359,31 @@ describe("downloadFreeRelease", () => {
       expect(result.metadataSha256).toBe(meta.metadataSha);
     }
     expect(requested).toContain(githubReleaseAssetUrl(`v${meta.version}`, meta.freeName));
+    expect(requested).not.toContain(githubReleaseAssetUrl(`v${meta.version}`, "release-descriptor.json.sha256"));
     expect(requested.some((url) => /moe-icons-free-/.test(url) && !url.endsWith(meta.freeName) && !url.includes("metadata"))).toBe(false);
+  });
+
+  it("retries transient GitHub network failures before failing the install", async () => {
+    const meta = writeFreeReleaseFixture(fixture);
+    let failures = 2;
+    const { fixtureDir: _fixtureDir, ...base } = io();
+    const result = await downloadFreeRelease({
+      ...base,
+      fetchFn: (async (url: string) => {
+        if (failures > 0) {
+          failures -= 1;
+          throw new TypeError("fetch failed");
+        }
+        const name = new URL(url).pathname.split("/").pop() ?? "";
+        try {
+          return new Response(readFileSync(join(fixture, name)), { status: 200 });
+        } catch {
+          return new Response(null, { status: 404 });
+        }
+      }) as typeof fetch,
+    }, meta.version);
+    expect(result.ok).toBe(true);
+    expect(failures).toBe(0);
   });
 
   it("uses a loopback HTTP fixture for success, 404, timeout and checksum failure", async () => {

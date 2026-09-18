@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTarGz } from "../../src/project/tar-gz.js";
-import { bundledSourceVersion, DESCRIPTOR_NAME, DESCRIPTOR_SHA_NAME } from "../../src/core/free-download.js";
+import {
+  bundledSourceVersion,
+  DESCRIPTOR_NAME,
+  DESCRIPTOR_SHA_NAME,
+  RELEASE_LATEST_NAME,
+} from "../../src/core/free-download.js";
 import type { ReleaseTarget, ReleaseTargetMetadata } from "../../src/core/release-descriptor.js";
 
 function sha256(bytes: string | Uint8Array): string {
@@ -226,6 +231,16 @@ export function writeFreeReleaseFixture(
   writeFileSync(
     join(dir, DESCRIPTOR_SHA_NAME),
     `${options.wrongDescriptorSha ? "f".repeat(64) : descriptorSha}  ${DESCRIPTOR_NAME}\n`,
+  );
+  writeFileSync(
+    join(dir, RELEASE_LATEST_NAME),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      tier: "free",
+      fullVersion: version,
+      descriptorSha256: options.wrongDescriptorSha ? "f".repeat(64) : descriptorSha,
+      assets: {},
+    }, null, 2)}\n`,
   );
   writeFileSync(join(dir, freeName), options.corruptArtifact ? Buffer.from("not-a-tgz") : Buffer.from(tgz));
   if (metadataTgz) writeFileSync(join(dir, metadataName), Buffer.from(metadataTgz));

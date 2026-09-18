@@ -260,7 +260,13 @@ export function parseSha256Sidecar(text: string): string {
 }
 
 export const PUBLIC_FREE_REPO = { owner: "moewolf-dev", name: "moe-icons" } as const;
-export const FREE_DOWNLOAD_HOSTS = ["github.com", "objects.githubusercontent.com"] as const;
+// GitHub Release assets currently redirect through release-assets.githubusercontent.com;
+// keep the legacy objects host for older releases and CDN routing variants.
+export const FREE_DOWNLOAD_HOSTS = [
+  "github.com",
+  "objects.githubusercontent.com",
+  "release-assets.githubusercontent.com",
+] as const;
 
 export function githubReleaseAssetUrl(tag: string, filename: string): string {
   if (!tag.startsWith("v")) throw new Error("release tag must be v<fullVersion>");

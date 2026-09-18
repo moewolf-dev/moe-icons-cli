@@ -47,7 +47,9 @@ export const BITMAP_SHARD_BUDGET: BitmapShardBudget = Object.freeze({
   tempDiskBytes: 256 * 1024 * 1024,
   concurrency: 1,
   descriptorTimeoutMs: 5_000,
-  downloadTimeoutMs: 60_000,
+  // The largest measured production shard is about 94 MiB. A one-minute
+  // timeout rejects healthy downloads below roughly 13 Mbit/s.
+  downloadTimeoutMs: 120_000,
 });
 
 /** Backwards-compatible aliases kept for the frozen shard contract. */

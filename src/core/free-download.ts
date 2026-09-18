@@ -19,10 +19,14 @@ import {
 export const DESCRIPTOR_MAX_BYTES = 256 * 1024;
 export const ARTIFACT_MAX_BYTES = 64 * 1024 * 1024;
 export const METADATA_MAX_BYTES = 8 * 1024 * 1024;
-export const DOWNLOAD_TIMEOUT_MS = 30_000;
+// GitHub Release downloads can be slow on constrained or distant networks.
+// Keep the operation bounded, but allow enough time for the 64 MiB Free limit.
+export const DOWNLOAD_TIMEOUT_MS = 120_000;
 export const MAX_REDIRECTS = 5;
 export const DESCRIPTOR_NAME = "release-descriptor.json";
 export const DESCRIPTOR_SHA_NAME = "release-descriptor.json.sha256";
+export const RELEASE_LATEST_NAME = "release-latest.json";
+export const MAX_DOWNLOAD_ATTEMPTS = 3;
 
 export type FreeDownloadFailure =
   | { readonly ok: false; readonly reason: "network"; readonly message: string }
@@ -121,6 +125,26 @@ function readFixture(io: FreeDownloadIo, name: string): Uint8Array {
   return io.readFileSync(join(io.fixtureDir ?? "", name));
 }
 
+function parseLatestDescriptorSha(bytes: Uint8Array, sourceVersion: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decodeUtf8(bytes));
+  } catch {
+    throw new Error("release-latest.json is not valid JSON");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("release-latest.json must be an object");
+  }
+  const latest = parsed as Record<string, unknown>;
+  if (latest.schemaVersion !== 1 || latest.tier !== "free" || latest.fullVersion !== sourceVersion) {
+    throw new Error("release-latest.json identity does not match the requested Free release");
+  }
+  if (typeof latest.descriptorSha256 !== "string" || !/^[a-f0-9]{64}$/i.test(latest.descriptorSha256)) {
+    throw new Error("release-latest.json descriptorSha256 must be a 64-character SHA-256 hex digest");
+  }
+  return latest.descriptorSha256.toLowerCase();
+}
+
 export function artifactCachePath(cacheDir: string, fullVersion: string, sha256: string): string {
   return join(cacheDir, ...cacheKey(fullVersion, sha256).split("/"), "artifact.tgz");
 }
@@ -159,9 +183,14 @@ async function loadBytes(
     }
   }
   const url = io.fixtureBaseUrl ? new URL(filename, io.fixtureBaseUrl.endsWith("/") ? io.fixtureBaseUrl : `${io.fixtureBaseUrl}/`).toString() : githubReleaseAssetUrl(tag, filename);
-  const result = await downloadArtifact(url, limits, { fetchFn: io.fetchFn, signal: io.signal });
-  if (!result.ok) return mapDownloadError(result.code, result.message);
-  return { ok: true, bytes: result.bytes };
+  for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    const result = await downloadArtifact(url, limits, { fetchFn: io.fetchFn, signal: io.signal });
+    if (result.ok) return { ok: true, bytes: result.bytes };
+    if (result.code !== "NETWORK_ERROR" || io.signal.aborted || attempt === MAX_DOWNLOAD_ATTEMPTS) {
+      return mapDownloadError(result.code, result.message);
+    }
+  }
+  return { ok: false, reason: "network", message: `download failed after ${MAX_DOWNLOAD_ATTEMPTS} attempts` };
 }
 
 function catalogFromArchive(artifactBytes: Uint8Array, catalogFilename: string, expectedSha: string):
@@ -264,26 +293,43 @@ export async function downloadMetadataArchive(
 }
 
 /**
- * Fetch the descriptor sidecar → verify descriptor. Does not download the code
- * artifact; used by metadata-only sync and by the full download.
+ * Fetch the published release index → verify descriptor. Older releases that
+ * predate release-latest.json fall back to the descriptor SHA sidecar. Does not
+ * download the code artifact; used by metadata-only sync and by the full download.
  */
 export async function fetchFreeDescriptor(io: FreeDownloadIo, sourceVersion: string):
   Promise<{ ok: true; descriptor: ReleaseDescriptor; descriptorSha256: string; tag: string } | FreeDownloadFailure> {
   if (io.signal.aborted) return { ok: false, reason: "cancelled", message: "download cancelled" };
   const tag = `v${sourceVersion}`;
 
-  const shaFile = await loadBytes(io, DESCRIPTOR_SHA_NAME, descriptorLimits(io.cliVersion, io.onProgress, io.fixtureBaseUrl, io.timeoutMs), tag);
-  if (!shaFile.ok) {
-    if (!io.fixtureDir && shaFile.reason === "network") {
-      return { ok: false, reason: "offline-no-cache", message: shaFile.message };
-    }
-    return shaFile;
-  }
+  const limits = descriptorLimits(io.cliVersion, io.onProgress, io.fixtureBaseUrl, io.timeoutMs);
+  const latestFile = await loadBytes(io, RELEASE_LATEST_NAME, limits, tag);
   let expectedDescriptorSha: string;
-  try {
-    expectedDescriptorSha = parseSha256Sidecar(decodeUtf8(shaFile.bytes));
-  } catch (error) {
-    return { ok: false, reason: "validation", message: error instanceof Error ? error.message : String(error) };
+  if (latestFile.ok) {
+    try {
+      expectedDescriptorSha = parseLatestDescriptorSha(latestFile.bytes, sourceVersion);
+    } catch (error) {
+      return { ok: false, reason: "validation", message: error instanceof Error ? error.message : String(error) };
+    }
+  } else {
+    if (latestFile.reason !== "not-found") {
+      if (!io.fixtureDir && latestFile.reason === "network") {
+        return { ok: false, reason: "offline-no-cache", message: latestFile.message };
+      }
+      return latestFile;
+    }
+    const shaFile = await loadBytes(io, DESCRIPTOR_SHA_NAME, limits, tag);
+    if (!shaFile.ok) {
+      if (!io.fixtureDir && shaFile.reason === "network") {
+        return { ok: false, reason: "offline-no-cache", message: shaFile.message };
+      }
+      return shaFile;
+    }
+    try {
+      expectedDescriptorSha = parseSha256Sidecar(decodeUtf8(shaFile.bytes));
+    } catch (error) {
+      return { ok: false, reason: "validation", message: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   const descriptorFile = await loadBytes(io, DESCRIPTOR_NAME, descriptorLimits(io.cliVersion, io.onProgress, io.fixtureBaseUrl, io.timeoutMs), tag);
