@@ -98,8 +98,9 @@ export function parseBitmapShardDescriptor(
   options: { readonly allowLoopback?: boolean } = {},
 ): BitmapShardDescriptor {
   if (!isRecord(value)) throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
-  const allowed = ["tier", "version", "descriptorSha256", "styleGroupId", "imageSize", "format", "filename", "url", "expiresAt", "size", "sha256", "manifestSha256"];
+  const allowed = ["ok", "tier", "version", "descriptorSha256", "styleGroupId", "imageSize", "format", "filename", "url", "expiresAt", "size", "sha256", "manifestSha256"];
   if (Object.keys(value).some((key) => !allowed.includes(key))) throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
+  if (value.ok !== undefined && value.ok !== true) throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
   if (value.tier !== "pro" || typeof value.version !== "string" || !VERSION.test(value.version)) {
     throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
   }

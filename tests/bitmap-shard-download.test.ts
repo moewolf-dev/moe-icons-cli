@@ -105,6 +105,8 @@ describe("bitmap shard download (DEV-G07)", () => {
 
   it("rejects a descriptor whose filename does not match its tuple", () => {
     const { descriptor } = buildShard();
+    expect(parseBitmapShardDescriptor({ ok: true, ...descriptor }, Date.now())).toMatchObject({ tier: "pro" });
+    expect(() => parseBitmapShardDescriptor({ ok: false, ...descriptor }, Date.now())).toThrow(/invalid/);
     expect(() => parseBitmapShardDescriptor({ ...descriptor, filename: "moe-icons-bitmap-pro-moe-3d-metal-256x256-png-1.2.3.tgz" }, Date.now())).toThrow(/filename/);
     expect(() => parseBitmapShardDescriptor({ ...descriptor, format: "svg" }, Date.now())).toThrow(/invalid/);
     expect(() => parseBitmapShardDescriptor({ ...descriptor, url: "http://r2.example.invalid/x" }, Date.now())).toThrow(/insecure/);
