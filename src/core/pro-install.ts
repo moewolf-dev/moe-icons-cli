@@ -13,6 +13,7 @@ import { CliError } from "../errors/index.js";
 import type { Target } from "../commands/parser.js";
 import { catalog as bundledCatalog, parseCatalog } from "../catalog/catalog.js";
 import { resolveBitmapTuples, resolveConfiguredBitmapShards } from "./bitmap-shard-resolver.js";
+import { mergeBitmapShardCacheManifest, readBitmapShardCacheManifest, writeBitmapShardCacheManifest } from "./bitmap-shard-cache.js";
 import type { BitmapShard } from "./bitmap-shards.js";
 import type { CacheIo } from "./cache.js";
 import { allowLocalTestFromEnv } from "./local-test-env.js";
@@ -100,6 +101,12 @@ export async function runProInstallUseCase(
   if (bootstrap.kind !== "ok" || bootstrap.config.tier !== "pro")
     throw new CliError("VALIDATION_ERROR", "pro install requires a valid tier=pro config");
   const target = expected.target ?? bootstrap.config.target;
+  if (target !== bootstrap.config.target) {
+    throw new CliError(
+      "VALIDATION_ERROR",
+      `config target is "${bootstrap.config.target}" but install target is "${target}"; set target to "${target}" in moeicons.config before installing`,
+    );
+  }
   const downloaded = await downloadProArtifact(
     context,
     deps.auth,
@@ -149,12 +156,19 @@ export async function runProInstallUseCase(
     // DEV-G10: reuse verified pinned shards at the same resourceVersion so a
     // size switch only fetches the newly selected tuple. A version bump always
     // yields new shard identities, so no cross-version reuse is possible.
+    // W2-B2/B7: a shard already present in EITHER the project's install metadata
+    // OR the global CLI shard cache (e.g. warmed with the 128/webp default set)
+    // is reused after re-verification; only genuinely missing tuples are fetched.
     let existingPins: readonly BitmapShard[] = [];
+    const cacheIo = toCacheIo(deps.fs);
+    const cacheManifest = readBitmapShardCacheManifest(cacheDir, cacheIo);
     const metadataPath = join(project.root, ".moeicons", "install-metadata.json");
     if (deps.fs.existsSync(metadataPath) && deps.fs.readFileSync) {
       const existing = parseInstallMetadata(deps.fs.readFileSync(metadataPath, "utf8"), { allowLocalTest: allowLocalTestFromEnv(context.env) });
-      existingPins = (existing?.bitmapShards ?? []).filter((pin) => pin.resourceVersion === downloaded.descriptor.version);
+      existingPins = existing?.bitmapShards ?? [];
     }
+    existingPins = mergeBitmapShardCacheManifest(cacheManifest, existingPins)
+      .filter((pin) => pin.resourceVersion === downloaded.descriptor.version);
     const shards = await resolveConfiguredBitmapShards({
       existingPins,
       config,
@@ -162,7 +176,7 @@ export async function runProInstallUseCase(
       version: downloaded.descriptor.version,
       descriptorSha256: downloaded.descriptor.descriptorSha256,
       cacheDir,
-      io: toCacheIo(deps.fs),
+      io: cacheIo,
       accessToken,
       allowedHosts,
       env: context.env,
@@ -172,13 +186,16 @@ export async function runProInstallUseCase(
     });
     bitmapPins = shards.pins;
     bitmapShardSetSha256Value = shards.bitmapShardSetSha256;
+    // Record every verified shard in the global cache manifest (idempotent).
+    writeBitmapShardCacheManifest(cacheDir, cacheIo, mergeBitmapShardCacheManifest(cacheManifest, shards.pins), context.now().getTime());
   }
   const files: Record<string, string | Uint8Array> = {
     ".moeicons/catalog.json": downloaded.catalogJson,
     ".moeicons/manifest.json": downloaded.manifestJson,
     ".moeicons/MANUAL.md": downloaded.manualMd,
-    "src/moeicons/types.ts": typesReexport("pro", target),
-    "src/moeicons/.moeicons-pro.marker": "pro\n",
+    ".moeicons/artifact/package.json": '{"private":true,"type":"module","sideEffects":false}\n',
+    [`${config.outputDir.replace(/\\/g, "/").replace(/\/$/, "")}/types.ts`]: typesReexport("pro", target, config.outputDir),
+    [`${config.outputDir.replace(/\\/g, "/").replace(/\/$/, "")}/.moeicons-pro.marker`]: "pro\n",
   };
   for (const [rel, bytes] of Object.entries(subtree.files)) {
     files[`.moeicons/artifact/${target}/${rel}`] = bytes;

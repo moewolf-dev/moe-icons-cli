@@ -8,6 +8,7 @@ import { serializeInstallMetadata, sha256Bytes } from "../project/install-metada
 import { withProjectLock } from "../project/project-lock.js";
 import type { Target } from "../commands/parser.js";
 import { selectTargetSubtree } from "./target-subtree.js";
+import { posix } from "node:path";
 
 export type InstallResult =
   | {
@@ -44,10 +45,13 @@ export interface InstallUseCaseDeps {
  * P0-3: the project `types.ts` must re-export a type that actually exists in the
  * installed `moe-icons` package. Assets have no component type, so it is empty.
  */
-export function typesReexport(tier: "free" | "pro", target: Target): string {
-  if (target === "react") return `export type { ReactIconProps } from "moe-icons/${tier}/react";\n`;
-  if (target === "vue") return `export type { VueIconProps } from "moe-icons/${tier}/vue";\n`;
-  if (target === "vanilla") return `export type { VanillaIconOptions } from "moe-icons/${tier}/vanilla";\n`;
+export function typesReexport(tier: "free" | "pro", target: Target, outputDir = "src/moeicons"): string {
+  void tier;
+  const from = posix.relative(outputDir.replace(/\\/g, "/"), `.moeicons/artifact/${target}/index.js`);
+  const specifier = from.startsWith(".") ? from : `./${from}`;
+  if (target === "react") return `export type { ReactIconProps } from "${specifier}";\n`;
+  if (target === "vue") return `export type { VueIconProps } from "${specifier}";\n`;
+  if (target === "vanilla") return `export type { VanillaIconOptions } from "${specifier}";\n`;
   return "export {};\n";
 }
 
@@ -106,6 +110,13 @@ export async function runInstallUseCase(
     };
   }
   const target = options.target ?? (config.kind === "ok" ? config.config.target : "react");
+  if (config.kind === "ok" && config.config.target !== target) {
+    return {
+      ok: false,
+      reason: "validation",
+      message: `config target is "${config.config.target}" but install target is "${target}"; set target to "${target}" in moeicons.config before installing`,
+    };
+  }
   const downloaded = await downloadFreeRelease(
     { ...deps.download, signal: context.signal },
     options.sourceVersion ?? bundledSourceVersion(),
@@ -135,12 +146,14 @@ export async function runInstallUseCase(
   }
 
   const catalogJson = downloaded.catalogJson;
+  const outputDir = config.kind === "ok" ? config.config.outputDir.replace(/\\/g, "/").replace(/\/$/, "") : "src/moeicons";
   const files: Record<string, string | Uint8Array> = {
     ".moeicons/catalog.json": catalogJson,
     ".moeicons/manifest.json": downloaded.manifestJson,
     ".moeicons/MANUAL.md": downloaded.manualMd,
-    "src/moeicons/types.ts": typesReexport("free", target),
-    "src/moeicons/.moeicons-free.marker": "free\n",
+    ".moeicons/artifact/package.json": '{"private":true,"type":"module","sideEffects":false}\n',
+    [`${outputDir}/types.ts`]: typesReexport("free", target, outputDir),
+    [`${outputDir}/.moeicons-free.marker`]: "free\n",
   };
   for (const [rel, bytes] of Object.entries(subtree.files)) {
     files[`.moeicons/artifact/${target}/${rel}`] = bytes;

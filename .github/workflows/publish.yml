@@ -41,7 +41,7 @@ jobs:
   # R-P0-2: a manual dry-run still validates the tree but performs zero writes.
   validate:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, moe-ci-server]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -123,7 +123,7 @@ jobs:
   pack:
     needs: decide
     if: needs.decide.outputs.should_release == '1'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, moe-ci-server]
     timeout-minutes: 35
     outputs:
       candidate_sha: ${{ steps.pack.outputs.candidate_sha }}

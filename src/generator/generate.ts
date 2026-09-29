@@ -8,6 +8,7 @@ import {
 } from "../core/icon-names.js";
 import { selectBitmapVariantAssets } from "../core/bitmap-assets.js";
 import { createHash } from "node:crypto";
+import { posix } from "node:path";
 import { decodeUtf8 } from "../project/tar-gz.js";
 import { CN_HELPER_SOURCE } from "./cn.js";
 import {
@@ -25,7 +26,7 @@ export const toPascalCase = toProxyName;
 
 /**
  * React/Vue proxy generation. Purely returns owned file paths/content for
- * types, registry, provider/plugin, proxies and barrel exports. Rejects
+ * types, provider/plugin, per-icon proxies and barrel exports. Rejects
  * duplicate PascalCase names and missing fallback. Bitmap themes use local
  * img wrappers + static asset imports (G1/G4); SVG themes import moe-icons.
  */
@@ -90,11 +91,35 @@ function themeClassExpr(themes: readonly ResolvedTheme[]): string {
   return `const themeClassName: Partial<Record<Theme, string | undefined>> = {\n${entries}\n};\n`;
 }
 
+function themeDefaultsExpr(themes: readonly ResolvedTheme[]): string {
+  return `const themeDefaultSize: Record<Theme, number> = {\n${themes.map((theme) => `  ${JSON.stringify(theme.theme)}: ${theme.entry.defaultSize ?? 24},`).join("\n")}\n};\n` +
+    `const themeStrokeWidth: Partial<Record<Theme, number>> = {\n${themes.map((theme) => `  ${JSON.stringify(theme.theme)}: ${theme.entry.strokeWidth === undefined ? "undefined" : theme.entry.strokeWidth},`).join("\n")}\n};\n`;
+}
+
+function installedIconImport(outputDir: string, target: "react" | "vue", group: string, iconId: string): string {
+  const file = `${toProxyName(iconId)}${target === "vue" ? ".vue" : ""}.js`;
+  const relative = posix.relative(outputDir.replace(/\/$/, ""), `.moeicons/artifact/${target}/${group}/${file}`);
+  return relative.startsWith(".") ? relative : `./${relative}`;
+}
+
+function effectiveThemeForIcon(
+  iconId: string,
+  logical: ResolvedTheme,
+  themes: readonly ResolvedTheme[],
+  config: MoeiconsConfigFile,
+  sourceCatalog: IconCatalog,
+): ResolvedTheme {
+  const icon = findCatalogIcon(iconId, sourceCatalog);
+  if (icon?.availableIn.includes(logical.entry.styleGroup)) return logical;
+  return themes.find((theme) => theme.theme === config.defaultTheme) ?? logical;
+}
+
 function appendReactFiles(
   files: GeneratedFile[],
   rel: (p: string) => string,
   config: MoeiconsConfigFile,
   themes: readonly ResolvedTheme[],
+  sourceCatalog: IconCatalog,
 ): void {
   files.push({
     path: rel("cn.ts"),
@@ -104,12 +129,24 @@ function appendReactFiles(
   files.push({
     path: rel("types.ts"),
     content: `${OWNER_HEADER}
-export interface IconProps {
+import type * as React from "react";
+export interface IconProps extends React.AriaAttributes, React.DOMAttributes<Element> {
   className?: string;
+  style?: React.CSSProperties;
   size?: number;
+  width?: number | string;
+  height?: number | string;
   strokeWidth?: number;
-  "aria-label"?: string;
-  [key: string]: unknown;
+  color?: string;
+  fill?: string;
+  stroke?: string;
+  focusable?: boolean | "auto" | "true" | "false";
+  alt?: string;
+  title?: string;
+  role?: React.AriaRole;
+  draggable?: boolean;
+  id?: string;
+  tabIndex?: number;
 }
 export type Theme =
 ${Object.keys(config.themes)
@@ -118,102 +155,96 @@ ${Object.keys(config.themes)
 `,
   });
 
-  const importLines: string[] = [];
+  // Each public icon proxy imports only its own theme variants. A generated
+  // global registry would eagerly import every configured icon.
   for (const resolved of themes) {
-    if (resolved.kind === "svg") {
-      for (const iconId of config.icons) {
-        const alias = svgInternalImportName(resolved.theme, resolved.entry.styleGroup, iconId);
-        importLines.push(
-          `import { ${toLibraryExportName(iconId)} as ${alias} } from "moe-icons/${config.tier}/react/${resolved.entry.styleGroup}";`,
-        );
-      }
-    } else if (resolved.variant) {
-      for (const iconId of config.icons) {
-        const wrapperName = bitmapWrapperImportName(resolved.theme, iconId);
-        const wrapperPath = `./wrappers/${wrapperName}`;
-        importLines.push(`import { ${wrapperName} } from "${wrapperPath}";`);
-        files.push({
-          path: rel(`wrappers/${wrapperName}.tsx`),
-          content: `${OWNER_HEADER}
-${reactBitmapWrapperSource(iconId, wrapperName, resolved.variant, resolved.entry.className)}`,
-        });
-      }
+    for (const iconId of config.icons) {
+      const actual = effectiveThemeForIcon(iconId, resolved, themes, config, sourceCatalog);
+      if (actual.kind !== "bitmap" || !actual.variant) continue;
+      const wrapperName = bitmapWrapperImportName(resolved.theme, iconId);
+      files.push({
+        path: rel(`wrappers/${wrapperName}.tsx`),
+        content: `${OWNER_HEADER}
+${reactBitmapWrapperSource(iconId, wrapperName, actual.variant, resolved.entry.className)}`,
+      });
     }
   }
 
   files.push({
-    path: rel("registry.ts"),
-    content: `${OWNER_HEADER}
-import type { IconProps, Theme } from "./types";
-import type * as React from "react";
-${importLines.join("\n")}
-
-export type IconId =
-${config.icons.map((id) => `  | "${id}"`).join("\n")};
-
-export interface ThemeRegistry {
-${config.icons.map((id) => `  readonly ${toPascalCase(id)}: React.ComponentType<IconProps>;`).join("\n")}
-}
-
-export const registry: Record<Theme, ThemeRegistry> = {
-${themes
-  .map((resolved) => {
-    const entries = config.icons
-      .map((id) => {
-        const component =
-          resolved.kind === "bitmap"
-            ? bitmapWrapperImportName(resolved.theme, id)
-            : svgInternalImportName(resolved.theme, resolved.entry.styleGroup, id);
-        return `    ${toPascalCase(id)}: ${component},`;
-      })
-      .join("\n");
-    return `  "${resolved.theme}": {\n${entries}\n  },`;
-  })
-  .join("\n")}
-};
-`,
-  });
-
-  files.push({
     path: rel("provider.tsx"),
     content: `${OWNER_HEADER}
-import { createContext, useContext, useState, type PropsWithChildren } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, type PropsWithChildren } from "react";
 import type { Theme } from "./types";
 
 interface MoeiconsThemeState { readonly theme: Theme; readonly setTheme: (theme: Theme) => void; }
 const MoeiconsThemeContext = createContext<MoeiconsThemeState | undefined>(undefined);
-export function MoeiconsProvider(props: PropsWithChildren<{ theme?: Theme }>) {
-  const [theme, setTheme] = useState<Theme>(props.theme ?? ${JSON.stringify(config.defaultTheme)});
-  return <MoeiconsThemeContext.Provider value={{ theme, setTheme }}>{props.children}</MoeiconsThemeContext.Provider>;
+const fallbackState: MoeiconsThemeState = { theme: ${JSON.stringify(config.defaultTheme)}, setTheme: () => {} };
+export function MoeiconsProvider(props: PropsWithChildren<{ theme?: Theme; defaultTheme?: Theme; onThemeChange?: (theme: Theme) => void }>) {
+  const [localTheme, setLocalTheme] = useState<Theme>(props.defaultTheme ?? ${JSON.stringify(config.defaultTheme)});
+  const theme = props.theme ?? localTheme;
+  const setTheme = useCallback((next: Theme) => {
+    if (props.theme === undefined) setLocalTheme(next);
+    props.onThemeChange?.(next);
+  }, [props.theme, props.onThemeChange]);
+  const value = useMemo(() => ({ theme, setTheme }), [theme, setTheme]);
+  return <MoeiconsThemeContext.Provider value={value}>{props.children}</MoeiconsThemeContext.Provider>;
 }
 export function useMoeiconsTheme(): MoeiconsThemeState {
-  const state = useContext(MoeiconsThemeContext);
-  if (!state) throw new Error("useMoeiconsTheme must be used inside <MoeiconsProvider>");
-  return state;
+  return useContext(MoeiconsThemeContext) ?? fallbackState;
 }
 `,
   });
 
   for (const iconId of config.icons) {
     const pascal = toPascalCase(iconId);
+    const ownImports = themes.map((theme) => {
+      const actual = effectiveThemeForIcon(iconId, theme, themes, config, sourceCatalog);
+      if (actual.kind === "bitmap") {
+        const symbol = bitmapWrapperImportName(theme.theme, iconId);
+        return `import { ${symbol} } from "../wrappers/${symbol}";`;
+      }
+      const symbol = svgInternalImportName(theme.theme, actual.entry.styleGroup, iconId);
+      return `import ${symbol} from "${installedIconImport(posix.join(config.outputDir, "icons"), "react", actual.entry.styleGroup, iconId)}";`;
+    }).join("\n");
+    const renderBranches = themes.map((theme) => {
+      const actual = effectiveThemeForIcon(iconId, theme, themes, config, sourceCatalog);
+      const symbol = actual.kind === "bitmap"
+        ? bitmapWrapperImportName(theme.theme, iconId)
+        : svgInternalImportName(theme.theme, actual.entry.styleGroup, iconId);
+      const refType = actual.kind === "bitmap" ? "HTMLImageElement" : "SVGSVGElement";
+      return `    case ${JSON.stringify(theme.theme)}:
+      return <${symbol} ref={ref as React.Ref<${refType}>} width={resolvedSize} height={resolvedSize} strokeWidth={strokeWidth ?? themeStrokeWidth[${JSON.stringify(theme.theme)}]} {...rest} className={cn("moe-icon", themeClassName[${JSON.stringify(theme.theme)}], className)} />;`;
+    }).join("\n");
+    const defaultTheme = themes.find((theme) => theme.theme === config.defaultTheme)!;
+    const defaultActual = effectiveThemeForIcon(iconId, defaultTheme, themes, config, sourceCatalog);
+    const defaultSymbol = defaultActual.kind === "bitmap"
+      ? bitmapWrapperImportName(defaultTheme.theme, iconId)
+      : svgInternalImportName(defaultTheme.theme, defaultActual.entry.styleGroup, iconId);
+    const defaultRefType = defaultActual.kind === "bitmap" ? "HTMLImageElement" : "SVGSVGElement";
+    const singleTheme = themes.length === 1;
     files.push({
       path: rel(`icons/${pascal}.tsx`),
       content: `${OWNER_HEADER}
 import type { IconProps } from "../types";
-import { registry } from "../registry";
-import { useMoeiconsTheme } from "../provider";
+${singleTheme ? "" : 'import { useMoeiconsTheme } from "../provider";'}
 import { cn } from "../cn";
-import type { Theme } from "../types";
+${singleTheme ? "" : 'import type { Theme } from "../types";'}
+import * as React from "react";
+${ownImports}
 
-${themeClassExpr(themes)}
-
-export function ${pascal}(props: IconProps) {
-  const { className, size, ...rest } = props;
+${singleTheme ? "" : themeClassExpr(themes)}
+${singleTheme ? "" : themeDefaultsExpr(themes)}
+export const ${pascal} = /* @__PURE__ */ React.forwardRef<SVGSVGElement | HTMLImageElement, IconProps>((props, ref) => {
+  const { className, size, strokeWidth, ...rest } = props;
+${singleTheme ? `  return <${defaultSymbol} ref={ref as React.Ref<${defaultRefType}>} width={size ?? ${defaultTheme.entry.defaultSize ?? 24}} height={size ?? ${defaultTheme.entry.defaultSize ?? 24}} strokeWidth={strokeWidth ?? ${defaultTheme.entry.strokeWidth === undefined ? "undefined" : defaultTheme.entry.strokeWidth}} {...rest} className={cn("moe-icon", ${JSON.stringify(defaultTheme.entry.className ?? "")}, className)} />;` : `
   const { theme } = useMoeiconsTheme();
-  const Component = registry[theme]?.${pascal} ?? registry[${JSON.stringify(config.defaultTheme)}].${pascal};
-  const sizeClass = typeof size === "number" ? \`w-[\${size}px] h-[\${size}px]\` : undefined;
-  return <Component {...rest} size={size} className={cn("moe-icon", themeClassName[theme as Theme], sizeClass, className)} />;
-}
+  const resolvedSize = size ?? themeDefaultSize[theme] ?? 24;
+  switch (theme) {
+${renderBranches}
+    default:
+      return <${defaultSymbol} ref={ref as React.Ref<${defaultRefType}>} width={resolvedSize} height={resolvedSize} strokeWidth={strokeWidth ?? themeStrokeWidth[${JSON.stringify(config.defaultTheme)}]} {...rest} className={cn("moe-icon", themeClassName[${JSON.stringify(config.defaultTheme)}], className)} />;
+  }`}
+});
 `,
     });
   }
@@ -234,6 +265,7 @@ function appendVueFiles(
   rel: (p: string) => string,
   config: MoeiconsConfigFile,
   themes: readonly ResolvedTheme[],
+  sourceCatalog: IconCatalog,
 ): void {
   files.push({
     path: rel("cn.ts"),
@@ -244,11 +276,20 @@ function appendVueFiles(
     path: rel("types.ts"),
     content: `${OWNER_HEADER}
 export interface IconProps {
-  class?: string;
+  class?: import("clsx").ClassValue;
   size?: number;
+  width?: number | string;
+  height?: number | string;
   strokeWidth?: number;
+  color?: string;
+  fill?: string;
+  stroke?: string;
+  focusable?: boolean | "auto" | "true" | "false";
   "aria-label"?: string;
-  [key: string]: unknown;
+  alt?: string;
+  title?: string;
+  "aria-hidden"?: boolean | "true" | "false";
+  draggable?: boolean;
 }
 
 export type Theme =
@@ -273,77 +314,39 @@ export const MOEICONS_THEME_KEY: InjectionKey<MoeiconsThemeState> = Symbol("moei
 `,
   });
 
-  const importLines: string[] = [];
   for (const resolved of themes) {
-    if (resolved.kind === "svg") {
-      for (const iconId of config.icons) {
-        const alias = svgInternalImportName(resolved.theme, resolved.entry.styleGroup, iconId);
-        importLines.push(
-          `import { ${toLibraryExportName(iconId)} as ${alias} } from "moe-icons/${config.tier}/vue/${resolved.entry.styleGroup}";`,
-        );
-      }
-    } else if (resolved.variant) {
-      for (const iconId of config.icons) {
-        const wrapperName = bitmapWrapperImportName(resolved.theme, iconId);
-        importLines.push(`import { ${wrapperName} } from "./wrappers/${wrapperName}";`);
-        files.push({
-          path: rel(`wrappers/${wrapperName}.ts`),
-          content: `${OWNER_HEADER}
-${vueBitmapWrapperSource(iconId, wrapperName, resolved.variant, resolved.entry.className)}`,
-        });
-      }
+    for (const iconId of config.icons) {
+      const actual = effectiveThemeForIcon(iconId, resolved, themes, config, sourceCatalog);
+      if (actual.kind !== "bitmap" || !actual.variant) continue;
+      const wrapperName = bitmapWrapperImportName(resolved.theme, iconId);
+      files.push({
+        path: rel(`wrappers/${wrapperName}.ts`),
+        content: `${OWNER_HEADER}
+${vueBitmapWrapperSource(iconId, wrapperName, actual.variant, resolved.entry.className)}`,
+      });
     }
   }
 
   files.push({
-    path: rel("registry.ts"),
-    content: `${OWNER_HEADER}
-import type { Component } from "vue";
-import type { Theme } from "./types";
-${importLines.join("\n")}
-
-export type IconId =
-${config.icons.map((id) => `  | "${id}"`).join("\n")};
-
-export interface ThemeRegistry {
-${config.icons.map((id) => `  readonly ${toPascalCase(id)}: Component;`).join("\n")}
-}
-
-export const registry: Record<Theme, ThemeRegistry> = {
-${themes
-  .map((resolved) => {
-    const entries = config.icons
-      .map((id) => {
-        const component =
-          resolved.kind === "bitmap"
-            ? bitmapWrapperImportName(resolved.theme, id)
-            : svgInternalImportName(resolved.theme, resolved.entry.styleGroup, id);
-        return `    ${toPascalCase(id)}: ${component},`;
-      })
-      .join("\n");
-    return `  "${resolved.theme}": {\n${entries}\n  },`;
-  })
-  .join("\n")}
-};
-`,
-  });
-
-  files.push({
     path: rel("provider.ts"),
     content: `${OWNER_HEADER}
-import { defineComponent, provide, ref, type PropType } from "vue";
+import { computed, defineComponent, provide, ref, type PropType } from "vue";
 import type { Theme } from "./types";
 import { MOEICONS_THEME_KEY, type MoeiconsThemeState } from "./theme";
 
 export const MoeiconsProvider = defineComponent({
   name: "MoeiconsProvider",
   props: {
-    theme: { type: String as PropType<Theme>, default: ${JSON.stringify(config.defaultTheme)} as Theme },
+    theme: { type: String as PropType<Theme>, default: undefined },
+    defaultTheme: { type: String as PropType<Theme>, default: ${JSON.stringify(config.defaultTheme)} as Theme },
   },
-  setup(props, { slots }) {
-    const theme = ref<Theme>(props.theme);
+  emits: ["update:theme"],
+  setup(props, { slots, emit }) {
+    const localTheme = ref<Theme>(props.defaultTheme);
+    const theme = computed<Theme>(() => props.theme ?? localTheme.value);
     const setTheme = (next: Theme) => {
-      theme.value = next;
+      if (props.theme === undefined) localTheme.value = next;
+      emit("update:theme", next);
     };
     const state: MoeiconsThemeState = { theme, setTheme };
     provide(MOEICONS_THEME_KEY, state);
@@ -356,47 +359,114 @@ export const MoeiconsProvider = defineComponent({
   files.push({
     path: rel("composable.ts"),
     content: `${OWNER_HEADER}
-import { inject } from "vue";
+import { inject, ref } from "vue";
 import { MOEICONS_THEME_KEY } from "./theme";
 import type { MoeiconsThemeState } from "./theme";
+import type { Theme } from "./types";
 
 export function useMoeiconsTheme(): MoeiconsThemeState {
   const state = inject(MOEICONS_THEME_KEY);
-  if (!state) {
-    throw new Error("useMoeiconsTheme must be used inside <MoeiconsProvider>");
-  }
-  return state;
+  return state ?? { theme: ref<Theme>(${JSON.stringify(config.defaultTheme)}), setTheme: () => {} };
 }
 `,
   });
 
   for (const iconId of config.icons) {
     const pascal = toPascalCase(iconId);
+    const ownImports = themes.map((theme) => {
+      const actual = effectiveThemeForIcon(iconId, theme, themes, config, sourceCatalog);
+      if (actual.kind === "bitmap") {
+        const symbol = bitmapWrapperImportName(theme.theme, iconId);
+        return `import { ${symbol} } from "../wrappers/${symbol}";`;
+      }
+      const symbol = svgInternalImportName(theme.theme, actual.entry.styleGroup, iconId);
+      return `import ${symbol} from "${installedIconImport(posix.join(config.outputDir, "icons"), "vue", actual.entry.styleGroup, iconId)}";`;
+    }).join("\n");
+    const ownVariants = themes.map((theme) => {
+      const actual = effectiveThemeForIcon(iconId, theme, themes, config, sourceCatalog);
+      const symbol = actual.kind === "bitmap"
+        ? bitmapWrapperImportName(theme.theme, iconId)
+        : svgInternalImportName(theme.theme, actual.entry.styleGroup, iconId);
+      return `  ${JSON.stringify(theme.theme)}: ${symbol},`;
+    }).join("\n");
+    const singleTheme = themes.length === 1;
+    const onlyTheme = themes[0]!;
+    const onlyActual = effectiveThemeForIcon(iconId, onlyTheme, themes, config, sourceCatalog);
+    const onlySymbol = onlyActual.kind === "bitmap"
+      ? bitmapWrapperImportName(onlyTheme.theme, iconId)
+      : svgInternalImportName(onlyTheme.theme, onlyActual.entry.styleGroup, iconId);
     files.push({
       path: rel(`icons/${pascal}.ts`),
       content: `${OWNER_HEADER}
-import { computed, defineComponent, h, inject } from "vue";
-import { MOEICONS_THEME_KEY, type MoeiconsThemeState } from "../theme";
-import { registry } from "../registry";
+import { ${singleTheme ? "defineComponent, h" : "computed, defineComponent, h, inject, type Component"} } from "vue";
+${singleTheme ? "" : 'import { MOEICONS_THEME_KEY, type MoeiconsThemeState } from "../theme";'}
 import { cn } from "../cn";
-import type { Theme } from "../types";
+${singleTheme ? "" : 'import type { Theme } from "../types";'}
+${ownImports}
 
-${themeClassExpr(themes)}
+${singleTheme ? "" : themeClassExpr(themes)}
+${singleTheme ? "" : themeDefaultsExpr(themes)}
+${singleTheme ? "" : `
+const variants: Record<Theme, Component> = {
+${ownVariants}
+};`}
 
-export const ${pascal} = defineComponent({
+export const ${pascal} = /* @__PURE__ */ defineComponent({
   name: "${pascal}",
-  setup(_props, { attrs }) {
+  inheritAttrs: false,
+  props: {
+    size: Number,
+    width: [Number, String],
+    height: [Number, String],
+    strokeWidth: Number,
+    color: String,
+    fill: String,
+    stroke: String,
+    focusable: { type: [Boolean, String], default: undefined },
+    alt: String,
+    title: String,
+    draggable: { type: Boolean, default: undefined },
+  },
+  setup(props, { attrs }) {
+${singleTheme ? "" : `
     const state = inject<MoeiconsThemeState | undefined>(MOEICONS_THEME_KEY, undefined);
-    const component = computed(() => registry[(state?.theme.value ?? ${JSON.stringify(config.defaultTheme)}) as Theme]?.${pascal} ?? registry[${JSON.stringify(config.defaultTheme)}].${pascal});
+    const component = computed(() => variants[(state?.theme.value ?? ${JSON.stringify(config.defaultTheme)}) as Theme] ?? variants[${JSON.stringify(config.defaultTheme)}]);
+`}
     return () => {
-      const className = typeof attrs.class === "string" ? attrs.class : undefined;
-      const size = typeof attrs.size === "number" ? attrs.size : undefined;
-      const sizeClass = typeof size === "number" ? \`w-[\${size}px] h-[\${size}px]\` : undefined;
+      const className = attrs.class as Parameters<typeof cn>[number];
+      const size = props.size;
+${singleTheme ? `
+      const resolvedSize = size ?? ${onlyTheme.entry.defaultSize ?? 24};
+      return h(${onlySymbol}, {
+        ...attrs,
+        width: props.width ?? resolvedSize,
+        height: props.height ?? resolvedSize,
+        strokeWidth: props.strokeWidth ?? ${onlyTheme.entry.strokeWidth === undefined ? "undefined" : onlyTheme.entry.strokeWidth},
+        color: props.color,
+        fill: props.fill,
+        stroke: props.stroke,
+        focusable: props.focusable,
+        alt: props.alt,
+        title: props.title,
+        draggable: props.draggable,
+        class: cn("moe-icon", ${JSON.stringify(onlyTheme.entry.className ?? "")}, className),
+      });` : `
       const theme = (state?.theme.value ?? ${JSON.stringify(config.defaultTheme)}) as Theme;
+      const resolvedSize = size ?? themeDefaultSize[theme] ?? 24;
       return h(component.value, {
         ...attrs,
-        class: cn("moe-icon", themeClassName[theme], sizeClass, className),
-      });
+        width: props.width ?? resolvedSize,
+        height: props.height ?? resolvedSize,
+        strokeWidth: props.strokeWidth ?? themeStrokeWidth[theme],
+        color: props.color,
+        fill: props.fill,
+        stroke: props.stroke,
+        focusable: props.focusable,
+        alt: props.alt,
+        title: props.title,
+        draggable: props.draggable,
+        class: cn("moe-icon", themeClassName[theme], className),
+      });`}
     };
   },
 });
@@ -421,14 +491,24 @@ ${config.icons
 
 type SvgNode = { readonly name: string; readonly attrs: readonly [string, string][]; readonly children: readonly SvgNode[]; readonly text?: never } | { readonly text: string };
 
-function parseSvgNodes(source: string): { viewBox: string; children: SvgNode[] } {
+function parseSvgNodes(source: string): { viewBox: string; rootAttrs: readonly [string, string][]; children: SvgNode[] } {
   const root: { children: SvgNode[] } = { children: [] };
   const stack: Array<{ children: SvgNode[] }> = [root];
   const svg = source.match(/<svg\b[^>]*>/i);
   if (!svg) throw new Error("SVG root element is missing");
   const viewBox = svg[0].match(/\bviewBox\s*=\s*["']([^"']+)["']/i)?.[1] ?? "0 0 24 24";
-  const inner = source.slice((svg.index ?? 0) + svg[0].length).replace(/<\/svg>\s*$/i, "");
+  const rootAttrs: [string, string][] = [];
+  const allowedRoot = new Set(["fill", "stroke", "stroke-width", "opacity", "transform", "color", "filter", "mask", "clip-path", "fill-opacity", "stroke-opacity", "stroke-linecap", "stroke-linejoin", "stroke-dasharray", "stroke-dashoffset", "fill-rule", "clip-rule", "role", "aria-hidden", "preserveAspectRatio"]);
+  const rootMetadata = new Set(["viewBox", "width", "height", "xmlns", "xmlns:xlink", "version"]);
+  svg[0].replace(/([A-Za-z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g, (_full, name: string, doubleValue?: string, singleValue?: string) => {
+    if (allowedRoot.has(name)) rootAttrs.push([name, doubleValue ?? singleValue ?? ""]);
+    else if (!rootMetadata.has(name)) throw new Error(`unsupported SVG root attribute "${name}" in Vanilla raw fallback`);
+    return "";
+  });
+  const inner = source.slice((svg.index ?? 0) + svg[0].length).replace(/<\/svg>\s*$/i, "")
+    .replace(/^\s*<rect\s+width="24"\s+height="24"\s+fill="#1E1E1E"\s*\/\>\s*<rect\s+width="\d+"\s+height="\d+"\s+transform="translate\(-?\d+(?:\.\d+)? -?\d+(?:\.\d+)?\)"\s+fill="white"\s*\/\>\s*/i, "");
   const tokenRe = /<!--[\s\S]*?-->|<[^>]+>|[^<]+/g;
+  const supportedTags = new Set(["g", "defs", "clipPath", "mask", "filter", "path", "circle", "ellipse", "line", "polyline", "polygon", "rect", "text", "tspan", "use", "image", "linearGradient", "radialGradient", "stop"]);
   for (const match of inner.matchAll(tokenRe)) {
     const token = match[0];
     if (token.startsWith("<!--") || !token.trim()) continue;
@@ -443,9 +523,10 @@ function parseSvgNodes(source: string): { viewBox: string; children: SvgNode[] }
     const selfClosing = /\/\s*>$/.test(token);
     const body = token.slice(1, token.length - (selfClosing ? 2 : 1)).trim();
     const name = body.match(/^[A-Za-z][\w:.-]*/)?.[0];
-    if (!name) continue;
+    if (!name || !supportedTags.has(name)) throw new Error(`unsupported SVG element "${name ?? token}" in Vanilla raw fallback`);
     const attrs: [string, string][] = [];
     body.slice(name.length).replace(/([A-Za-z_:][\w:.-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g, (_full, attr: string, doubleValue?: string, singleValue?: string, bareValue?: string) => {
+      if (/^on/i.test(attr)) throw new Error(`unsupported SVG event attribute "${attr}" in Vanilla raw fallback`);
       attrs.push([attr, doubleValue ?? singleValue ?? bareValue ?? ""]);
       return "";
     });
@@ -453,12 +534,17 @@ function parseSvgNodes(source: string): { viewBox: string; children: SvgNode[] }
     stack[stack.length - 1]?.children.push(node);
     if (!selfClosing) stack.push(node);
   }
-  return { viewBox, children: root.children };
+  return { viewBox, rootAttrs, children: root.children };
 }
 
 function vanillaFactorySource(name: string, source: string, strategy: "outline" | "solid" | "mixed"): string {
   const parsed = parseSvgNodes(source);
-  const paint = strategy === "solid" ? [["fill", "currentColor"]] : strategy === "outline" ? [["stroke", "currentColor"], ["fill", "none"]] : [];
+  const paint = new Map(parsed.rootAttrs);
+  if (strategy === "solid" && !paint.has("fill")) paint.set("fill", "currentColor");
+  if (strategy === "outline") {
+    if (!paint.has("stroke")) paint.set("stroke", "currentColor");
+    if (!paint.has("fill")) paint.set("fill", "none");
+  }
   const graphic = new Set(["path", "circle", "ellipse", "line", "polyline", "polygon", "rect", "text", "use", "image"]);
   const lines = [
     "const SVG_NS = 'http://www.w3.org/2000/svg';", "",
@@ -466,6 +552,8 @@ function vanillaFactorySource(name: string, source: string, strategy: "outline" 
     `export function create${name}(options: VanillaIconOptions = {}): SVGElement {`,
     "  const svg = document.createElementNS(SVG_NS, 'svg');",
     `  svg.setAttribute('viewBox', ${JSON.stringify(parsed.viewBox)});`,
+    "  svg.setAttribute('width', '24');",
+    "  svg.setAttribute('height', '24');",
     "  svg.setAttribute('class', options.className ? `moe-icon ${options.className}` : 'moe-icon');",
   ];
   for (const [attr, value] of paint) lines.push(`  svg.setAttribute(${JSON.stringify(attr)}, ${JSON.stringify(value)});`);
@@ -477,11 +565,11 @@ function vanillaFactorySource(name: string, source: string, strategy: "outline" 
       if ("text" in node) { lines.push(`  ${parent}.appendChild(document.createTextNode(${JSON.stringify(node.text)}));`); continue; }
       const variable = `node${counter++}`;
       lines.push(`  const ${variable} = document.createElementNS(SVG_NS, ${JSON.stringify(node.name)});`);
-      for (const [attr, value] of node.attrs) lines.push(`  ${variable}.setAttribute(${JSON.stringify(attr)}, ${JSON.stringify(value)});`);
-      if (graphic.has(node.name.toLowerCase())) {
-        if (strategy === "outline" && !node.attrs.some(([attr]) => attr.toLowerCase() === "stroke")) lines.push(`  ${variable}.setAttribute('stroke', 'currentColor');`);
-        if (strategy === "outline" && !node.attrs.some(([attr]) => attr.toLowerCase() === "fill")) lines.push(`  ${variable}.setAttribute('fill', 'none');`);
-        if (strategy === "solid" && !node.attrs.some(([attr]) => attr.toLowerCase() === "fill")) lines.push(`  ${variable}.setAttribute('fill', 'currentColor');`);
+      for (const [attr, value] of node.attrs) {
+        if (graphic.has(node.name.toLowerCase()) && strategy === "outline" && attr === "stroke-width" && value === "2") continue;
+        const tint = /^(?:black|#000(?:000)?)$/i.test(value);
+        const next = graphic.has(node.name.toLowerCase()) && tint && ((strategy === "outline" && attr === "stroke") || (strategy === "solid" && attr === "fill")) ? "currentColor" : value;
+        lines.push(`  ${variable}.setAttribute(${JSON.stringify(attr)}, ${JSON.stringify(next)});`);
       }
       emit(node.children, variable);
       lines.push(`  ${parent}.appendChild(${variable});`);
@@ -500,15 +588,16 @@ function vanillaFactorySource(name: string, source: string, strategy: "outline" 
 function vanillaRuntimeSource(
   config: MoeiconsConfigFile,
   themes: readonly ResolvedTheme[],
+  sourceCatalog: IconCatalog,
 ): string {
   const defaultTheme = config.defaultTheme;
   const imports: string[] = [];
   const factoryEntries: string[] = [];
   for (const resolved of themes) {
     const theme = resolved.theme;
-    const group = resolved.entry.styleGroup;
     const iconEntries: string[] = [];
     for (const iconId of config.icons) {
+      const group = effectiveThemeForIcon(iconId, resolved, themes, config, sourceCatalog).entry.styleGroup;
       const pascal = toPascalCase(iconId);
       const alias = `create${pascal}_${theme.replace(/[^a-zA-Z0-9]/g, "_")}`;
       imports.push(`import { create${pascal} as ${alias} } from "./${group}/${pascal}";`);
@@ -520,6 +609,9 @@ function vanillaRuntimeSource(
 import type { Theme, VanillaIconOptions } from "./types";
 
 const defaultTheme = ${JSON.stringify(defaultTheme)} as Theme;
+const themeDefaults: Record<Theme, VanillaIconOptions> = {
+${themes.map((theme) => `  ${JSON.stringify(theme.theme)}: { width: ${theme.entry.defaultSize ?? 24}, height: ${theme.entry.defaultSize ?? 24}${theme.entry.strokeWidth === undefined ? "" : `, strokeWidth: ${theme.entry.strokeWidth}`}${theme.entry.className === undefined ? "" : `, className: ${JSON.stringify(theme.entry.className)}`} },`).join("\n")}
+};
 const factories: Record<Theme, Record<string, (options?: VanillaIconOptions) => SVGElement>> = {
 ${factoryEntries.join(",\n")}
 };
@@ -529,41 +621,76 @@ function resolveTheme(theme: string | undefined): Theme {
   return defaultTheme;
 }
 
+function iconOptions(theme: Theme, options: VanillaIconOptions): VanillaIconOptions {
+  return { ...themeDefaults[theme], ...options };
+}
+
 export interface MoeiconsRuntime {
   readonly getTheme: () => Theme;
   readonly setTheme: (theme: Theme | string) => void;
+  readonly mount: (host: Element, iconId: string, options?: VanillaIconOptions) => MoeiconsMount;
   readonly mountIcon: (host: Element, iconId: string, options?: VanillaIconOptions) => SVGElement;
   readonly destroy: () => void;
+}
+
+export interface MoeiconsMount {
+  readonly node: SVGElement;
+  readonly update: (options: VanillaIconOptions) => void;
+  readonly on: (type: string, listener: EventListener) => () => void;
+  readonly unmount: () => void;
 }
 
 /** Project-layer runtime: theme ↔ styleGroup mapping with live DOM updates. */
 export function createMoeiconsRuntime(options: { theme?: Theme | string } = {}): MoeiconsRuntime {
   let theme = resolveTheme(options.theme);
-  const mounts: Array<{ host: Element; iconId: string; options: VanillaIconOptions; node: SVGElement }> = [];
+  const mounts = new Set<{ host: Element; iconId: string; options: VanillaIconOptions; node: SVGElement; listeners: Map<string, Set<EventListener>> }>();
+  const render = (record: { iconId: string; options: VanillaIconOptions; node: SVGElement; listeners: Map<string, Set<EventListener>> }) => {
+    const factory = factories[theme]?.[record.iconId] ?? factories[defaultTheme]?.[record.iconId];
+    if (!factory) throw new Error(\`unknown icon "\${record.iconId}"\`);
+    const nextNode = factory(iconOptions(theme, record.options));
+    for (const [type, listeners] of record.listeners) for (const listener of listeners) nextNode.addEventListener(type, listener);
+    record.node.replaceWith(nextNode);
+    record.node = nextNode;
+  };
+  const mount = (host: Element, iconId: string, iconOptions: VanillaIconOptions = {}): MoeiconsMount => {
+    const factory = factories[theme]?.[iconId] ?? factories[defaultTheme]?.[iconId];
+    if (!factory) throw new Error(\`unknown icon "\${iconId}"\`);
+    const record = { host, iconId, options: iconOptions, node: factory({ ...themeDefaults[theme], ...iconOptions }), listeners: new Map<string, Set<EventListener>>() };
+    host.appendChild(record.node);
+    mounts.add(record);
+    return {
+      get node() { return record.node; },
+      update(next) { if (!mounts.has(record)) return; record.options = next; render(record); },
+      on(type, listener) {
+        if (!mounts.has(record)) return () => {};
+        let listeners = record.listeners.get(type);
+        if (!listeners) { listeners = new Set(); record.listeners.set(type, listeners); }
+        listeners.add(listener);
+        record.node.addEventListener(type, listener);
+        return () => { record.listeners.get(type)?.delete(listener); record.node.removeEventListener(type, listener); };
+      },
+      unmount() { if (!mounts.has(record)) return; record.node.remove(); record.listeners.clear(); mounts.delete(record); },
+    };
+  };
 
   const api: MoeiconsRuntime = {
     getTheme: () => theme,
     setTheme(next) {
-      theme = resolveTheme(next);
-      for (const mount of mounts) {
-        const factory = factories[theme]?.[mount.iconId] ?? factories[defaultTheme]?.[mount.iconId];
-        if (!factory) continue;
-        const nextNode = factory(mount.options);
-        mount.node.replaceWith(nextNode);
-        mount.node = nextNode;
+      const resolved = resolveTheme(next);
+      if (resolved === theme) return;
+      theme = resolved;
+      for (const record of mounts) {
+        if (!record.node.isConnected) { mounts.delete(record); continue; }
+        render(record);
       }
     },
+    mount,
     mountIcon(host, iconId, iconOptions = {}) {
-      const factory = factories[theme]?.[iconId] ?? factories[defaultTheme]?.[iconId];
-      if (!factory) throw new Error(\`unknown icon "\${iconId}"\`);
-      const node = factory(iconOptions);
-      host.appendChild(node);
-      mounts.push({ host, iconId, options: iconOptions, node });
-      return node;
+      return mount(host, iconId, iconOptions).node;
     },
     destroy() {
       for (const mount of mounts) mount.node.remove();
-      mounts.length = 0;
+      mounts.clear();
     },
   };
   return api;
@@ -586,11 +713,14 @@ function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function selectRawAssets(archiveFiles: Readonly<Record<string, Uint8Array>>, themes: readonly ResolvedTheme[], icons: readonly string[]): { ok: true; assets: GeneratedFile[] } | { ok: false; errors: string[] } {
+function selectRawAssets(archiveFiles: Readonly<Record<string, Uint8Array>>, themes: readonly ResolvedTheme[], config: MoeiconsConfigFile, sourceCatalog: IconCatalog): { ok: true; assets: GeneratedFile[] } | { ok: false; errors: string[] } {
   const manifest = archiveManifest(archiveFiles);
   if (!manifest) return { ok: false, errors: ["installed artifact assets manifest is missing or invalid"] };
   const base = manifest.path.slice(0, manifest.path.lastIndexOf("/"));
-  const wanted = new Set(themes.filter((theme) => theme.kind === "svg").flatMap((theme) => icons.map((icon) => `${theme.entry.styleGroup}/${icon}.svg`)));
+  const wanted = new Set(themes.flatMap((theme) => config.icons.flatMap((icon) => {
+    const actual = effectiveThemeForIcon(icon, theme, themes, config, sourceCatalog);
+    return actual.kind === "svg" ? [`${actual.entry.styleGroup}/${icon}.svg`] : [];
+  })));
   const assets: GeneratedFile[] = [];
   const errors: string[] = [];
   for (const path of wanted) {
@@ -648,7 +778,7 @@ export function planGeneratedFiles(
     }
     for (const [theme, entry] of Object.entries(config.themes)) {
       if (!catalogIcon.availableIn.includes(entry.styleGroup)) {
-        errors.push(
+        if (theme === config.defaultTheme || config.missingIconPolicy !== "fallback") errors.push(
           `icon "${iconId}" is not available in style group "${entry.styleGroup}" for theme "${theme}"`,
         );
       }
@@ -672,26 +802,35 @@ export function planGeneratedFiles(
     if (options.archiveFiles === undefined) {
       return { ok: false, errors: ["vanilla target requires an installed artifact"] };
     }
-    const raw = selectRawAssets(options.archiveFiles, resolved.themes, config.icons);
+    const raw = selectRawAssets(options.archiveFiles, resolved.themes, config, options.catalog ?? catalog);
     if (!raw.ok) return raw;
     const rawByPath = new Map(raw.assets.map((file) => [file.path.replace(/^assets\//, ""), file.content]));
+    const archivePaths = new Set(Object.keys(options.archiveFiles));
     const groups = new Set(resolved.themes.map((theme) => theme.entry.styleGroup));
     files.push({ path: rel("types.ts"), content: "export interface VanillaIconOptions extends Record<string, string | number | undefined> { className?: string; strokeWidth?: number; }\nexport type Theme = " + Object.keys(config.themes).map((t) => JSON.stringify(t)).join(" | ") + ";\n" });
     for (const styleGroup of groups) {
       const exports: string[] = ["// Vanilla factory exports"];
-      for (const iconId of config.icons) {
+      for (const iconId of config.icons.filter((id) => findCatalogIcon(id, options.catalog ?? catalog)?.availableIn.includes(styleGroup))) {
         const name = toPascalCase(iconId);
         const source = rawByPath.get(`${styleGroup}/${iconId}.svg`);
         if (!source || typeof source === "string") return { ok: false, errors: [`raw asset missing: ${styleGroup}/${iconId}.svg`] };
-        const strategy = styleGroup.endsWith("-outline") ? "outline" : styleGroup.endsWith("-solid") ? "solid" : "mixed";
-        files.push({ path: rel(`${styleGroup}/${name}.ts`), content: vanillaFactorySource(name, decodeUtf8(source), strategy) });
+        const kind = resolved.themes.find((theme) => theme.entry.styleGroup === styleGroup)?.group.type;
+        const strategy = kind === "outline" || kind === "solid" ? kind : "mixed";
+        const artifactPath = `.moeicons/artifact/vanilla/${styleGroup}/${name}.js`;
+        const archiveHasFactory = archivePaths.has(`vanilla/${styleGroup}/${name}.js`) ||
+          archivePaths.has(`${config.tier}/vanilla/${styleGroup}/${name}.js`);
+        const imported = posix.relative(posix.join(outputDir, styleGroup), artifactPath);
+        const specifier = imported.startsWith(".") ? imported : `./${imported}`;
+        files.push({ path: rel(`${styleGroup}/${name}.ts`), content: archiveHasFactory
+          ? `${OWNER_HEADER}\nexport { create${name}, default } from ${JSON.stringify(specifier)};\n`
+          : vanillaFactorySource(name, decodeUtf8(source), strategy) });
         exports.push(`export { default as ${toLibraryExportName(iconId)}, create${name} } from './${name}';`);
       }
       files.push({ path: rel(`${styleGroup}/index.ts`), content: `${exports.join("\n")}\n` });
     }
     files.push({
       path: rel("runtime.ts"),
-      content: vanillaRuntimeSource(config, resolved.themes),
+      content: vanillaRuntimeSource(config, resolved.themes, options.catalog ?? catalog),
     });
     const groupNamespaces = [...groups].map((group) => {
       const ns = toProxyName(group);
@@ -702,16 +841,16 @@ export function planGeneratedFiles(
       content: `${groupNamespaces.join("\n")}\nexport { createMoeiconsRuntime } from './runtime';\nexport type { Theme, VanillaIconOptions } from './types';\n`,
     });
   } else if (target === "vue") {
-    appendVueFiles(files, rel, config, resolved.themes);
+    appendVueFiles(files, rel, config, resolved.themes, options.catalog ?? catalog);
   } else {
-    appendReactFiles(files, rel, config, resolved.themes);
+    appendReactFiles(files, rel, config, resolved.themes, options.catalog ?? catalog);
   }
 
   if (target === "assets") {
     if (options.archiveFiles === undefined) {
       return { ok: false, errors: ["assets target requires an installed artifact"] };
     }
-    const raw = selectRawAssets(options.archiveFiles, resolved.themes, config.icons);
+    const raw = selectRawAssets(options.archiveFiles, resolved.themes, config, options.catalog ?? catalog);
     if (!raw.ok) return raw;
     for (const asset of raw.assets) files.push({ path: rel(asset.path), content: asset.content });
   }
@@ -743,7 +882,11 @@ export function planGeneratedFiles(
       options.archiveFiles,
       unique,
       config.icons,
-      { mediaContractVersion },
+      { mediaContractVersion, requestedPairs: resolved.themes.flatMap((theme) =>
+        config.icons.flatMap((iconId) => {
+          const actual = effectiveThemeForIcon(iconId, theme, resolved.themes, config, options.catalog ?? catalog);
+          return actual.variant ? [{ variantId: actual.variant.resourceVariantId, iconId }] : [];
+        })) },
     );
     if (!selected.ok) return { ok: false, errors: [...selected.errors] };
     for (const asset of selected.assets) {

@@ -91,7 +91,7 @@ describe("runInstallUseCase", () => {
 
   it("writes managed metadata for free installs", async () => {
     const result = await runInstallUseCase(context(project), deps(), { group: "free" });
-    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({ ok: true });
     if (!result.ok) return;
     expect(existsSync(join(project, ".moeicons", "install-metadata.json"))).toBe(true);
     expect(existsSync(join(project, ".moeicons", "catalog.json"))).toBe(true);
@@ -106,6 +106,17 @@ describe("runInstallUseCase", () => {
     expect(metadata.artifactSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(metadata.artifactSha256.length).toBe(64);
     expect(readInstalledResourceState(project, "free").kind).toBe("ok");
+  });
+
+  it("rejects an unowned file at an install destination without changing it", async () => {
+    mkdirSync(join(project, "src", "moeicons"), { recursive: true });
+    const userPath = join(project, "src", "moeicons", "types.ts");
+    writeFileSync(userPath, "export type UserType = string;\n");
+    const result = await runInstallUseCase(context(project), deps(), { group: "free" });
+    expect(result).toMatchObject({ ok: false, reason: "write-failed" });
+    if (!result.ok && "message" in result) expect(result.message).toContain("unowned user file");
+    expect(readFileSync(userPath, "utf8")).toBe("export type UserType = string;\n");
+    expect(existsSync(join(project, ".moeicons", "install-metadata.json"))).toBe(false);
   });
 
   it("AUD-CL-01: single style-group install fails closed with explicit guidance", async () => {
@@ -138,13 +149,15 @@ describe("runInstallUseCase", () => {
       group: "free",
       target: "assets",
     });
-    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({ ok: true });
     if (!result.ok) return;
     const expected = targetSubtreeFiles().assets;
     for (const [rel] of Object.entries(expected)) {
       expect(existsSync(join(project, ".moeicons", "artifact", "assets", rel))).toBe(true);
     }
-    expect(existsSync(join(project, ".moeicons", "artifact", "react"))).toBe(false);
+    for (const rel of Object.keys(targetSubtreeFiles().react)) {
+      expect(existsSync(join(project, ".moeicons", "artifact", "react", rel))).toBe(false);
+    }
     expect(existsSync(join(project, ".moeicons", "artifact", "vue"))).toBe(false);
     expect(existsSync(join(project, ".moeicons", "artifact", "vanilla"))).toBe(false);
     const metadata = parseInstallMetadata(
@@ -154,6 +167,26 @@ describe("runInstallUseCase", () => {
     expect(metadata?.targetSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(metadata?.targetFileCount).toBe(Object.keys(expected).length);
     expect(readInstalledResourceState(project, "free").kind).toBe("ok");
+  });
+
+  it("switches target artifacts while retaining unrelated user files", async () => {
+    const first = await runInstallUseCase(context(project), deps(), { group: "free", target: "react" });
+    expect(first.ok).toBe(true);
+    const userDir = join(project, "src", "moeicons");
+    mkdirSync(userDir, { recursive: true });
+    const userFile = join(userDir, "user-note.md");
+    writeFileSync(userFile, "keep this note\n");
+
+    const second = await runInstallUseCase(context(project), deps(), { group: "free", target: "vue" });
+    expect(second.ok).toBe(true);
+    for (const rel of Object.keys(targetSubtreeFiles().react)) {
+      expect(existsSync(join(project, ".moeicons", "artifact", "react", rel))).toBe(false);
+    }
+    expect(existsSync(join(project, ".moeicons", "artifact", "vue"))).toBe(true);
+    expect(readFileSync(userFile, "utf8")).toBe("keep this note\n");
+    const metadata = parseInstallMetadata(readFileSync(join(project, ".moeicons", "install-metadata.json"), "utf8"));
+    expect(metadata?.target).toBe("vue");
+    expect(Object.keys(metadata?.managedFiles ?? {}).some((path) => path.startsWith(".moeicons/artifact/react/"))).toBe(false);
   });
 
   it("rejects a target subtree whose descriptor hash does not match the archive", async () => {
@@ -179,8 +212,20 @@ describe("runInstallUseCase", () => {
     const result = await runInstallUseCase(context(project), deps(), { group: "free" });
     expect(result).toMatchObject({ ok: false, reason: "validation" });
     if (result.ok === false && result.reason === "validation") {
-      expect(result.message).toContain("target is required");
+      expect(result.message).toContain("target must be");
     }
+    expect(existsSync(join(project, ".moeicons"))).toBe(false);
+  });
+
+  it("rejects a target override that disagrees with config before downloading", async () => {
+    writeFileSync(join(project, "moeicons.config.json"), JSON.stringify({
+      schemaVersion: 3, tier: "free", target: "react", outputDir: "src/moeicons",
+      defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } },
+      icons: ["ui-search"],
+    }));
+    const result = await runInstallUseCase(context(project), deps(), { group: "free", target: "vue" });
+    expect(result).toMatchObject({ ok: false, reason: "validation" });
+    if (!result.ok && "message" in result) expect(result.message).toContain('set target to "vue"');
     expect(existsSync(join(project, ".moeicons"))).toBe(false);
   });
 

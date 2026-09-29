@@ -21,6 +21,7 @@ type HappyWindow = {
   };
   Element: unknown;
   SVGElement: unknown;
+  Event: typeof Event;
   close: () => void;
 };
 
@@ -69,6 +70,10 @@ function archiveFiles(): Record<string, Uint8Array> {
     ),
   };
 }
+
+// A formal code archive includes the compiled per-icon factory. The local
+// project should reuse it, rather than reinterpret the SVG with another emitter.
+const compiledFactory = new TextEncoder().encode('export function createUiSearch() {}\nexport default createUiSearch;\n');
 
 describe("E2E-C4 vanilla project runtime", () => {
   let window: HappyWindow;
@@ -123,6 +128,17 @@ describe("E2E-C4 vanilla project runtime", () => {
     expect(index).not.toContain("export * from './moe-solid';");
   });
 
+  it("re-exports installed compiled factories when the code archive provides them", () => {
+    const files = { ...archiveFiles(), 'vanilla/moe-outline/UiSearch.js': compiledFactory };
+    const plan = planGeneratedFiles({ ...config, themes: { outline: config.themes.outline! } }, "src/moeicons", { archiveFiles: files });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    const factory = plan.files.find((file) => file.path === 'src/moeicons/moe-outline/UiSearch.ts')?.content;
+    expect(factory).toContain('export { createUiSearch, default } from');
+    expect(factory).toContain('.moeicons/artifact/vanilla/moe-outline/UiSearch.js');
+    expect(factory).not.toContain('document.createElementNS');
+  });
+
   it("rejects two style groups that map to the same namespace", () => {
     const colliding: MoeiconsConfigFile = {
       ...config,
@@ -157,6 +173,28 @@ describe("E2E-C4 vanilla project runtime", () => {
     expect(host.querySelector("svg")).toBeNull();
   });
 
+  it("mount handle tracks replacement, preserves registered listeners, and unmounts", async () => {
+    const mod = await import(pathToFileURL(join(FIXTURE, "src/moeicons/runtime.ts")).href);
+    const runtime = mod.createMoeiconsRuntime();
+    const host = window.document.createElement("div");
+    window.document.body.appendChild(host);
+    const handle = runtime.mount(host, "ui-search", { "aria-label": "search" });
+    const first = handle.node;
+    runtime.setTheme("outline");
+    expect(handle.node).toBe(first);
+    let clicks = 0;
+    handle.on("click", () => { clicks += 1; });
+    runtime.setTheme("solid");
+    expect(handle.node).not.toBe(first);
+    handle.node.dispatchEvent(new window.Event("click"));
+    expect(clicks).toBe(1);
+    handle.update({ "aria-label": "updated" });
+    expect(handle.node.getAttribute("aria-label")).toBe("updated");
+    handle.unmount();
+    expect(host.querySelector("svg")).toBeNull();
+    runtime.destroy();
+  });
+
   it("rejects bitmap vanilla themes at plan time", () => {
     const bitmapConfig: MoeiconsConfigFile = {
       ...config,
@@ -169,5 +207,38 @@ describe("E2E-C4 vanilla project runtime", () => {
     expect(plan.ok).toBe(false);
     if (plan.ok) return;
     expect(plan.errors.join(" ")).toMatch(/vanilla target supports SVG themes only|unknown style group/);
+  });
+
+  it("keeps SVG root paint and default dimensions in generated Vanilla factories", () => {
+    const files = archiveFiles();
+    const source = new TextEncoder().encode('<svg viewBox="0 0 24 24" opacity="0.4" stroke-width="3" preserveAspectRatio="xMidYMid meet"><path stroke="black" stroke-width="2" d="M0 0"/></svg>');
+    files["assets/moe-outline/ui-search.svg"] = source;
+    const manifest = JSON.parse(new TextDecoder().decode(files["assets/manifest.json"])) as { assets: Array<{ path: string; size: number; sha256: string }> };
+    const entry = manifest.assets.find((asset) => asset.path === "moe-outline/ui-search.svg")!;
+    entry.size = source.byteLength;
+    entry.sha256 = createHash("sha256").update(source).digest("hex");
+    files["assets/manifest.json"] = new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, assets: manifest.assets }));
+    const plan = planGeneratedFiles(config, "src/moeicons", { archiveFiles: files });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    const factory = String(plan.files.find((file) => file.path === "src/moeicons/moe-outline/UiSearch.ts")?.content);
+    expect(factory).toContain('svg.setAttribute("opacity", "0.4")');
+    expect(factory).toContain('svg.setAttribute("stroke-width", "3")');
+    expect(factory).toContain('svg.setAttribute("preserveAspectRatio", "xMidYMid meet")');
+    expect(factory).toContain("svg.setAttribute('width', '24')");
+    expect(factory).toContain('node0.setAttribute("stroke", "currentColor")');
+    expect(factory).not.toContain('node0.setAttribute("stroke-width", "2")');
+  });
+
+  it("fails explicitly when a legacy raw SVG uses unsupported root syntax", () => {
+    const files = archiveFiles();
+    const source = new TextEncoder().encode('<svg viewBox="0 0 24 24" vector-effect="non-scaling-stroke"><path d="M0 0"/></svg>');
+    files["assets/moe-outline/ui-search.svg"] = source;
+    const manifest = JSON.parse(new TextDecoder().decode(files["assets/manifest.json"])) as { assets: Array<{ path: string; size: number; sha256: string }> };
+    const entry = manifest.assets.find((asset) => asset.path === "moe-outline/ui-search.svg")!;
+    entry.size = source.byteLength;
+    entry.sha256 = createHash("sha256").update(source).digest("hex");
+    files["assets/manifest.json"] = new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, assets: manifest.assets }));
+    expect(() => planGeneratedFiles(config, "src/moeicons", { archiveFiles: files })).toThrow(/unsupported SVG root attribute "vector-effect"/);
   });
 });

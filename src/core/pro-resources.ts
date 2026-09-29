@@ -10,7 +10,17 @@ import type { AuthUseCaseDependencies } from "./auth.js";
 import type { CommandContext } from "./context.js";
 import { isVersionNewer } from "../metadata/version.js";
 import { verifyArtifact } from "../project/install.js";
-import { cacheArtifact } from "./cache.js";
+import { cacheArtifact, type CacheIo } from "./cache.js";
+import { extractAndVerifyMetadataArchive } from "../metadata/archive.js";
+import { parseCatalog } from "../catalog/catalog.js";
+import { runAccessTokenUseCase } from "./auth.js";
+import { PRO_DOWNLOAD_HOSTS } from "./pro-download.js";
+import { resolveBitmapShardDescriptorEndpoint } from "./bitmap-shard-download.js";
+import {
+  warmDefaultBitmapShards,
+  type WarmupPlan,
+} from "./bitmap-shard-cache.js";
+import type { BitmapShardFetchProgress } from "./bitmap-shard-resolver.js";
 
 function cacheDir(env: Readonly<Record<string, string | undefined>>): string {
   return env.MOEICONS_CACHE_DIR ?? join(homedir(), ".moeicons", "cache");
@@ -105,7 +115,9 @@ export async function proResourceState(
 export interface ProPredownloadResult {
   readonly version: string;
   readonly codeSha256: string;
+  readonly descriptorSha256: string;
   readonly metadataSha256?: string;
+  readonly catalogSha256: string;
   readonly codeBytes: number;
   readonly metadataBytes: number;
 }
@@ -174,8 +186,101 @@ export async function runProPredownloadUseCase(
   return {
     version: descriptor.version,
     codeSha256: descriptor.sha256,
+    descriptorSha256: descriptor.descriptorSha256,
     ...(metadataSha256 ? { metadataSha256 } : {}),
+    catalogSha256: descriptor.catalogSha256,
     codeBytes: codeBytes.byteLength,
     metadataBytes,
+  };
+}
+
+export interface ProWarmupResult {
+  readonly version: string;
+  readonly groups: number;
+  readonly shards: number;
+  readonly downloaded: number;
+  readonly reused: number;
+}
+
+export interface ProWarmupDeps {
+  readonly version: string;
+  readonly descriptorSha256: string;
+  readonly metadataSha256: string;
+  readonly catalogSha256: string;
+  readonly fetch?: typeof fetch;
+  readonly allowedProHosts?: readonly string[];
+  readonly onPlan?: (plan: WarmupPlan) => void;
+  readonly onProgress?: (event: BitmapShardFetchProgress) => void;
+}
+
+function cacheIo(): CacheIo {
+  return {
+    mkdirSync: (path) => mkdirSync(path, { recursive: true }),
+    writeFileSync,
+    renameSync,
+    existsSync,
+    rmSync,
+    readFileSync,
+    readdirSync,
+  };
+}
+
+/**
+ * W2-A: after the Pro code + metadata are cached, warm the default bitmap shard
+ * set (every bitmap style group's 128/webp shard) into the global cache. The
+ * release catalog comes from the already-verified metadata archive, so no
+ * second artifact download is needed.
+ */
+export async function runProResourceWarmupUseCase(
+  context: CommandContext,
+  auth: AuthUseCaseDependencies,
+  deps: ProWarmupDeps,
+): Promise<ProWarmupResult> {
+  const dir = cacheDir(context.env);
+  const metadataPath = metadataCachePath(dir, deps.version, deps.metadataSha256);
+  if (!existsSync(metadataPath)) {
+    throw new CliError("NOT_FOUND", "Pro metadata is not cached; download Pro resources first");
+  }
+  const extracted = extractAndVerifyMetadataArchive(readFileSync(metadataPath), {
+    expectedCatalogSha: deps.catalogSha256,
+    expectedTier: "pro",
+    expectedVersion: deps.version,
+  });
+  if (extracted.kind !== "ok") throw new CliError("VALIDATION_ERROR", extracted.message);
+  let catalog;
+  try {
+    catalog = parseCatalog(JSON.parse(extracted.value.catalogJson));
+  } catch (error) {
+    throw new CliError("VALIDATION_ERROR", error instanceof Error ? error.message : "invalid pro catalog");
+  }
+
+  const accessToken = await runAccessTokenUseCase(context, auth);
+  const endpoint = resolveBitmapShardDescriptorEndpoint(context.env);
+  const allowedHosts = endpoint.allowLoopback
+    ? [...PRO_DOWNLOAD_HOSTS, new URL(endpoint.url).host]
+    : deps.allowedProHosts ?? PRO_DOWNLOAD_HOSTS;
+
+  const result = await warmDefaultBitmapShards({
+    catalog,
+    version: deps.version,
+    descriptorSha256: deps.descriptorSha256,
+    accessToken,
+    cacheDir: dir,
+    io: cacheIo(),
+    endpoint: endpoint.url,
+    allowedHosts,
+    signal: context.signal,
+    now: context.now().getTime(),
+    ...(endpoint.allowLoopback ? { allowLoopback: true } : {}),
+    ...(deps.fetch ? { fetch: deps.fetch } : {}),
+    ...(deps.onPlan ? { onPlan: deps.onPlan } : {}),
+    ...(deps.onProgress ? { onProgress: deps.onProgress } : {}),
+  });
+  return {
+    version: deps.version,
+    groups: new Set(result.tuples.map((tuple) => tuple.styleGroupId)).size,
+    shards: result.tuples.length,
+    downloaded: result.downloaded,
+    reused: result.reused,
   };
 }

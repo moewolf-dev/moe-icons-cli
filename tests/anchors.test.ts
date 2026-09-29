@@ -66,7 +66,7 @@ describe("config anchor", () => {
     expect(result.status).toBe("missing");
     expect(result.fixes.length).toBe(1);
     expect(result.fixes[0]).toMatchObject({ kind: "create", path: "moeicons.config.jsonc" });
-    expect(result.fixes[0]?.after).toContain('"schemaVersion": 2');
+    expect(result.fixes[0]?.after).toContain('"schemaVersion": 3');
   });
 
   it("reports invalid without an overwrite plan", () => {
@@ -146,6 +146,59 @@ createRoot(document.getElementById("root")!).render(<MoeiconsProvider><App /></M
     const result = inspectApplicationAnchor({ root: dir, adapter: "vite-react", io: realDetectorIo });
     expect(result.status).toBe("ok");
     expect(result.fixes).toEqual([]);
+  });
+
+  it("inserts after a multiline import and uses configured outputDir", () => {
+    writeReactEntry(`import {
+  createRoot,
+} from "react-dom/client";
+import App from "./App";
+createRoot(document.getElementById("root")!).render(<App />);
+`);
+    const result = inspectApplicationAnchor({ root: dir, adapter: "vite-react", io: realDetectorIo, outputDir: "src/generated/icons" });
+    expect(result.status).toBe("missing");
+    const after = result.fixes[0]?.after ?? "";
+    expect(after).toContain('} from "react-dom/client";');
+    expect(after).toContain('from "./generated/icons"');
+    expect(after).toContain("<MoeiconsProvider><App /></MoeiconsProvider>");
+  });
+
+  it("does not accept an unrelated import as provider registration", () => {
+    writeReactEntry(`import { UiSearch } from "./moeicons";
+import { createRoot } from "react-dom/client";
+createRoot(document.getElementById("root")!).render(<App />);
+`);
+    const result = inspectApplicationAnchor({ root: dir, adapter: "vite-react", io: realDetectorIo });
+    expect(result.status).toBe("missing");
+    expect(result.fixes[0]?.after).toContain('import { MoeiconsProvider } from "./moeicons";');
+  });
+
+  it("checks the render root rather than an unrelated Provider reference", () => {
+    writeReactEntry(`import { MoeiconsProvider } from "./moeicons";
+import { createRoot } from "react-dom/client";
+const unused = <MoeiconsProvider><Other /></MoeiconsProvider>;
+createRoot(document.getElementById("root")!).render(<App />);
+`);
+    const result = inspectApplicationAnchor({ root: dir, adapter: "vite-react", io: realDetectorIo });
+    expect(result.status).toBe("missing");
+    expect(result.fixes[0]?.after).toContain("render(<MoeiconsProvider><App /></MoeiconsProvider>)");
+  });
+
+  it("recognizes and patches a standard Vite Vue mount", () => {
+    writePkg({ dependencies: { vue: "^3.5" }, devDependencies: { vite: "^6" } });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", "main.ts"), 'import { createApp } from "vue";\nimport App from "./App.vue";\ncreateApp(App).mount("#app");\n');
+    const result = inspectApplicationAnchor({ root: dir, adapter: "vite-vue", io: realDetectorIo });
+    expect(result.status).toBe("missing");
+    expect(result.fixes[0]?.after).toContain('createApp({ render: () => h(MoeiconsProvider, null, { default: () => h(App) }) }).mount("#app")');
+  });
+
+  it("reuses an aliased Vue h import", () => {
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", "main.ts"), 'import { createApp, h as hyperscript } from "vue";\nimport App from "./App.vue";\ncreateApp(App).mount("#app");\n');
+    const result = inspectApplicationAnchor({ root: dir, adapter: "vite-vue", io: realDetectorIo });
+    expect(result.fixes[0]?.after).toContain("hyperscript(MoeiconsProvider");
+    expect(result.fixes[0]?.after).not.toContain('import { h } from "vue";');
   });
 
   it("returns ambiguous on multiple createRoot calls", () => {

@@ -22,6 +22,7 @@ import type { CommandContext } from "./core/context.js";
 import { createCommandUi } from "./ui/create-ui.js";
 import { CLI_VERSION, MOEICONS_BANNER, renderNoticeBox, renderProjectNotice, renderWordmarkText } from "./ui/banner.js";
 import { createTheme, isThemeEnabled } from "./ui/theme.js";
+import { renderHistoryBar, type HistoryEntry } from "./tui/components.js";
 import {
   describeAuthEnvironment,
   runAccountUseCase,
@@ -40,7 +41,7 @@ import { runLibraryUpdateUseCase } from "./core/library-update.js";
 import { runMetadataSyncUseCase } from "./core/metadata-sync.js";
 import { runBootstrapUseCase } from "./core/bootstrap.js";
 import { fetchProDescriptor } from "./core/pro-download.js";
-import { proResourceState, runProPredownloadUseCase } from "./core/pro-resources.js";
+import { proResourceState, runProPredownloadUseCase, runProResourceWarmupUseCase } from "./core/pro-resources.js";
 import { formatBytes } from "./metadata/version.js";
 import { isLocalTestVersion } from "./core/release-descriptor.js";
 import type { FreeDownloadIo } from "./core/free-download.js";
@@ -327,17 +328,16 @@ async function offerProPredownload(runtime: CliRuntime): Promise<void> {
       runtime.stdout("Skipped Pro download; you can download it later from the home screen.\n");
       return;
     }
-    const progress = context.ui.progress("Downloading Pro resources", context.signal);
+    const progress = startResourceProgress(context, "Downloading Pro resources");
     try {
       const result = await runProPredownloadUseCase(context, runtime.auth ?? {}, {
         ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
-        onProgress: ({ downloadedBytes, totalBytes }) =>
-          progress.update?.(
-            `Downloaded ${downloadedBytes} bytes${totalBytes ? ` of ${totalBytes}` : ""}`,
-          ),
+        onProgress: ({ downloadedBytes, totalBytes }) => progress.bytes({ downloadedBytes, ...(totalBytes !== undefined ? { totalBytes } : {}) }),
       });
+      const warmed = await warmProBitmapShards(runtime, result, runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}, progress);
       progress.stop("Pro resources downloaded");
       runtime.stdout(`Cached Pro ${result.version} code + metadata.\n`);
+      if (warmed) runtime.stdout(`${warmed}\n`);
     } catch (error) {
       progress.stop("Pro download stopped");
       runtime.stderr(
@@ -346,6 +346,69 @@ async function offerProPredownload(runtime: CliRuntime): Promise<void> {
     }
   } catch {
     // A failed probe must not make login fail.
+  }
+}
+
+/**
+ * W3-A: normalize the optional progress-bar surface. Falls back to the legacy
+ * line-oriented `progress` port for adapters that do not render a bar.
+ */
+function startResourceProgress(context: CommandContext, label: string) {
+  const bar = context.ui.progressBar?.(label, context.signal);
+  if (bar) {
+    return {
+      bytes: (event: { downloadedBytes: number; totalBytes?: number; detail?: string }) =>
+        bar.update({
+          done: event.downloadedBytes,
+          ...(event.totalBytes !== undefined ? { total: event.totalBytes } : {}),
+          ...(event.detail !== undefined ? { detail: event.detail } : {}),
+        }),
+      phase: (detail: string) => bar.update({ detail }),
+      stop: (message?: string) => bar.stop(message),
+    };
+  }
+  const legacy = context.ui.progress(label, context.signal);
+  return {
+    bytes: (event: { downloadedBytes: number; totalBytes?: number; detail?: string }) =>
+      legacy.update?.(
+        `Downloaded ${event.downloadedBytes} bytes${event.totalBytes ? ` of ${event.totalBytes}` : ""}${event.detail ? ` (${event.detail})` : ""}`,
+      ),
+    phase: (detail: string) => legacy.update?.(detail),
+    stop: (message?: string) => legacy.stop(message),
+  };
+}
+
+/**
+ * W2-A: best-effort warm-up of the default bitmap shard set after the Pro code
+ * and metadata are cached. Never fails the surrounding download.
+ */
+async function warmProBitmapShards(
+  runtime: CliRuntime,
+  result: { version: string; descriptorSha256: string; metadataSha256?: string; catalogSha256: string },
+  fetchDeps: { fetch?: typeof fetch },
+  progress: ReturnType<typeof startResourceProgress>,
+): Promise<string | undefined> {
+  if (!result.metadataSha256) return undefined;
+  try {
+    const warm = await runProResourceWarmupUseCase(commandContext(runtime, { json: false, yes: false }), runtime.auth ?? {}, {
+      version: result.version,
+      descriptorSha256: result.descriptorSha256,
+      metadataSha256: result.metadataSha256,
+      catalogSha256: result.catalogSha256,
+      ...fetchDeps,
+      onPlan: (plan) =>
+        progress.phase(`Default bitmap shards: ${plan.missing.length} to download, ${plan.reused} cached`),
+      onProgress: (event) =>
+        progress.phase(
+          `Shard ${event.index}/${event.total} ${event.phase} — ${event.tuple.styleGroupId} ${event.tuple.imageSize.width}x${event.tuple.imageSize.height} ${event.tuple.format}`,
+        ),
+    });
+    return `Warmed ${warm.shards} default bitmap shards (${warm.downloaded} downloaded, ${warm.reused} cached).`;
+  } catch (error) {
+    runtime.stderr(
+      `warning: default bitmap shard warm-up skipped (${error instanceof Error ? error.message : String(error)}).\n`,
+    );
+    return undefined;
   }
 }
 
@@ -385,18 +448,17 @@ async function runProResources(runtime: CliRuntime, yes: boolean): Promise<numbe
     runtime.stdout("Cancelled; Pro resources were not downloaded.\n");
     return 0;
   }
-  const progress = context.ui.progress("Downloading Pro resources", context.signal);
+  const progress = startResourceProgress(context, "Downloading Pro resources");
   try {
     const result = await runProPredownloadUseCase(context, runtime.auth ?? {}, {
       ...fetchDeps,
       force: state.kind === "corrupt",
-      onProgress: ({ downloadedBytes, totalBytes }) =>
-        progress.update?.(
-          `Downloaded ${downloadedBytes} bytes${totalBytes ? ` of ${totalBytes}` : ""}`,
-        ),
+      onProgress: ({ downloadedBytes, totalBytes }) => progress.bytes({ downloadedBytes, ...(totalBytes !== undefined ? { totalBytes } : {}) }),
     });
+    const warmed = await warmProBitmapShards(runtime, result, fetchDeps, progress);
     progress.stop("Pro resources downloaded");
     runtime.stdout(`Cached Pro ${result.version} code + metadata.\n`);
+    if (warmed) runtime.stdout(`${warmed}\n`);
     return 0;
   } catch (error) {
     progress.stop("Pro download stopped");
@@ -639,6 +701,10 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
     );
   };
 
+  // W3-E2: single-line preview of the most recent task, colour-coded by state.
+  const theme = createTheme(isThemeEnabled(runtime.env, runtime.isTTY()));
+  let lastTask: HistoryEntry | undefined;
+
   // Single-level loop: never recurse runWizard; banner/bootstrap once per process.
   for (;;) {
     const context = commandContext(runtime, { json: false, yes });
@@ -647,9 +713,11 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
       reason: error instanceof Error ? error.message : "session status unavailable",
     }));
 
+    const historyLine = renderHistoryBar(lastTask, theme);
     const result = await runWizardUseCase(context, {
       json: false,
       session: session.kind,
+      ...(historyLine ? { historyLine } : {}),
       getLibraryStatus: getStatus,
       getProResourceLabel: async () => {
         if (session.kind !== "authenticated") return undefined;
@@ -676,14 +744,20 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
     if (result.action === "back") continue;
 
     if (result.action === "pro-resources") {
-      await runProResources(runtime, yes);
+      const code = await runProResources(runtime, yes);
+      lastTask = {
+        label: "Pro resources",
+        state: code === 0 ? "success" : "failure",
+      };
       continue;
     }
 
     if (result.action === "install") {
       const project = detectProject(runtime.cwd());
       if (project) runtime.stdout(`Project root: ${project.root}\n`);
-      return await runInstall(
+      // W3-E1: never leave the user stuck at the end of a task; return to the
+      // home menu (with the history bar) instead of exiting.
+      const code = await runInstall(
         result.group,
         runtime,
         false,
@@ -692,6 +766,11 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
         undefined,
         result.target,
       );
+      lastTask = {
+        label: `Install ${result.group} (${result.target})`,
+        state: code === 0 ? "success" : "failure",
+      };
+      continue;
     }
 
     if (result.action === "settings") {
@@ -729,7 +808,8 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
 
     if (result.action === "manage") {
       if (result.flow === "reload") {
-        await runGenerate(runtime, false, false, true, undefined, yes);
+        const code = await runGenerate(runtime, false, false, true, undefined, yes);
+        lastTask = { label: "Update project resources", state: code === 0 ? "success" : "failure" };
         continue;
       }
       const project = detectProject(runtime.cwd());
@@ -739,12 +819,15 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
       const status = await getLibraryVersionStatus(project.root, config.config.tier);
       runtime.stdout(`${formatLibraryVersionStatus(status)}\n`);
       if (status.kind === "update") {
-        await runLibraryUpdate(
+        const code = await runLibraryUpdate(
           runtime,
           status.metadata.tier,
           status.latestVersion,
           status.latestDescriptorSha256,
         );
+        lastTask = { label: "Update icon library", state: code === 0 ? "success" : "failure" };
+      } else {
+        lastTask = { label: "Update icon library", state: "success", detail: "already current" };
       }
       continue;
     }
@@ -752,6 +835,7 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
     if (result.action === "pending" && result.flow === "login") {
       const loginOutcome = await runWizardLogin(runtime, yes);
       if (loginOutcome === "exit") return 0;
+      lastTask = { label: "Login", state: loginOutcome === "home" ? "success" : "failure" };
       continue;
     }
 
@@ -806,7 +890,11 @@ async function runLibraryUpdate(
   descriptorSha256: string,
 ): Promise<number> {
   const context = commandContext(runtime, { json: false, yes: false });
-  const progress = context.ui.progress("Downloading icon library update", context.signal);
+  // W3-A: a single progress surface. `task` is deliberately NOT used here: the
+  // clack adapter implements both with `p.spinner()`, so stacking them would
+  // drive two concurrent spinners over stdout. The bar's stop message already
+  // carries the success/failure status.
+  const progress = startResourceProgress(context, "Downloading icon library update");
   try {
     const result = await runLibraryUpdateUseCase(
       context,
@@ -825,9 +913,7 @@ async function runLibraryUpdate(
         auth: runtime.auth ?? {},
         fetch: runtime.auth?.fetch ?? globalThis.fetch.bind(globalThis),
         onProgress: ({ downloadedBytes, totalBytes }) =>
-          progress.update?.(
-            `Downloaded ${downloadedBytes} bytes${totalBytes ? ` of ${totalBytes}` : ""}`,
-          ),
+          progress.bytes({ downloadedBytes, ...(totalBytes !== undefined ? { totalBytes } : {}) }),
       },
       { tier, version, descriptorSha256 },
     );
@@ -1039,7 +1125,8 @@ async function runInstall(
 
 function generateFailureCode(reason: string): CliErrorCode {
   if (reason === "cancelled") return "CANCELLED";
-  if (reason === "validation" || reason === "no-project" || reason.startsWith("config state:")) {
+  if (reason === "validation" || reason === "no-project" || reason.startsWith("config state:") ||
+      reason.startsWith("installed artifact targets") || reason.startsWith("generate requires an installed")) {
     return "VALIDATION_ERROR";
   }
   return "UNEXPECTED";
@@ -1054,21 +1141,32 @@ async function runGenerate(
   target?: "react" | "vue" | "vanilla" | "assets",
   yes = false,
 ): Promise<number> {
-  const result = await runGenerateUseCase(
-    commandContext(runtime, { json, yes }),
-    {
-      mkdirSync,
-      writeFileSync,
-      readFileSync,
-      existsSync,
-      renameSync,
-      rmSync,
-      readdirSync,
-      copyFileSync,
-    },
-    { noTailwind, reconcileInstalled, ...(target ? { target } : {}) },
-  );
+  const context = commandContext(runtime, { json, yes });
+  // W3-C: generation has no byte progress, so the strict task status covers it.
+  const task = !json && runtime.readLine === undefined ? context.ui.task?.("Generating icon components", context.signal) : undefined;
+  let result: Awaited<ReturnType<typeof runGenerateUseCase>>;
+  try {
+    // W3-C: generation has no byte progress, so its status is the task handle.
+    result = await runGenerateUseCase(
+      context,
+      {
+        mkdirSync,
+        writeFileSync,
+        readFileSync,
+        existsSync,
+        renameSync,
+        rmSync,
+        readdirSync,
+        copyFileSync,
+      },
+      { noTailwind, reconcileInstalled, ...(target ? { target } : {}) },
+    );
+  } catch (error) {
+    task?.fail(error instanceof Error ? error.message : String(error));
+    throw error;
+  }
   if (!result.ok) {
+    task?.fail(result.reason);
     if (result.code === "TAILWIND_VERSION_UNSUPPORTED") {
       if (json) writeJson(runtime, jsonErrorBody("TAILWIND_VERSION_UNSUPPORTED", result.reason));
       else runtime.stderr(`error: ${result.reason}\n`);
@@ -1096,6 +1194,7 @@ async function runGenerate(
       ...(result.warnings ? { warnings: result.warnings } : {}),
     });
   else {
+    task?.succeed(`Generated ${result.files.length} files`);
     runtime.stdout(`Generated ${result.files.length} files.\n`);
     if (result.warnings) {
       for (const warning of result.warnings) runtime.stderr(`${warning}\n`);

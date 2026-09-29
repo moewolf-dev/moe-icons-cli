@@ -35,12 +35,53 @@ by CI on Node 22/24. **Windows is not certified** yet (explicit release
 exception); do not assume Windows package/bin/PATH works until a dedicated
 runner validates it.
 
+## Framework support
+
+| Target | Current integration |
+| --- | --- |
+| Vite React / Vite Vue | Generated local proxies; use `init` → `install` → `generate` |
+| Tailwind CSS 3 | Content glob added to a supported static config |
+| Tailwind CSS 4 or no Tailwind | Core icon dimensions work without a Tailwind config rewrite |
+| Next App Router / Nuxt | Manual integration; automatic root wrapping and production image behavior are not certified |
+| Vanilla DOM | SVG factories and project runtime; bitmap style groups are unavailable |
+| Windows | Not certified; use a tested macOS or Linux environment for release builds |
+
 ## First run
 
 On the first interactive start inside a project, the CLI offers to install the
 Free icon library plus its metadata (manual + catalog + manifest). The
 completion marker lives in the cache directory and is only written after a
 successful install; failures print a retry command and never suppress retry.
+
+For a React or Vue project, the explicit path is:
+
+```sh
+npm install -D @moewolf/moe-icons-cli
+npx moeicons init
+npx moeicons install free
+npx moeicons generate
+```
+
+Edit `moeicons.config.jsonc` before generating to select the icon IDs and
+themes you need. When changing React/Vue/Vanilla/assets target, edit the config
+first, then run `moeicons install free --target <target>` and `moeicons generate`.
+The installer rejects a target that disagrees with the config. Import generated
+PascalCase components from your configured `outputDir` (default `src/moeicons`):
+
+```tsx
+import { ArrowBoldRight, MoeiconsProvider } from './moeicons';
+
+export function App() {
+  return <MoeiconsProvider><ArrowBoldRight size={37} aria-label="Next" /></MoeiconsProvider>;
+}
+```
+
+Vue uses the same generated names and output directory. The CLI imports the
+version-pinned code in `.moeicons/artifact`; `generate` requires a completed
+`install`. After generation, install any dependencies reported by the CLI with
+your package manager before type checking or building. Commit the config,
+generated source, `.moeicons/artifact` and install metadata together if CI must
+build without downloading the library. Treat all of them as one versioned set.
 
 ## Metadata
 

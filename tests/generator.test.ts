@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
 import { planGeneratedFiles, toPascalCase } from "../src/generator/generate.js";
 import type { MoeiconsConfigFile } from "../src/project/config.js";
+import { catalog } from "../src/catalog/catalog.js";
 
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
@@ -23,24 +24,43 @@ describe("toPascalCase", () => {
 });
 
 describe("planGeneratedFiles", () => {
-  it("generates types, registry, proxies, and barrel", () => {
+  it("generates direct icon proxies without theme context for one theme", () => {
+    for (const target of ["react", "vue"] as const) {
+      const single: MoeiconsConfigFile = {
+        ...config,
+        target,
+        icons: ["arrow-bold-right"],
+        themes: { outline: { styleGroup: "moe-outline", defaultSize: 37, strokeWidth: 3, className: "text-red-500" } },
+      };
+      const result = planGeneratedFiles(single, "src/moeicons");
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      const proxy = String(result.files.find((file) => file.path.endsWith(target === "react" ? "icons/ArrowBoldRight.tsx" : "icons/ArrowBoldRight.ts"))?.content);
+      expect(proxy).not.toContain("useMoeiconsTheme");
+      expect(proxy).not.toContain("MOEICONS_THEME_KEY");
+      expect(proxy).not.toContain("switch (theme)");
+      expect(proxy).toContain("37");
+      expect(proxy).toContain("text-red-500");
+    }
+  });
+
+  it("generates types, per-icon proxies, and barrel without a global registry", () => {
     const result = planGeneratedFiles(config, "src/moeicons");
     expect(result.ok).toBe(true);
     if (result.ok) {
       const paths = result.files.map((f) => f.path);
       expect(paths).toContain("src/moeicons/types.ts");
-      expect(paths).toContain("src/moeicons/registry.ts");
+      expect(paths).not.toContain("src/moeicons/registry.ts");
       expect(paths).toContain("src/moeicons/icons/ArrowBoldRight.tsx");
       expect(paths).toContain("src/moeicons/icons/UserAccountCircle.tsx");
       expect(paths).toContain("src/moeicons/index.ts");
-      const registry = result.files.find((f) => f.path.endsWith("registry.ts"))?.content;
-      expect(registry).toContain("ArrowBoldRight");
-      expect(registry).toContain("UserAccountCircle");
-      expect(registry).toContain(
-        'import { arrowBoldRight as OutlineMoeOutlineArrowBoldRight } from "moe-icons/free/react/moe-outline";',
+      const proxy = result.files.find((f) => f.path.endsWith("icons/ArrowBoldRight.tsx"))?.content;
+      expect(proxy).toContain("ArrowBoldRight");
+      expect(proxy).not.toContain("UserAccountCircle");
+      expect(proxy).toContain(
+        'import OutlineMoeOutlineArrowBoldRight from "../../../.moeicons/artifact/react/moe-outline/ArrowBoldRight.js";',
       );
       expect(paths).toContain("src/moeicons/cn.ts");
-      const proxy = result.files.find((f) => f.path.endsWith("icons/ArrowBoldRight.tsx"))?.content;
       expect(proxy).toContain('cn("moe-icon"');
     }
   });
@@ -55,6 +75,38 @@ describe("planGeneratedFiles", () => {
     if (!result.ok) {
       expect(result.errors.some((error) => error.includes('icon "arrow-chevron-right"'))).toBe(true);
       expect(result.errors.some((error) => error.includes('style group "moe-outline"'))).toBe(true);
+    }
+  });
+
+  it("binds a missing nondefault theme to the available default icon", () => {
+    const partialCatalog = { ...catalog, icons: catalog.icons.map((icon) =>
+      icon.id === "arrow-bold-right"
+        ? { ...icon, availableIn: icon.availableIn.filter((group) => group !== "moe-solid") }
+        : icon) };
+    const partialConfig = { ...config, icons: ["arrow-bold-right"] };
+    const fallback = planGeneratedFiles(partialConfig, "src/moeicons", { catalog: partialCatalog });
+    expect(fallback.ok).toBe(true);
+    if (fallback.ok) {
+      const proxy = String(fallback.files.find((file) => file.path.endsWith("icons/ArrowBoldRight.tsx"))?.content);
+      expect(proxy).toContain('import SolidMoeOutlineArrowBoldRight from "../../../.moeicons/artifact/react/moe-outline/ArrowBoldRight.js"');
+      expect(proxy).not.toContain("react/moe-solid/ArrowBoldRight.js");
+    }
+    const strict = planGeneratedFiles({ ...partialConfig, missingIconPolicy: "error" }, "src/moeicons", { catalog: partialCatalog });
+    expect(strict.ok).toBe(false);
+  });
+
+  it("applies theme default size and stroke width in the icon proxy", () => {
+    const changed = { ...config, themes: {
+      outline: { styleGroup: "moe-outline", defaultSize: 37, strokeWidth: 5 },
+      solid: { styleGroup: "moe-solid", defaultSize: 24 },
+    } };
+    const result = planGeneratedFiles(changed, "src/moeicons");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const proxy = String(result.files.find((file) => file.path.endsWith("icons/ArrowBoldRight.tsx"))?.content);
+      expect(proxy).toContain('"outline": 37');
+      expect(proxy).toContain('"outline": 5');
+      expect(proxy).toContain("width={resolvedSize} height={resolvedSize}");
     }
   });
 

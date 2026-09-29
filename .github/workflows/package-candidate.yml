@@ -11,7 +11,9 @@ permissions:
 
 jobs:
   package:
-    runs-on: ubuntu-latest
+    # Pull-request code may be untrusted; only main/dispatch candidates use the
+    # organization self runner that also performs production packaging.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","moe-ci-server"]') }}
     timeout-minutes: 20
     env:
       MOEICONS_PACKAGE_MAKER_REPO: ${{ github.workspace }}/moe-icons-package-maker
@@ -23,16 +25,34 @@ jobs:
           repository: moewolf-dev/moe-icons-package-maker
           path: moe-icons-package-maker
           persist-credentials: false
+      - name: Resolve vendored config source commit
+        if: github.event_name != 'pull_request'
+        id: config-source
+        shell: bash
+        run: |
+          source_commit="$(node -p 'require("./src/config-package/generated/SOURCE.json").sourceCommit')"
+          echo "sha=$source_commit" >> "$GITHUB_OUTPUT"
+      - name: Checkout exact config source for provenance gate
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: moewolf-dev/moe-icons-code-library
+          ref: ${{ steps.config-source.outputs.sha }}
+          path: moe-icons-code-library
+          token: ${{ secrets.CODE_LIBRARY_READ_TOKEN }}
+          persist-credentials: false
+          sparse-checkout: config-package
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-          cache: npm
       - run: npm ci
       # AUD-BLOCK-02: prove the vendored contract matches the pinned public commit.
       - run: npm run policy:verify-remote
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+        env:
+          MOEICONS_CODE_LIBRARY_REPO: ${{ github.workspace }}/moe-icons-code-library
       - name: Pack immutable candidate
         id: pack
         shell: bash

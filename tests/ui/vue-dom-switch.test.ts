@@ -38,17 +38,14 @@ describe("CLI-14 Vue DOM switch (rendered)", () => {
       writeFileSync(full, file.content);
     }
     for (const group of ["moe-outline", "moe-solid"]) {
-      const moduleDir = join(FIXTURE, "node_modules", "moe-icons", "free", "vue", group);
+      const moduleDir = join(FIXTURE, ".moeicons", "artifact", "vue", group);
       mkdirSync(moduleDir, { recursive: true });
       writeFileSync(
-        join(moduleDir, "index.js"),
-        `import { h } from "vue"; export const arrowBoldRight = (props) => h("svg", { ...props, "data-moeicon": "arrow-bold-right", "data-theme": "${group === "moe-outline" ? "outline" : "solid"}" });\n`,
+        join(moduleDir, "ArrowBoldRight.vue.js"),
+        `import { h } from "vue"; export default (props) => h("svg", { ...props, "data-moeicon": "arrow-bold-right", "data-theme": "${group === "moe-outline" ? "outline" : "solid"}" });\n`,
       );
     }
-    writeFileSync(
-      join(FIXTURE, "node_modules", "moe-icons", "package.json"),
-      JSON.stringify({ name: "moe-icons", type: "module", exports: { "./free/vue/*": "./free/vue/*/index.js" } }),
-    );
+    writeFileSync(join(FIXTURE, ".moeicons", "artifact", "package.json"), JSON.stringify({ type: "module" }));
     mkdirSync(join(FIXTURE, "node_modules", "clsx"), { recursive: true });
     writeFileSync(
       join(FIXTURE, "node_modules", "clsx", "package.json"),
@@ -161,7 +158,7 @@ describe("CLI-14 Vue DOM switch (rendered)", () => {
     expect(solidHtml).not.toContain('data-theme="outline"');
   });
 
-  it("generated Vue sources never hard-code style group ids in icon proxies", () => {
+  it("generated Vue proxy selects local variants by logical theme", () => {
     const plan = planGeneratedFiles(vueConfig, "src/moeicons");
     expect(plan.ok).toBe(true);
     if (!plan.ok) return;
@@ -169,9 +166,9 @@ describe("CLI-14 Vue DOM switch (rendered)", () => {
       plan.files.find((f) => f.path.endsWith("icons/ArrowBoldRight.ts"))?.content ??
       plan.files.find((f) => f.path.includes("ArrowBoldRight"))?.content ??
       "";
-    expect(proxy).not.toContain("moe-outline");
-    expect(proxy).not.toContain("moe-solid");
+    expect(proxy).toContain('"outline": OutlineMoeOutlineArrowBoldRight');
+    expect(proxy).toContain('"solid": SolidMoeSolidArrowBoldRight');
     expect(proxy).toContain("MOEICONS_THEME_KEY");
-    expect(proxy).toContain('registry["outline"].ArrowBoldRight');
+    expect(proxy).toContain('"outline": OutlineMoeOutlineArrowBoldRight');
   });
 });

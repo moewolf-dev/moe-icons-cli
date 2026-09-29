@@ -8,7 +8,6 @@ import {
   injectContentGlob,
   planTailwindIntegration,
 } from "../src/project/tailwind.js";
-import { CliError } from "../src/errors/index.js";
 
 describe("Tailwind content inject (H3/H4)", () => {
   let dir: string;
@@ -39,19 +38,16 @@ describe("Tailwind content inject (H3/H4)", () => {
     if (!result.ok) expect(result.hint).toContain("manually");
   });
 
-  it("detects Tailwind v4 and throws TAILWIND_VERSION_UNSUPPORTED unless --no-tailwind", () => {
+  it("detects Tailwind v4 and skips unnecessary config edits", () => {
     writeFileSync(
       join(dir, "package.json"),
       JSON.stringify({ name: "x", dependencies: { tailwindcss: "^4.0.0" } }),
     );
     writeFileSync(join(dir, "tailwind.config.js"), "export default { content: [] }\n");
     expect(detectTailwind(dir).kind).toBe("v4");
-    expect(() => planTailwindIntegration(dir, "src/moeicons", { noTailwind: false })).toThrow(CliError);
-    try {
-      planTailwindIntegration(dir, "src/moeicons", { noTailwind: false });
-    } catch (error) {
-      expect(error).toMatchObject({ code: "TAILWIND_VERSION_UNSUPPORTED" });
-    }
+    const plan = planTailwindIntegration(dir, "src/moeicons", { noTailwind: false });
+    expect(plan.files).toEqual([]);
+    expect(plan.notes[0]).toContain("Tailwind CSS v4");
     const skipped = planTailwindIntegration(dir, "src/moeicons", { noTailwind: true });
     expect(skipped.files).toEqual([]);
     expect(skipped.notes[0]).toContain("--no-tailwind");
@@ -63,7 +59,7 @@ describe("Tailwind content inject (H3/H4)", () => {
       JSON.stringify({ name: "x", dependencies: { tailwindcss: "4.1.12", "@tailwindcss/vite": "4.1.12" } }),
     );
     expect(detectTailwind(dir)).toMatchObject({ kind: "v4", configPath: join(dir, "package.json") });
-    expect(() => planTailwindIntegration(dir, "src/moeicons", { noTailwind: false })).toThrow("only auto-integrates Tailwind v3");
+    expect(planTailwindIntegration(dir, "src/moeicons", { noTailwind: false }).files).toEqual([]);
   });
 
   it("updates a v3 config on disk plan", () => {

@@ -2,6 +2,7 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { diagnoseProject, type DiagnoseOutcome } from "../project/anchors/diagnose.js";
 import { applyPlannedChanges } from "../project/anchors/apply.js";
+import { withProjectLockSync } from "../project/project-lock.js";
 import type { DiagnosticReport, PlannedFileChange } from "../project/anchors/types.js";
 
 export type DoctorMode = "diagnose" | "check" | "dry-run" | "apply";
@@ -72,7 +73,7 @@ function toPosixRelative(root: string, path: string): string {
 export function doctorJson(report: DiagnosticReport): Record<string, unknown> {
   const root = report.projectRoot;
   return {
-    ok: report.anchors.every((a) => a.status === "ok" || a.status === "not-required"),
+    ok: !checkRequiresFix(report),
     ...(root ? { projectRoot: "." } : {}),
     anchors: report.anchors.map((a) => ({
       kind: a.kind,
@@ -196,7 +197,12 @@ export function runDoctorApply(
   fixes: readonly PlannedFileChange[],
 ): DoctorApplyOutcome {
   const root = projectRootOf(cwd);
-  const outcome = applyPlannedChanges(root, fixes, FS);
+  let outcome;
+  try {
+    outcome = withProjectLockSync(root, "doctor", () => applyPlannedChanges(root, fixes, FS));
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error), written: [] };
+  }
   if (!outcome.ok) {
     return { ok: false, message: outcome.message, written: [] };
   }

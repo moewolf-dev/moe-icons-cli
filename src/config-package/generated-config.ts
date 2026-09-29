@@ -8,6 +8,7 @@ export interface GeneratedRenderOptions {
   target?: "react" | "vue" | "vanilla" | "assets";
   framework?: "react" | "vue";
   tier?: "free" | "pro";
+  fullCatalog?: boolean;
   catalog: unknown;
   integration?: { adapter: string; entry?: string; style?: string };
 }

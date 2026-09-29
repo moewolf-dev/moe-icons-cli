@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import type { AnchorResult, PlannedFileChange } from "./types.js";
 import type { DetectorIo } from "./helpers.js";
 import { parseSource } from "./parse.js";
@@ -34,14 +34,25 @@ export interface ApplicationAnchorOptions {
   readonly io: DetectorIo;
   /** true when the target is assets-only and application registration is not required. */
   readonly assetsOnly?: boolean;
+  readonly outputDir?: string;
+  readonly confirmedEntry?: string;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null;
 
-/** Returns true when the file imports the moeicons proxy at the given specifier. */
-function hasImport(source: string, specifier: string): boolean {
-  return new RegExp(`from\\s+['"]${escapeRegExp(specifier)}['"]`).test(source);
+function namedImportBinding(source: string, rel: string, specifier: string, imported: string): string | undefined {
+  const parsed = parseSource(source, rel);
+  if (!parsed.ok) return undefined;
+  for (const node of parsed.ast.program.body) {
+    if (node.type !== "ImportDeclaration" || node.source.value !== specifier) continue;
+    for (const item of node.specifiers) {
+      if (item.type === "ImportSpecifier" &&
+          (item.imported.type === "Identifier" ? item.imported.name : item.imported.value) === imported)
+        return item.local.name;
+    }
+  }
+  return undefined;
 }
 
 function escapeRegExp(value: string): string {
@@ -90,17 +101,8 @@ function unsupportedManual(adapter: string): AnchorResult {
  * generated from a parsed AST but applied as a small deterministic text patch so
  * it survives formatting differences.
  */
-function planViteReact(source: string, rel: string): AnchorResult {
-  if (hasImport(source, "./moeicons")) {
-    return {
-      kind: "application",
-      status: "ok",
-      path: rel,
-      candidates: [rel],
-      evidence: ["MoeiconsProvider already imported from the generated proxy"],
-      fixes: [],
-    };
-  }
+function planViteReact(source: string, rel: string, specifier: string): AnchorResult {
+  const binding = namedImportBinding(source, rel, specifier, "MoeiconsProvider");
   const parsed = parseSource(source, rel);
   if (!parsed.ok) {
     return {
@@ -135,9 +137,15 @@ function planViteReact(source: string, rel: string): AnchorResult {
   }
   const { childStart, childEnd } = root;
   const child = source.slice(childStart, childEnd);
+  if (binding && new RegExp(`^\\s*<${escapeRegExp(binding)}(?:\\s|>)`).test(child)) {
+    return { kind: "application", status: "ok", path: rel, candidates: [rel], evidence: ["render root is wrapped in the generated Provider"], fixes: [] };
+  }
+  const providerName = binding ?? "MoeiconsProvider";
   const after =
-    source.slice(0, childStart) + `<MoeiconsProvider>${child}</MoeiconsProvider>` + source.slice(childEnd);
-  const imported = insertImport(after, `import { MoeiconsProvider } from "./moeicons";`);
+    source.slice(0, childStart) + `<${providerName}>${child}</${providerName}>` + source.slice(childEnd);
+  const imported = binding ? after : insertImport(after, `import { MoeiconsProvider } from "${specifier}";`, rel);
+  const valid = parseSource(imported, rel);
+  if (!valid.ok) return { kind: "application", status: "invalid", path: rel, candidates: [rel], evidence: [`generated React patch is invalid: ${valid.error}`], fixes: [] };
   return {
     kind: "application",
     status: "missing",
@@ -189,33 +197,20 @@ function findUniqueRender(ast: File):
   return only ? { childStart: only.start, childEnd: only.end } : undefined;
 }
 
-function insertImport(source: string, line: string): string {
+function insertImport(source: string, line: string, rel = "src/main.tsx"): string {
   if (source.includes(line)) return source;
-  const lines = source.split("\n");
-  let anchor = -1;
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const trimmed = (lines[i] ?? "").trim();
-    if (trimmed.startsWith("import ") || trimmed.startsWith("export ")) {
-      anchor = i;
-      break;
-    }
-  }
-  lines.splice(anchor + 1, 0, line);
-  return lines.join("\n");
+  const parsed = parseSource(source, rel);
+  if (!parsed.ok) return source;
+  const declarations = parsed.ast.program.body.filter((node) => node.type === "ImportDeclaration");
+  const anchor = declarations.length ? declarations[declarations.length - 1]?.end ?? 0 : 0;
+  return `${source.slice(0, anchor)}${anchor ? "\n" : ""}${line}\n${source.slice(anchor)}`;
 }
 
 /** Vite Vue plan: create a Provider host and use it as the app root (no app.use). */
-function planViteVue(source: string, rel: string): AnchorResult {
-  if (hasImport(source, "./moeicons")) {
-    return {
-      kind: "application",
-      status: "ok",
-      path: rel,
-      candidates: [rel],
-      evidence: ["MoeiconsProvider host already imported"],
-      fixes: [],
-    };
-  }
+function planViteVue(source: string, rel: string, specifier: string): AnchorResult {
+  const binding = namedImportBinding(source, rel, specifier, "MoeiconsProvider");
+  const hBinding = namedImportBinding(source, rel, "vue", "h");
+  const hName = hBinding ?? "h";
   const parsed = parseSource(source, rel);
   if (!parsed.ok) {
     return {
@@ -250,11 +245,19 @@ function planViteVue(source: string, rel: string): AnchorResult {
   }
   const { rootStart, rootEnd } = mount;
   const rootText = source.slice(rootStart, rootEnd);
+  if (binding && new RegExp(`${escapeRegExp(hName)}\\(${escapeRegExp(binding)}\\b`).test(rootText)) {
+    return { kind: "application", status: "ok", path: rel, candidates: [rel], evidence: ["createApp root renders the generated Provider"], fixes: [] };
+  }
   // Host component renders the original root inside MoeiconsProvider.
+  const providerName = binding ?? "MoeiconsProvider";
   const after =
     source.slice(0, rootStart) +
-    `h(MoeiconsProvider, null, { default: () => ${rootText} })` +
+    `{ render: () => ${hName}(${providerName}, null, { default: () => ${hName}(${rootText}) }) }` +
     source.slice(rootEnd);
+  const withProvider = binding ? after : insertImport(after, `import { MoeiconsProvider } from "${specifier}";`, rel);
+  const withH = hBinding ? withProvider : insertImport(withProvider, `import { h } from "vue";`, rel);
+  const valid = parseSource(withH, rel);
+  if (!valid.ok) return { kind: "application", status: "invalid", path: rel, candidates: [rel], evidence: [`generated Vue patch is invalid: ${valid.error}`], fixes: [] };
   return {
     kind: "application",
     status: "missing",
@@ -266,8 +269,7 @@ function planViteVue(source: string, rel: string): AnchorResult {
         kind: "replace",
         path: rel,
         before: source,
-        after: `${insertImport(after, `import { MoeiconsProvider } from "./moeicons";`)}
-import { h } from "vue";`,
+        after: withH,
       },
     ],
   };
@@ -284,14 +286,18 @@ function findCreateAppMount(ast: File):
     if (
       type === "CallExpression" &&
       isRecord(node.callee) &&
-      node.callee.type === "CallExpression" &&
-      isRecord(node.callee.callee) &&
-      node.callee.callee.type === "Identifier" &&
-      node.callee.callee.name === "createApp" &&
-      Array.isArray(node.arguments) &&
-      node.arguments.length >= 1
+      node.callee.type === "MemberExpression" &&
+      isRecord(node.callee.property) &&
+      node.callee.property.name === "mount" &&
+      isRecord(node.callee.object) &&
+      node.callee.object.type === "CallExpression" &&
+      isRecord(node.callee.object.callee) &&
+      node.callee.object.callee.type === "Identifier" &&
+      node.callee.object.callee.name === "createApp" &&
+      Array.isArray(node.callee.object.arguments) &&
+      node.callee.object.arguments.length >= 1
     ) {
-      const root = node.arguments[0] as { start?: number; end?: number } | undefined;
+      const root = node.callee.object.arguments[0] as { start?: number; end?: number } | undefined;
       if (root && typeof root.start === "number" && typeof root.end === "number") {
         found.push({ start: root.start, end: root.end });
       }
@@ -308,7 +314,7 @@ function findCreateAppMount(ast: File):
   return only ? { rootStart: only.start, rootEnd: only.end } : undefined;
 }
 
-function planVanilla(source: string, rel: string): AnchorResult {
+function planVanilla(source: string, rel: string, specifier: string): AnchorResult {
   const parsed = parseSource(source, rel);
   if (!parsed.ok) {
     return {
@@ -341,7 +347,7 @@ function planVanilla(source: string, rel: string): AnchorResult {
         kind: "replace",
         path: rel,
         before: source,
-        after: `${source}\nimport { createMoeiconsRuntime } from "./moeicons";\ncreateMoeiconsRuntime();\n`,
+        after: `${source}\nimport { createMoeiconsRuntime } from "${specifier}";\ncreateMoeiconsRuntime();\n`,
       },
     ],
   };
@@ -370,7 +376,7 @@ export function inspectApplicationAnchor(options: ApplicationAnchorOptions): Anc
   if (adapter === "next-app" || adapter === "next-pages" || adapter === "nuxt") {
     return unsupportedManual(adapter);
   }
-  const candidates = ENTRY_CANDIDATES[adapter] ?? [];
+  const candidates = options.confirmedEntry ? [options.confirmedEntry] : ENTRY_CANDIDATES[adapter] ?? [];
   const located = locateCandidate(io, root, candidates);
   if ("ambiguous" in located) {
     const present = candidates.filter((c) => readEntry(io, root, c) !== undefined);
@@ -386,8 +392,11 @@ export function inspectApplicationAnchor(options: ApplicationAnchorOptions): Anc
       fixes: [],
     };
   }
-  if (adapter === "vite-react") return planViteReact(located.source, located.rel);
-  if (adapter === "vite-vue") return planViteVue(located.source, located.rel);
-  if (adapter === "vanilla") return planVanilla(located.source, located.rel);
+  const outputDir = (options.outputDir ?? "src/moeicons").replace(/\\/g, "/").replace(/\/$/, "");
+  const importPath = posix.relative(dirname(located.rel.replace(/\\/g, "/")), outputDir);
+  const specifier = importPath.startsWith(".") ? importPath : `./${importPath}`;
+  if (adapter === "vite-react") return planViteReact(located.source, located.rel, specifier);
+  if (adapter === "vite-vue") return planViteVue(located.source, located.rel, specifier);
+  if (adapter === "vanilla") return planVanilla(located.source, located.rel, specifier);
   return unsupportedManual(adapter);
 }

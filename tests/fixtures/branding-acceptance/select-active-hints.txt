@@ -1,0 +1,5 @@
+Choose an option
+  1. Install moeicons pro
+[38;2;59;130;246m› 2. Install moeicons free[39m
+  3. Manage project icons
+[2m↑/↓ move · 1-9 select · Enter submit · Esc cancel[22m

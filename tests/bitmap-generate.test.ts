@@ -55,6 +55,7 @@ import { runGenerateUseCase } from "../src/core/generate.js";
 import type { MoeiconsConfigFile } from "../src/project/config.js";
 import type { CommandContext, CommandUi } from "../src/core/context.js";
 import { resolveResourceVariant } from "../src/core/resource-variant.js";
+import { catalog } from "../src/catalog/catalog.js";
 
 const webpBytes = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x01]);
 const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x02]);
@@ -166,6 +167,29 @@ describe("bitmap asset selection (G5)", () => {
 });
 
 describe("bitmap wrapper + asset plan (G4/G5)", () => {
+  it("does not request a nonexistent SVG when an assets theme falls back to bitmap", () => {
+    const config = bitmapConfig({
+      target: "assets",
+      icons: ["arrow-chevron-bottom-left"],
+      themes: {
+        cute: { styleGroup: "moe-cute-3d", format: "webp", imageSize: 256 },
+        outline: { styleGroup: "moe-outline" },
+      },
+    });
+    const sourceCatalog = {
+      ...catalog,
+      styleGroups: [...catalog.styleGroups, { id: "moe-cute-3d", type: "bitmap" as const, tiers: ["free" as const], formats: ["webp" as const], imageSizes: [256], variants: ["moe-cute-3d-256-webp"] }],
+      icons: catalog.icons.map((icon) => icon.id === "arrow-chevron-bottom-left" ? { ...icon, availableIn: ["moe-cute-3d"] } : icon),
+    };
+    const files = {
+      ...archiveWithBothVariants(),
+      "assets/moe-cute-3d-256-webp/arrow-chevron-bottom-left.webp": webpBytes,
+      "assets/manifest.json": new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, assets: [] })),
+    };
+    const result = planGeneratedFiles(config, "src/moeicons", { archiveFiles: files, catalog: sourceCatalog });
+    if (!result.ok) throw new Error(result.errors.join(" ; "));
+    expect(result.ok).toBe(true);
+  });
   it("keeps logical themes and lands only the selected variant bytes in the plan", () => {
     const config = bitmapConfig({
       themes: {
@@ -182,10 +206,21 @@ describe("bitmap wrapper + asset plan (G4/G5)", () => {
     expect(paths.some((path) => path.includes("512-png"))).toBe(false);
     const asset = plan.files.find((file) => file.path.endsWith("arrow-bold-right.webp"));
     expect(asset?.content).toEqual(webpBytes);
-    const registry = plan.files.find((file) => file.path.endsWith("registry.ts"))?.content ?? "";
-    expect(typeof registry).toBe("string");
-    expect(registry).toContain('"cute"');
-    expect(registry).not.toContain('"moe-cute-3d-256-webp"');
+    const proxy = plan.files.find((file) => file.path.endsWith("icons/ArrowBoldRight.tsx"))?.content ?? "";
+    expect(proxy).toContain('"cute"');
+    expect(proxy).not.toContain('"moe-cute-3d-256-webp"');
+  });
+
+  it("Vue bitmap wrapper preserves explicit accessibility and drag attributes", () => {
+    const plan = planGeneratedFiles({ ...bitmapConfig(), target: "vue" }, "src/moeicons", { archiveFiles: archiveWithBothVariants() });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    const wrapper = String(plan.files.find((file) => file.path.includes("wrappers/CuteArrowBoldRightBitmap.ts"))?.content ?? "");
+    expect(wrapper).toContain("inheritAttrs: false");
+    expect(wrapper).toContain('attrs["aria-hidden"] ?? (label ? undefined : true)');
+    expect(wrapper).toContain('attrs.draggable ?? false');
+    expect(wrapper).toContain('class: cn("moe-icon",');
+    expect(wrapper).toContain('attrs.class');
   });
 
   it("rejects bitmap plans without an archive instead of silently skipping assets", () => {
@@ -227,7 +262,7 @@ describe("bitmap assets transaction (G5)", () => {
     copyFileSync,
   };
 
-  it("writes only the selected variant and drops stale assets/ on regenerate", () => {
+  it("writes the selected variant without deleting an unowned asset", () => {
     const output = join(dir, "src", "moeicons");
     mkdirSync(join(output, "assets", "moe-cute-3d-512-png"), { recursive: true });
     writeFileSync(join(output, "assets", "moe-cute-3d-512-png", "arrow-bold-right.png"), Buffer.from(pngBytes));
@@ -243,7 +278,7 @@ describe("bitmap assets transaction (G5)", () => {
     expect(readFileSync(join(output, "assets", "moe-cute-3d-256-webp", "arrow-bold-right.webp"))).toEqual(
       Buffer.from(webpBytes),
     );
-    expect(existsSync(join(output, "assets", "moe-cute-3d-512-png", "arrow-bold-right.png"))).toBe(false);
+    expect(existsSync(join(output, "assets", "moe-cute-3d-512-png", "arrow-bold-right.png"))).toBe(true);
     expect(readFileSync(join(output, "user-note.md"), "utf8")).toBe("keep me");
   });
 
@@ -271,7 +306,7 @@ describe("bitmap assets transaction (G5)", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("validation");
-    expect(result.errors?.[0]).toMatch(/downloaded free artifact|MOEICONS_BITMAP_ARCHIVE/);
+    expect(result.errors?.[0]).toMatch(/unknown style group|downloaded free artifact|MOEICONS_BITMAP_ARCHIVE/);
     expect(existsSync(join(dir, "src", "moeicons"))).toBe(false);
   });
 });

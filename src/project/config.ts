@@ -8,6 +8,7 @@ import {
   type IconCatalog,
 } from "../catalog/catalog.js";
 import { loadGeneratedConfigPackage } from "../config-package/generated-config.js";
+import { toProxyName } from "../core/icon-names.js";
 import type { Target } from "../commands/parser.js";
 
 export interface MoeiconsThemeConfig {
@@ -192,6 +193,18 @@ function requireCommonConfigFields(
   const tier = obj.tier;
   if (typeof obj.outputDir !== "string" || obj.outputDir.length === 0)
     throw new Error("outputDir is required");
+  const outputParts = obj.outputDir.split("/");
+  if (obj.outputDir.includes("\\") || obj.outputDir.includes("\0") ||
+      obj.outputDir.startsWith("/") || /^[A-Za-z]:/.test(obj.outputDir) ||
+      outputParts.some((part) => !part || part === "." || part === "..")) {
+    throw new Error("outputDir must be a POSIX relative path without '.' or '..' segments");
+  }
+  if ([".git", ".moeicons", "node_modules"].includes(outputParts[0] ?? "")) {
+    throw new Error("outputDir cannot use a project control directory");
+  }
+  if (!/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(obj.outputDir)) {
+    throw new Error("outputDir must use ASCII letters, digits, _, -, and safe dotted child segments");
+  }
   if (typeof obj.defaultTheme !== "string" || obj.defaultTheme.length === 0)
     throw new Error("defaultTheme is required");
   if (typeof obj.themes !== "object" || obj.themes === null || Array.isArray(obj.themes)) {
@@ -206,7 +219,15 @@ function requireCommonConfigFields(
   }
 
   const themes: Record<string, MoeiconsThemeConfig> = {};
+  const themeNames = new Map<string, string>();
   for (const [name, value] of Object.entries(obj.themes)) {
+    if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)) {
+      throw new Error(`theme key "${name}" must be lowercase kebab-case`);
+    }
+    const internalName = toProxyName(name).toLowerCase();
+    const previous = themeNames.get(internalName);
+    if (previous) throw new Error(`theme keys "${previous}" and "${name}" generate the same identifier`);
+    themeNames.set(internalName, name);
     if (typeof value !== "object" || value === null || Array.isArray(value))
       throw new Error(`theme ${name} is invalid`);
     const theme = value as Record<string, unknown>;
@@ -234,6 +255,11 @@ function requireCommonConfigFields(
       );
     }
 
+    if (theme.format !== undefined && typeof theme.format !== "string") throw new Error(`theme ${name}.format is invalid`);
+    if (theme.imageSize !== undefined && typeof theme.imageSize !== "number") throw new Error(`theme ${name}.imageSize is invalid`);
+    if (theme.defaultSize !== undefined && (typeof theme.defaultSize !== "number" || !Number.isFinite(theme.defaultSize) || theme.defaultSize <= 0)) throw new Error(`theme ${name}.defaultSize must be a positive finite number`);
+    if (theme.strokeWidth !== undefined && (typeof theme.strokeWidth !== "number" || !Number.isFinite(theme.strokeWidth) || theme.strokeWidth < 0)) throw new Error(`theme ${name}.strokeWidth must be a nonnegative finite number`);
+    if (theme.className !== undefined && typeof theme.className !== "string") throw new Error(`theme ${name}.className must be a string`);
     const format = typeof theme.format === "string" ? theme.format : undefined;
     if (format !== undefined && format !== "svg" && format !== "webp" && format !== "png") {
       throw new Error(`theme ${name}.format is invalid`);
@@ -342,8 +368,6 @@ function validateV2Config(
   };
 }
 
-const POSIX_RELATIVE_OK = /^(?!\.{1,2}(?:$|\/))(?![A-Za-z]:[\\/])(?!\/)(?!.*\\)[^\0]+$/;
-
 function validateIntegration(value: unknown): MoeiconsIntegration {
   const record = asRecord(value);
   for (const key of Object.keys(record)) {
@@ -357,7 +381,9 @@ function validateIntegration(value: unknown): MoeiconsIntegration {
   const adapter = record.adapter as IntegrationAdapter;
   const checkRel = (field: unknown, name: string): string | undefined => {
     if (field === undefined) return undefined;
-    if (typeof field !== "string" || !POSIX_RELATIVE_OK.test(field)) {
+    if (typeof field !== "string" || !field || field.startsWith("/") || /^[A-Za-z]:/.test(field) ||
+      field.includes("\\") || field.includes("\0") ||
+      field.split("/").some((part) => !part || part === "." || part === "..")) {
       throw new Error(`${name} must be a POSIX-relative path without .. or escapes`);
     }
     return field;
@@ -448,6 +474,42 @@ export function validateConfigDocument(
 ): ConfigLoadResult {
   if (document.kind !== "ok") return document;
   try {
+    if (options.lenientCatalog !== true) {
+      const raw = asRecord(document.value);
+      if (document.version === 1 && (raw.target !== undefined || raw.integration !== undefined)) {
+        return { kind: "invalid", message: "v1 config cannot set target or integration; migrate to schema v2/v3" };
+      }
+      const canonical = loadGeneratedConfigPackage().validateConfig(document.value, sourceCatalog);
+      if (!canonical.ok) {
+        if (canonical.kind === "unsupported" && typeof canonical.version === "number") {
+          return { kind: "unsupported", version: canonical.version };
+        }
+        return { kind: "invalid", message: canonical.message ?? "invalid configuration" };
+      }
+      // The vendored contract owns normalization. Only the release-specific
+      // bitmap variant check and legacy in-memory version remain CLI concerns.
+      const normalized = canonical.config as MoeiconsConfigFile;
+      for (const [name, theme] of Object.entries(normalized.themes)) {
+        const group = findCatalogStyleGroup(theme.styleGroup, sourceCatalog);
+        if (group?.type !== "bitmap" || !group.variants?.length) continue;
+        const variantId = `${group.id}-${theme.imageSize ?? 256}-${theme.format ?? "webp"}`;
+        if (!group.variants.includes(variantId)) {
+          return { kind: "invalid", message: `variant ${variantId} is unavailable for ${group.id}` };
+        }
+      }
+      const warnings = [...(canonical.warnings ?? [])];
+      for (const [name, value] of Object.entries(raw.themes as Record<string, unknown>)) {
+        const styles = (value as Record<string, unknown>).styles;
+        if (Array.isArray(styles) && styles.length > 0) {
+          warnings.push(`theme "${name}": "styles" is deprecated and has no effect; remove it from your config`);
+        }
+      }
+      return {
+        kind: "ok",
+        config: { ...normalized, schemaVersion: document.version === 3 ? 3 : 2 },
+        warnings,
+      };
+    }
     if (document.version === 1) {
       const validated = validateV1Config(document.value, sourceCatalog, options.lenientCatalog === true);
       validated.warnings.unshift('config schema v1 migrated "framework" to "target"');
@@ -478,14 +540,16 @@ export function mergeMoeiconsConfig(
   current: MoeiconsConfigFile | LegacyConfigInput,
   patch: Partial<Omit<MoeiconsConfigFile, "schemaVersion">>,
 ): MoeiconsConfigFile {
+  const integration = patch.integration ?? ("integration" in current ? current.integration : undefined);
   return {
-    schemaVersion: 2,
+    schemaVersion: integration ? 3 : 2,
     tier: patch.tier ?? current.tier,
     target: patch.target ?? targetFromInput(current),
     outputDir: patch.outputDir ?? current.outputDir,
     defaultTheme: patch.defaultTheme ?? current.defaultTheme,
     themes: patch.themes ?? current.themes,
     icons: patch.icons ?? current.icons,
+    ...(integration ? { integration } : {}),
     ...(patch.missingIconPolicy !== undefined
       ? { missingIconPolicy: patch.missingIconPolicy }
       : current.missingIconPolicy !== undefined

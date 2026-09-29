@@ -21,6 +21,8 @@ export interface MatchBitmapOptions {
    * legacy parser; the two parsers are never mixed.
    */
   readonly mediaContractVersion?: 1 | 2;
+  /** Exact variant/icon pairs, used when a missing theme falls back to another group. */
+  readonly requestedPairs?: readonly { readonly variantId: string; readonly iconId: string }[];
 }
 
 function normalizeArchivePath(rel: string): string {
@@ -75,6 +77,9 @@ export function selectBitmapVariantAssets(
 ): SelectBitmapAssetsResult {
   const wanted = new Map(variants.map((variant) => [variant.resourceVariantId, variant]));
   const iconSet = new Set(iconIds);
+  const pairs = options.requestedPairs ?? variants.flatMap((variant) =>
+    iconIds.map((iconId) => ({ variantId: variant.resourceVariantId, iconId })));
+  const wantedPairs = new Set(pairs.map((pair) => `${pair.variantId}\0${pair.iconId}`));
   const skipped: string[] = [];
   const chosen = new Map<string, SelectedBitmapAsset>();
   const errors: string[] = [];
@@ -86,7 +91,7 @@ export function selectBitmapVariantAssets(
       skipped.push(archivePath);
       continue;
     }
-    if (!iconSet.has(matched.iconId)) {
+    if (!iconSet.has(matched.iconId) || !wantedPairs.has(`${matched.variant.resourceVariantId}\0${matched.iconId}`)) {
       skipped.push(archivePath);
       continue;
     }
@@ -103,15 +108,15 @@ export function selectBitmapVariantAssets(
     });
   }
 
-  for (const variant of variants) {
-    for (const iconId of iconIds) {
-      const destRel = assetRelativePath(variant.resourceVariantId, iconId, variant.format);
+  for (const pair of pairs) {
+      const variant = wanted.get(pair.variantId);
+      if (!variant) continue;
+      const destRel = assetRelativePath(variant.resourceVariantId, pair.iconId, variant.format);
       if (!chosen.has(destRel)) {
         errors.push(
-          `bitmap asset missing for icon "${iconId}" variant "${variant.resourceVariantId}"`,
+          `bitmap asset missing for icon "${pair.iconId}" variant "${variant.resourceVariantId}"`,
         );
       }
-    }
   }
   if (errors.length > 0) return { ok: false, errors };
   return { ok: true, assets: [...chosen.values()], skipped };

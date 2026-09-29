@@ -94,24 +94,29 @@ export function reactBitmapWrapperSource(
 ): string {
   const assetImport = relativeAssetImportFromIcons(variant, iconId);
   const defaultClass = themeClassName ? JSON.stringify(themeClassName) : "undefined";
-  return `import type { IconProps } from "../types";
+  return `import * as React from "react";
+import type { IconProps } from "../types";
 import { cn } from "../cn";
 import assetUrl from "${assetImport}";
 
-export function ${wrapperName}(props: IconProps) {
-  const { className, size, "aria-label": ariaLabel, strokeWidth: _strokeWidth, ...rest } = props;
-  const sizeClass = typeof size === "number" ? \`w-[\${size}px] h-[\${size}px]\` : undefined;
+export const ${wrapperName} = /* @__PURE__ */ React.forwardRef<HTMLImageElement, IconProps>((props, ref) => {
+  const { className, size, alt, "aria-label": ariaLabel, strokeWidth: _strokeWidth, ...rest } = props;
+  const label = ariaLabel ?? alt;
+  const imageSource = typeof assetUrl === "string" ? assetUrl : (assetUrl as { src: string }).src;
   return (
     <img
-      src={assetUrl}
-      alt={ariaLabel ?? ""}
-      aria-hidden={ariaLabel ? undefined : true}
+      ref={ref}
+      src={imageSource}
+      width={size ?? 24}
+      height={size ?? 24}
+      alt={label ?? ""}
+      aria-hidden={label ? undefined : true}
       draggable={false}
-      className={cn("moe-icon", ${defaultClass}, sizeClass, className)}
+      className={cn("moe-icon", ${defaultClass}, className)}
       {...rest}
     />
   );
-}
+});
 `;
 }
 
@@ -127,21 +132,25 @@ export function vueBitmapWrapperSource(
 import { cn } from "../cn";
 import assetUrl from "${assetImport}";
 
-export const ${wrapperName} = defineComponent({
+export const ${wrapperName} = /* @__PURE__ */ defineComponent({
   name: "${wrapperName}",
+  inheritAttrs: false,
   setup(_props, { attrs }) {
     return () => {
-      const className = typeof attrs.class === "string" ? attrs.class : undefined;
       const size = typeof attrs.size === "number" ? attrs.size : undefined;
       const ariaLabel = typeof attrs["aria-label"] === "string" ? attrs["aria-label"] : undefined;
-      const sizeClass = typeof size === "number" ? \`w-[\${size}px] h-[\${size}px]\` : undefined;
+      const alt = typeof attrs.alt === "string" ? attrs.alt : undefined;
+      const label = ariaLabel ?? alt;
+      const { size: _size, ...imageAttrs } = attrs;
       return h("img", {
-        ...attrs,
+        ...imageAttrs,
         src: assetUrl,
-        alt: ariaLabel ?? "",
-        "aria-hidden": ariaLabel ? undefined : true,
-        draggable: false,
-        class: cn("moe-icon", ${defaultClass}, sizeClass, className),
+        width: attrs.width ?? size ?? 24,
+        height: attrs.height ?? size ?? 24,
+        alt: label ?? "",
+        "aria-hidden": attrs["aria-hidden"] ?? (label ? undefined : true),
+        draggable: attrs.draggable ?? false,
+        class: cn("moe-icon", ${defaultClass}, attrs.class as Parameters<typeof cn>[number]),
       });
     };
   },

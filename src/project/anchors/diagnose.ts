@@ -5,6 +5,7 @@ import { inspectProjectManifest } from "./project-manifest.js";
 import { inspectMoeiconsConfig } from "./moeicons-config.js";
 import { inspectApplicationAnchor } from "./application.js";
 import { inspectStyleAnchor } from "./style.js";
+import { readMoeiconsConfig } from "../config.js";
 
 /**
  * Four-anchor orchestrator (E2E-B2..B5). Runs the fixed probe order and returns
@@ -63,24 +64,31 @@ export function diagnoseProject(options: DiagnoseOptions): DiagnoseOutcome {
     };
   } else {
     const root = manifest.path ? dirname(manifest.path) : options.cwd;
-    const assetsOnly = adapter === "assets-only";
+    const loaded = readMoeiconsConfig(root);
+    const confirmed = loaded.kind === "ok" ? loaded.config.integration : undefined;
+    const effectiveAdapter = options.confirmed?.adapter ?? confirmed?.adapter ?? adapter;
+    const confirmedEntry = options.confirmed?.entry ?? confirmed?.entry;
+    const confirmedStyle = options.confirmed?.style ?? confirmed?.style;
+    const assetsOnly = effectiveAdapter === "assets-only" || loaded.kind === "ok" && loaded.config.target === "assets";
     config = inspectMoeiconsConfig({
       root,
       io,
-      ...(adapter && adapter !== "assets-only" ? { adapter } : {}),
+      ...(effectiveAdapter && effectiveAdapter !== "assets-only" ? { adapter: effectiveAdapter } : {}),
       assetsOnly,
     });
     application = inspectApplicationAnchor({
       root,
       io,
-      ...(adapter ? { adapter } : {}),
+      ...(effectiveAdapter ? { adapter: effectiveAdapter } : {}),
       assetsOnly,
+      ...(loaded.kind === "ok" ? { outputDir: loaded.config.outputDir } : {}),
+      ...(confirmedEntry ? { confirmedEntry } : {}),
     });
     style = inspectStyleAnchor({
       root,
       io,
       assetsOnly,
-      ...(options.confirmed?.style ? { confirmedStyle: options.confirmed.style } : {}),
+      ...(confirmedStyle ? { confirmedStyle } : {}),
     });
   }
 
@@ -98,6 +106,6 @@ export function diagnoseProject(options: DiagnoseOptions): DiagnoseOutcome {
       fixes.push(fix);
     }
   }
-  const ok = report.anchors.every((anchor) => anchor.status === "ok" || anchor.status === "not-required");
+  const ok = report.anchors.every((anchor) => anchor.kind === "style" || anchor.status === "ok" || anchor.status === "not-required");
   return { ok, report, fixes };
 }

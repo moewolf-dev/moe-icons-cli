@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, symlinkSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { parseArgs } from "../src/commands/parser.js";
@@ -110,5 +110,89 @@ describe("apply: transactional plan with rollback + idempotency", () => {
     expect(result.ok).toBe(false);
     // original must be restored byte-for-byte
     expect(readFileSync(join(dir, "a", "one.txt"), "utf8")).toBe(original);
+  });
+
+  it("rejects a stale preview without overwriting the user's edit", () => {
+    writeFileSync(join(dir, "entry.ts"), "user edit");
+    const result = applyPlannedChanges(dir, [{ kind: "replace", path: "entry.ts", before: "old", after: "generated" }], makeFs());
+    expect(result.ok).toBe(false);
+    expect(readFileSync(join(dir, "entry.ts"), "utf8")).toBe("user edit");
+  });
+
+  it("rejects a symlink ancestor outside the project", () => {
+    const external = mkdtempSync(join(tmpdir(), "cli-external-"));
+    try {
+      symlinkSync(external, join(dir, "src"));
+      const result = applyPlannedChanges(dir, [{ kind: "create", path: "src/entry.ts", before: undefined, after: "generated" }], makeFs());
+      expect(result.ok).toBe(false);
+      expect(readdirSync(external)).toEqual([]);
+    } finally { rmSync(external, { recursive: true, force: true }); }
+  });
+
+  it("rejects case-insensitive and parent-file collisions before writing", () => {
+    const fs_ = makeFs();
+    for (const paths of [["src/Icon.tsx", "src/icon.tsx"], ["src/main", "src/main/index.ts"]]) {
+      const result = applyPlannedChanges(dir, paths.map((path) => ({
+        kind: "create" as const, path, before: undefined, after: "generated",
+      })), fs_);
+      expect(result.ok).toBe(false);
+      expect(readdirSync(dir)).toEqual([]);
+    }
+  });
+
+  it("rechecks each file immediately before replacing it", () => {
+    writeFileSync(join(dir, "first.ts"), "old first");
+    writeFileSync(join(dir, "second.ts"), "old second");
+    const fs_ = makeFs();
+    const result = applyPlannedChanges(dir, [
+      { kind: "replace", path: "first.ts", before: "old first", after: "new first" },
+      { kind: "replace", path: "second.ts", before: "old second", after: "new second" },
+    ], {
+      ...fs_,
+      renameSync(from, to) {
+        fs_.renameSync(from, to);
+        if (from.includes(".reconcile-staging-") && to.endsWith("first.ts")) {
+          writeFileSync(join(dir, "second.ts"), "concurrent user edit");
+        }
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(readFileSync(join(dir, "first.ts"), "utf8")).toBe("old first");
+    expect(readFileSync(join(dir, "second.ts"), "utf8")).toBe("concurrent user edit");
+  });
+
+  it("retains the backup when rollback cannot restore an original", () => {
+    writeFileSync(join(dir, "entry.ts"), "old");
+    const fs_ = makeFs();
+    const result = applyPlannedChanges(dir, [{ kind: "replace", path: "entry.ts", before: "old", after: "new" }], {
+      ...fs_,
+      renameSync(from, to) {
+        if (from.includes(".reconcile-staging-") || (from.includes(".reconcile-backup-") && to.endsWith("entry.ts"))) throw new Error("injected failure");
+        fs_.renameSync(from, to);
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toContain("recovery incomplete");
+    const backup = readdirSync(join(dir, ".moeicons")).find((name) => name.startsWith(".reconcile-backup-"));
+    expect(backup).toBeDefined();
+    expect(readFileSync(join(dir, ".moeicons", backup!, "entry.ts"), "utf8")).toBe("old");
+  });
+
+  it("reports a committed change when only backup cleanup fails", () => {
+    writeFileSync(join(dir, "entry.ts"), "old");
+    const fs_ = makeFs();
+    const result = applyPlannedChanges(dir, [{ kind: "replace", path: "entry.ts", before: "old", after: "new" }], {
+      ...fs_,
+      rmSync(path, options) {
+        if (path.includes(".reconcile-backup-")) throw new Error("cleanup denied");
+        fs_.rmSync(path, options);
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toContain("changes committed, backup cleanup failed");
+    expect(readFileSync(join(dir, "entry.ts"), "utf8")).toBe("new");
+    const backup = readdirSync(join(dir, ".moeicons")).find((name) => name.startsWith(".reconcile-backup-"));
+    expect(backup).toBeDefined();
+    expect(readFileSync(join(dir, ".moeicons", backup!, "entry.ts"), "utf8")).toBe("old");
   });
 });

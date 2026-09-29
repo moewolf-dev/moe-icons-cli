@@ -27,5 +27,13 @@ export function createNonInteractiveUi(options: { readonly yes: boolean }): Comm
     progress() {
       return { stop() { return undefined; } };
     },
+    // W3: JSON / non-TTY must never emit progress noise; the structured result
+    // is the contract. These no-ops keep callers free of adapter branching.
+    progressBar() {
+      return { update() { return undefined; }, stop() { return undefined; } };
+    },
+    task() {
+      return { succeed() { return undefined; }, fail() { return undefined; }, timeout() { return undefined; } };
+    },
   };
 }

@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { realpathSync, readdirSync, copyFileSync, type existsSync, type mkdirSync, type readFileSync, type renameSync, type rmSync, type writeFileSync } from "node:fs";
+import { executeManagedReconcile, safeManagedPath, type TransactionalFsWithCopy } from "../install.js";
 import type { PlannedFileChange } from "./types.js";
 
 /**
@@ -26,65 +27,57 @@ export function applyPlannedChanges(
   fs_: ApplyFs,
 ): ApplyOutcome {
   const seen = new Map<string, PlannedFileChange>();
-  for (const change of changes) seen.set(change.path, change);
+  const foldedPaths = new Map<string, string>();
+  for (const change of changes) {
+    if (seen.has(change.path)) return { ok: false, message: `duplicate planned path: ${change.path}` };
+    const folded = change.path.toLowerCase();
+    const collision = foldedPaths.get(folded);
+    if (collision) return { ok: false, message: `case-insensitive planned path collision: ${collision}, ${change.path}` };
+    foldedPaths.set(folded, change.path);
+    seen.set(change.path, change);
+  }
+  for (const [folded, path] of foldedPaths) {
+    let parent = folded;
+    while (parent.includes("/")) {
+      parent = parent.slice(0, parent.lastIndexOf("/"));
+      const collision = foldedPaths.get(parent);
+      if (collision) return { ok: false, message: `planned file and directory paths collide: ${collision}, ${path}` };
+    }
+  }
   const entries = [...seen.values()];
-
-  // No-op detection: every file already has the target content.
-  let anyChange = false;
-  for (const entry of entries) {
-    const full = join(projectRoot, entry.path);
-    const current = fs_.existsSync(full) ? safeRead(fs_, full) : undefined;
-    if (current === entry.after) continue;
-    anyChange = true;
-    break;
-  }
-  if (!anyChange) return { ok: true, alreadyConfigured: true, written: [] };
-
-  const backupRoot = join(projectRoot, ".moeicons", ".doctor-backup");
-  const backedUp: Array<{ target: string; backup: string }> = [];
-  const installed: string[] = [];
+  const root = realpathSync(projectRoot);
+  const targetFor = (path: string): string => safeManagedPath(root, path).target;
+  let pending: PlannedFileChange[];
   try {
-    for (const entry of entries) {
-      const full = join(projectRoot, entry.path);
-      if (fs_.existsSync(full)) {
-        const backup = join(backupRoot, entry.path);
-        fs_.mkdirSync(join(backup, ".."), { recursive: true });
-        fs_.renameSync(full, backup);
-        backedUp.push({ target: full, backup });
-      }
-    }
-    for (const entry of entries) {
-      const full = join(projectRoot, entry.path);
-      fs_.mkdirSync(join(full, ".."), { recursive: true });
-      fs_.writeTextFileSync(full, entry.after);
-      installed.push(full);
-    }
-    if (fs_.existsSync(backupRoot)) fs_.rmSync(backupRoot, { recursive: true, force: true });
+    pending = entries.filter((entry) => {
+      const full = targetFor(entry.path);
+      const current = fs_.existsSync(full) ? fs_.readTextFileSync(full) : undefined;
+      if (current === entry.after) return false;
+      if (current !== entry.before) throw new Error(`file changed since planning: ${entry.path}`);
+      return true;
+    });
+    if (!pending.length) return { ok: true, alreadyConfigured: true, written: [] };
   } catch (error) {
-    for (const target of installed.reverse()) {
-      if (fs_.existsSync(target)) fs_.rmSync(target, { force: true });
-    }
-    for (const item of backedUp.reverse()) {
-      if (fs_.existsSync(item.backup)) {
-        fs_.mkdirSync(join(item.target, ".."), { recursive: true });
-        try {
-          fs_.renameSync(item.backup, item.target);
-        } catch {
-          // leave backup for manual recovery
-        }
-      }
-    }
     return { ok: false, message: error instanceof Error ? error.message : String(error) };
-  } finally {
-    if (fs_.existsSync(backupRoot)) fs_.rmSync(backupRoot, { recursive: true, force: true });
   }
-  return { ok: true, alreadyConfigured: false, written: entries.map((e) => e.path) };
-}
 
-function safeRead(fs_: ApplyFs, path: string): string {
+  const writes = Object.fromEntries(pending.map((entry) => [entry.path, entry.after]));
+  const expectedText = Object.fromEntries(pending.map((entry) => [entry.path, entry.before]));
+  const transactionFs: TransactionalFsWithCopy = {
+    existsSync: fs_.existsSync as typeof existsSync,
+    readFileSync: ((path: string) => fs_.readTextFileSync(path)) as typeof readFileSync,
+    mkdirSync: fs_.mkdirSync as typeof mkdirSync,
+    writeFileSync: ((path: string, content: string | Uint8Array) => fs_.writeTextFileSync(path, String(content))) as typeof writeFileSync,
+    renameSync: fs_.renameSync as typeof renameSync,
+    rmSync: fs_.rmSync as typeof rmSync,
+    readdirSync,
+    copyFileSync,
+  };
   try {
-    return fs_.readTextFileSync(path);
-  } catch {
-    return "";
+    executeManagedReconcile(root, writes, [], transactionFs, { expectedText });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { ok: false, message: reason.includes("original files retained at") ? `recovery incomplete; ${reason}` : reason };
   }
+  return { ok: true, alreadyConfigured: false, written: pending.map((e) => e.path) };
 }

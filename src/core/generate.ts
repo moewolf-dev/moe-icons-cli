@@ -1,7 +1,6 @@
 import { join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import {
-  executeGeneratedFilesDir,
   executeManagedReconcile,
   type TransactionalFsWithCopy,
 } from "../project/install.js";
@@ -10,7 +9,7 @@ import { readMoeiconsConfig, type MoeiconsConfigFile } from "../project/config.j
 import { parseCatalog, type IconCatalog } from "../catalog/catalog.js";
 import { planGeneratedFiles } from "../generator/generate.js";
 import { ensureClassMergeDependencies, planTailwindIntegration } from "../project/tailwind.js";
-import { CliError, isCliError } from "../errors/index.js";
+import { isCliError } from "../errors/index.js";
 import { extractTarGz, ICON_ARCHIVE_MAX_ENTRIES, ICON_ARCHIVE_MAX_EXPANDED_BYTES } from "../project/tar-gz.js";
 import { artifactCachePath } from "./free-download.js";
 import { resolveThemes } from "../generator/theme-resolve.js";
@@ -344,35 +343,6 @@ export function loadArchiveFiles(
   return { ok: false, reason: "installed artifact not found" };
 }
 
-/**
- * B5: switching the configured target over an existing install is a destructive
- * migration (generated files are replaced and the install subtree changes).
- * Interactive TTY prompts for explicit confirmation; non-interactive/JSON mode
- * fails with VALIDATION_ERROR unless `--yes` was passed (the non-interactive
- * UI resolves `--yes` confirmations to true). Fresh projects with no install
- * metadata never prompt.
- */
-async function confirmTargetSwitch(
-  context: CommandContext,
-  installedTarget: Target,
-  configuredTarget: Target,
-): Promise<boolean> {
-  const message =
-    `Existing install targets "${installedTarget}" but the config now targets "${configuredTarget}". ` +
-    "Switching targets is a destructive migration that replaces generated files. Continue?";
-  try {
-    return (await context.ui.confirm(message, context.signal)) === true;
-  } catch (error) {
-    if (isCliError(error) && error.code === "NOT_TTY") {
-      throw new CliError(
-        "VALIDATION_ERROR",
-        `target switch from "${installedTarget}" to "${configuredTarget}" is destructive and requires confirmation; pass --yes in non-interactive mode`,
-      );
-    }
-    throw error;
-  }
-}
-
 export async function runGenerateUseCase(
   context: CommandContext,
   fs_: TransactionalFsWithCopy,
@@ -380,6 +350,7 @@ export async function runGenerateUseCase(
     readonly noTailwind?: boolean;
     readonly target?: Target;
     readonly archiveFiles?: Readonly<Record<string, Uint8Array>>;
+    /** Kept for older callers; installed resources always reconcile through metadata. */
     readonly reconcileInstalled?: boolean;
   } = {},
 ): Promise<GenerateResult> {
@@ -392,24 +363,24 @@ export async function runGenerateUseCase(
   }
   const sourceCatalog = catalogState.status === "ok" ? catalogState.catalog : undefined;
   const loaded = readMoeiconsConfig(project.root, sourceCatalog);
+  if (loaded.kind === "invalid") return { ok: false, reason: "validation", errors: [loaded.message] };
   if (loaded.kind !== "ok") return { ok: false, reason: `config state: ${loaded.kind}` };
 
   const effectiveConfig = options.target
     ? { ...loaded.config, target: options.target }
     : loaded.config;
   const installedMeta = readInstallMetadata(project.root, fs_.readFileSync, fs_.existsSync);
+  if (!installedMeta) {
+    return {
+      ok: false,
+      reason: "generate requires an installed, version-pinned icon artifact; run 'moeicons install' first",
+    };
+  }
   if (installedMeta?.target && installedMeta.target !== effectiveConfig.target) {
-    const confirmed = await confirmTargetSwitch(
-      context,
-      installedMeta.target,
-      effectiveConfig.target,
-    );
-    if (!confirmed)
-      return {
-        ok: false,
-        reason: "cancelled",
-        errors: [`target switch from "${installedMeta.target}" to "${effectiveConfig.target}" cancelled`],
-      };
+    return {
+      ok: false,
+      reason: `installed artifact targets "${installedMeta.target}" while config targets "${effectiveConfig.target}"; set config target to "${effectiveConfig.target}" and run 'moeicons install ${loaded.config.tier} --target ${effectiveConfig.target}' before generate`,
+    };
   }
   let archiveFiles: Readonly<Record<string, Uint8Array>> | undefined = options.archiveFiles;
   if (needsArchiveFiles(effectiveConfig, sourceCatalog) && archiveFiles === undefined) {
@@ -479,11 +450,16 @@ export async function runGenerateUseCase(
     notes.push(...deps.notes);
     if (deps.changed) {
       sideFiles.push({ path: pkgPath, content: deps.nextSource });
+      const installCommand = project.packageManager === "pnpm" ? "pnpm install"
+        : project.packageManager === "yarn" ? "yarn install"
+        : project.packageManager === "npm" ? "npm install"
+        : "your package manager's install command";
+      notes.push(`package.json changed; run ${installCommand} to update the lockfile and install dependencies`);
     }
   }
 
   try {
-    if (options.reconcileInstalled) {
+    return withProjectLockSync(project.root, "reload", () => {
       const metadataPath = join(project.root, ".moeicons", "install-metadata.json");
       if (!fs_.existsSync(metadataPath))
         return {
@@ -513,15 +489,21 @@ export async function runGenerateUseCase(
         };
 
       const outputPrefix = loaded.config.outputDir.replace(/\\/g, "/").replace(/\/$/, "") + "/";
+      const previousPrefix = (metadata.generatedOutputDir ?? loaded.config.outputDir).replace(/\\/g, "/").replace(/\/$/, "") + "/";
       const generated = Object.fromEntries(
         plan.files.map((file) => [file.path.replace(/\\/g, "/"), file.content]),
       );
+      for (const generatedPath of Object.keys(generated)) {
+        if (fs_.existsSync(join(project.root, generatedPath)) && !(generatedPath in metadata.managedFiles)) {
+          return { ok: false, reason: `generated path collides with an unowned user file: ${generatedPath}` };
+        }
+      }
       const nextManaged: Record<string, string> = {};
       for (const [managedPath, hash] of Object.entries(metadata.managedFiles))
-        if (!managedPath.startsWith(outputPrefix)) nextManaged[managedPath] = hash;
+        if (!managedPath.startsWith(outputPrefix) && !managedPath.startsWith(previousPrefix)) nextManaged[managedPath] = hash;
       for (const [path, content] of Object.entries(generated))
         nextManaged[path] = sha256Bytes(content);
-      const nextMetadata: InstallMetadata = { ...metadata, managedFiles: nextManaged };
+      const nextMetadata: InstallMetadata = { ...metadata, managedFiles: nextManaged, generatedOutputDir: loaded.config.outputDir };
       const writes: Record<string, string | Uint8Array> = { ...generated };
       for (const file of sideFiles) {
         const absolute = resolve(file.path);
@@ -532,11 +514,9 @@ export async function runGenerateUseCase(
       }
       writes[".moeicons/install-metadata.json"] = serializeInstallMetadata(nextMetadata);
       const stale = Object.keys(metadata.managedFiles).filter(
-        (path) => path.startsWith(outputPrefix) && !(path in generated),
+        (path) => (path.startsWith(outputPrefix) || path.startsWith(previousPrefix)) && !(path in generated),
       );
-      withProjectLockSync(project.root, "reload", () =>
-        executeManagedReconcile(project.root, writes, stale, fs_),
-      );
+      executeManagedReconcile(project.root, writes, stale, fs_);
       return {
         ok: true,
         files: plan.files.map((file) => file.path),
@@ -544,18 +524,7 @@ export async function runGenerateUseCase(
           ? { warnings: [...loaded.warnings, ...notes] }
           : {}),
       };
-    }
-    executeGeneratedFilesDir(plan.files, project.root, loaded.config.outputDir, fs_);
-    for (const file of sideFiles) {
-      fs_.writeFileSync(file.path, file.content);
-    }
-    return {
-      ok: true,
-      files: plan.files.map((file) => file.path),
-      ...(loaded.warnings.length > 0 || notes.length > 0
-        ? { warnings: [...loaded.warnings, ...notes] }
-        : {}),
-    };
+    });
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : String(error) };
   }

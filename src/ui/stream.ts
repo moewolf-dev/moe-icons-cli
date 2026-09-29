@@ -1,6 +1,8 @@
 import { confirm as promptConfirm, select as promptSelect, CancelledError } from "../tui/primitives.js";
 import { CliError } from "../errors/index.js";
-import type { CommandUi } from "../core/context.js";
+import { renderProgressBar, renderTaskStatus } from "../tui/components.js";
+import { createTheme } from "./theme.js";
+import type { CommandUi, ProgressBarEvent, TaskHandle } from "../core/context.js";
 
 export interface StreamUiRuntime {
   readonly isTTY: () => boolean;
@@ -48,6 +50,33 @@ export function createStreamUi(runtime: StreamUiRuntime, options: { readonly yes
     progress(message) {
       runtime.stdout(`${message}\n`);
       return { update(next) { runtime.stdout(`${next}\n`); }, stop() { return undefined; } };
+    },
+    // W3-A: injected-stream adapter logs one deterministic line per tick (no
+    // ANSI, no carriage returns) so tests assert exact progress output.
+    progressBar(label) {
+      const theme = createTheme(false);
+      let latest: ProgressBarEvent = {};
+      return {
+        update(event) {
+          latest = { ...latest, ...(event ?? {}) };
+          runtime.stdout(`${renderProgressBar({
+            label: latest.label ?? label,
+            theme,
+            ...(latest.done !== undefined ? { done: latest.done } : {}),
+            ...(latest.total !== undefined ? { total: latest.total } : {}),
+            ...(latest.detail !== undefined ? { detail: latest.detail } : {}),
+          })}\n`);
+        },
+        stop(message) { if (message) runtime.stdout(`${message}\n`); },
+      };
+    },
+    task(label): TaskHandle {
+      const theme = createTheme(false);
+      return {
+        succeed(message) { runtime.stdout(`${renderTaskStatus({ state: "success", label, ...(message ? { detail: message } : {}), theme })}\n`); },
+        fail(message) { runtime.stdout(`${renderTaskStatus({ state: "failure", label, ...(message ? { detail: message } : {}), theme })}\n`); },
+        timeout(message) { runtime.stdout(`${renderTaskStatus({ state: "timeout", label, ...(message ? { detail: message } : {}), theme })}\n`); },
+      };
     },
   };
 }

@@ -7,7 +7,8 @@ import type { DetectorIo } from "./helpers.js";
  * is a warning/`missing` result, never a hard failure. The detector is
  * read-only: it resolves the CSS entry, checks whether moeicons styles are
  * imported, and reports Tailwind status as evidence. It only offers a safe fix
- * (a single fixed style import appended to an unambiguous CSS file).
+ * only when a real generated stylesheet exists. Core icon dimensions are
+ * expressed as element attributes, so no stylesheet is required by default.
  */
 
 const CSS_CANDIDATES = [
@@ -96,15 +97,8 @@ export function inspectStyleAnchor(options: StyleAnchorOptions): AnchorResult {
     candidates: [],
     evidence: [
       `CSS entry: ${rel}`,
-      "no moeicons style import present; safe single-import plan available",
+      "no moeicons stylesheet is generated; add optional project styles manually if needed",
     ],
-    fixes: [
-      {
-        kind: "replace",
-        path: rel,
-        before: source,
-        after: `${source}\n@import "./moeicons/styles.css";\n`,
-      },
-    ],
+    fixes: [],
   };
 }

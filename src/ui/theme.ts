@@ -1,4 +1,6 @@
 export const ANSI_FG_RESET = "\x1b[39m";
+export const ANSI_DIM_OPEN = "\x1b[2m";
+export const ANSI_DIM_RESET = "\x1b[22m";
 export const BRAND_BLUE_RGB = { r: 59, g: 130, b: 246 } as const;
 export const BRAND_RED_RGB = { r: 239, g: 68, b: 68 } as const;
 
@@ -7,15 +9,27 @@ export const THEME_SYMBOLS = {
   radio: "●",
   submit: "◆",
   cancel: "■",
+  // W3: task-status glyphs. Colour stays within the frozen white/blue/red
+  // palette (success = blue, failure/timeout = red), so the theme keeps working
+  // with NO_COLOR and a dumb terminal.
+  success: "✔",
+  failure: "✖",
+  timeout: "⏱",
+  pending: "…",
+  barFilled: "█",
+  barEmpty: "░",
 } as const;
 
 export interface UiTheme {
   readonly enabled: boolean;
   readonly blue: (text: string) => string;
   readonly red: (text: string) => string;
+  /** W3: de-emphasised text for key hints and secondary detail. */
+  readonly dim: (text: string) => string;
   /** Raw SGR open sequences for multi-span painting (empty when color is off). */
   readonly openBlue: string;
   readonly openRed: string;
+  readonly openDim: string;
   readonly symbols: typeof THEME_SYMBOLS;
 }
 
@@ -46,13 +60,20 @@ export function isThemeEnabled(
   return true;
 }
 
+/** Dim/intensity paint. Independent of foreground colour, so it composes safely. */
+function paintDim(enabled: boolean): (text: string) => string {
+  return (text: string) => (enabled ? `${ANSI_DIM_OPEN}${text}${ANSI_DIM_RESET}` : text);
+}
+
 export function createTheme(enabled: boolean): UiTheme {
   return {
     enabled,
     blue: paint(enabled, BRAND_BLUE_RGB.r, BRAND_BLUE_RGB.g, BRAND_BLUE_RGB.b),
     red: paint(enabled, BRAND_RED_RGB.r, BRAND_RED_RGB.g, BRAND_RED_RGB.b),
+    dim: paintDim(enabled),
     openBlue: enabled ? brandAnsiFgOpen("blue") : "",
     openRed: enabled ? brandAnsiFgOpen("red") : "",
+    openDim: enabled ? ANSI_DIM_OPEN : "",
     symbols: THEME_SYMBOLS,
   };
 }

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { loadGeneratedConfigPackage } from "../src/config-package/generated-config.js";
 
@@ -28,11 +29,11 @@ describe("A2 config-package generated copy", () => {
     }
   });
 
-  it("renders a stable schema v2 skeleton offline through the bundled copy", () => {
+  it("renders a stable schema v3 skeleton offline through the bundled copy", () => {
     const generated = loadGeneratedConfigPackage();
     const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
     const free = generated.renderMoeiconsConfigJsonc({ target: "react", tier: "free", catalog });
-    expect(free).toContain('"schemaVersion": 2,');
+    expect(free).toContain('"schemaVersion": 3,');
     expect(free).toContain('"target": "react"');
     const pro = generated.renderMoeiconsConfigJsonc({ target: "vue", tier: "pro", catalog });
     expect(pro).toContain('"tier": "pro"');
@@ -68,6 +69,23 @@ describe("A2 config-package drift gate", () => {
       const bundled = source.files[name] as { sha256: string };
       expect(bundled.sha256).toBe(manifest.files[canonicalRel!].sha256);
     }
+  });
+
+  it.skipIf(!run)("SOURCE.json distinguishes exact commit bytes from a dirty checkout", () => {
+    const source = JSON.parse(readFileSync(join(generatedDir, "SOURCE.json"), "utf8")) as {
+      sourceCommit: string; sourceCommitExact: boolean; files: Record<string, { sha256: string }>;
+    };
+    const canonical: Record<string, string> = {
+      "render-config.cjs": "src/render-config.cjs",
+      "validate-config.cjs": "src/validate-config.cjs",
+      "moeicons-config.schema.json": "schema/moeicons-config.schema.json",
+      "moeicons.config.jsonc": "templates/moeicons.config.jsonc",
+    };
+    const exact = Object.entries(canonical).every(([name, rel]) => {
+      const blob = execFileSync("git", ["-C", repo!, "show", `${source.sourceCommit}:config-package/${rel}`]);
+      return createHash("sha256").update(blob).digest("hex") === source.files[name]?.sha256;
+    });
+    expect(source.sourceCommitExact).toBe(exact);
   });
 
   it.skipIf(!run)("bundled renderer byte-matches the canonical code-library renderer", () => {

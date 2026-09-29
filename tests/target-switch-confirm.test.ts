@@ -22,12 +22,7 @@ import {
 import type { CommandContext, CommandUi } from "../src/core/context.js";
 import type { Target } from "../src/commands/parser.js";
 
-/**
- * B5: switching the configured target over an existing install is a destructive
- * migration. Interactive TTY requires explicit confirmation; non-interactive /
- * --json fails with VALIDATION_ERROR unless --yes is passed. Fresh installs
- * never prompt, and same-target generation stays silent.
- */
+/** Target changes require a matching installed artifact before generation. */
 
 function makeRuntime() {
   const out: string[] = [];
@@ -131,7 +126,7 @@ const fs_ = {
   copyFileSync,
 };
 
-describe("B5: destructive target-switch confirmation", () => {
+describe("target-switch install consistency", () => {
   let dir: string;
 
   beforeEach(() => {
@@ -142,52 +137,52 @@ describe("B5: destructive target-switch confirmation", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("target switch requires an explicit confirmation and proceeds on yes", async () => {
+  it("target switch requires installing the matching artifact before generate", async () => {
     writeConfig(dir, "vue");
     writeMetadata(dir, "react");
     const { context, confirmSpy } = makeContext(async () => true, dir);
     const result = await runGenerateUseCase(context, fs_, { noTailwind: true });
-    expect(result.ok).toBe(true);
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
-    expect(confirmSpy.mock.calls[0]?.[0]).toMatch(/react.*vue|switch/i);
-    expect(existsSync(join(dir, "src", "moeicons", "registry.ts"))).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("moeicons install free --target vue");
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(existsSync(join(dir, "src", "moeicons", "registry.ts"))).toBe(false);
   });
 
-  it("declined target switch returns cancelled with zero writes", async () => {
+  it("target mismatch returns with zero writes regardless of prompt behavior", async () => {
     writeConfig(dir, "vue");
     writeMetadata(dir, "react");
     const beforeMetadata = readFileSync(join(dir, ".moeicons", "install-metadata.json"), "utf8");
     const { context, confirmSpy } = makeContext(async () => false, dir);
     const result = await runGenerateUseCase(context, fs_, { noTailwind: true });
-    if (result.ok) throw new Error("expected a cancelled result");
-    expect(result.reason).toBe("cancelled");
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    if (result.ok) throw new Error("expected a mismatch result");
+    expect(result.reason).toContain("moeicons install free --target vue");
+    expect(confirmSpy).not.toHaveBeenCalled();
     expect(existsSync(join(dir, "src", "moeicons"))).toBe(false);
     expect(readFileSync(join(dir, ".moeicons", "install-metadata.json"), "utf8")).toBe(
       beforeMetadata,
     );
   });
 
-  it("--yes allows the switch in non-interactive mode", async () => {
+  it("--yes cannot generate imports for an uninstalled target", async () => {
     const { runtime, setCwd } = makeRuntime();
     setCwd(dir);
     writeConfig(dir, "vue");
     writeMetadata(dir, "react");
     const code = await main(["generate", "--json", "--yes"], runtime);
-    expect(code).toBe(0);
-    expect(existsSync(join(dir, "src", "moeicons", "registry.ts"))).toBe(true);
+    expect(code).toBe(1);
+    expect(existsSync(join(dir, "src", "moeicons", "registry.ts"))).toBe(false);
   });
 
-  it("--target override switch also passes with --yes", async () => {
+  it("--target override also requires a matching installed artifact", async () => {
     const { runtime, setCwd } = makeRuntime();
     setCwd(dir);
     writeConfig(dir, "react");
     writeMetadata(dir, "react");
     const code = await main(["generate", "--json", "--yes", "--target", "vue"], runtime);
-    expect(code).toBe(0);
+    expect(code).toBe(1);
   });
 
-  it("non-TTY without --yes fails with VALIDATION_ERROR", async () => {
+  it("non-TTY mismatch reports the install command as a validation error", async () => {
     const { runtime, setCwd, out } = makeRuntime();
     setCwd(dir);
     writeConfig(dir, "vue");
@@ -197,7 +192,7 @@ describe("B5: destructive target-switch confirmation", () => {
     const parsed = JSON.parse(out.join("")) as { ok: boolean; code: string; message: string };
     expect(parsed.ok).toBe(false);
     expect(parsed.code).toBe("VALIDATION_ERROR");
-    expect(parsed.message).toMatch(/confirmation/i);
+    expect(parsed.message).toContain("moeicons install free --target vue");
     expect(existsSync(join(dir, "src", "moeicons"))).toBe(false);
   });
 
@@ -210,15 +205,16 @@ describe("B5: destructive target-switch confirmation", () => {
     expect(confirmSpy).not.toHaveBeenCalled();
   });
 
-  it("fresh install with no metadata requires no confirmation", async () => {
+  it("missing install requires installation without a target confirmation", async () => {
     writeConfig(dir, "vue");
     const { context, confirmSpy } = makeContext(async () => true, dir);
     const result = await runGenerateUseCase(context, fs_, { noTailwind: true });
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("moeicons install");
     expect(confirmSpy).not.toHaveBeenCalled();
   });
 
-  it("reconcile path also prompts on a target switch", async () => {
+  it("reconcile path also rejects an uninstalled target", async () => {
     writeConfig(dir, "vue");
     mkdirSync(join(dir, ".moeicons"), { recursive: true });
     mkdirSync(join(dir, "src", "moeicons"), { recursive: true });
@@ -243,9 +239,9 @@ describe("B5: destructive target-switch confirmation", () => {
       noTailwind: true,
       reconcileInstalled: true,
     });
-    if (result.ok) throw new Error("expected a cancelled result");
-    expect(result.reason).toBe("cancelled");
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    if (result.ok) throw new Error("expected a mismatch result");
+    expect(result.reason).toContain("moeicons install free --target vue");
+    expect(confirmSpy).not.toHaveBeenCalled();
     expect(readdirSync(join(dir, "src", "moeicons")).length).toBe(0);
   });
 });

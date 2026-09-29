@@ -19,11 +19,17 @@ import type { AuthUseCaseDependencies } from "./auth.js";
 import type { CommandContext } from "./context.js";
 import { artifactCachePath, downloadFreeRelease, metadataCachePath, type FreeDownloadIo } from "./free-download.js";
 import { downloadProArtifact } from "./pro-download.js";
+import { PRO_DOWNLOAD_HOSTS, resolveProDescriptorEndpoint } from "./pro-download.js";
+import { runAccessTokenUseCase } from "./auth.js";
+import { resolveBitmapTuples, resolveConfiguredBitmapShards } from "./bitmap-shard-resolver.js";
+import { mergeBitmapShardCacheManifest, readBitmapShardCacheManifest, writeBitmapShardCacheManifest } from "./bitmap-shard-cache.js";
+import type { BitmapShard } from "./bitmap-shards.js";
+import type { CacheIo } from "./cache.js";
 import { selectTargetSubtree, type TargetSubtreeSource } from "./target-subtree.js";
 
 export interface LibraryUpdateDeps {
   readonly fs: TransactionalFsWithCopy;
-  readonly free: Omit<FreeDownloadIo, "signal">;
+  readonly free?: Omit<FreeDownloadIo, "signal">;
   readonly auth: AuthUseCaseDependencies;
   readonly fetch?: typeof fetch;
   readonly allowedProHosts?: readonly string[];
@@ -61,6 +67,7 @@ export async function runLibraryUpdateUseCase(
   let manualMd: string;
   let tierSource: TargetSubtreeSource;
   if (expected.tier === "free") {
+    if (!deps.free) throw new CliError("VALIDATION_ERROR", "free release download dependencies are missing");
     const downloaded = await downloadFreeRelease(
       {
         ...deps.free,
@@ -136,6 +143,10 @@ export async function runLibraryUpdateUseCase(
   const loaded = readMoeiconsConfig(project.root, candidateCatalog);
   if (loaded.kind !== "ok" || loaded.config.tier !== expected.tier)
     throw new CliError("VALIDATION_ERROR", `config is invalid for the ${expected.tier} candidate`);
+  const plannedConfig = JSON.stringify(loaded.config);
+  const installMetadataPath = join(project.root, ".moeicons", "install-metadata.json");
+  const plannedMetadata = deps.fs.existsSync(installMetadataPath)
+    ? deps.fs.readFileSync(installMetadataPath, "utf8") : undefined;
   const unpacked = extractTarGz(archiveBytes, {
     maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
     maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
@@ -146,8 +157,53 @@ export async function runLibraryUpdateUseCase(
   const subtree = selectTargetSubtree(archiveBytes, tierSource, target);
   if (!subtree.ok)
     throw new CliError("VALIDATION_ERROR", subtree.message);
+  const archiveFiles = { ...unpacked.files };
+  let bitmapPins: readonly BitmapShard[] | undefined;
+  let bitmapShardSetSha256: string | undefined;
+  const tuples = resolveBitmapTuples(loaded.config, candidateCatalog);
+  if (!tuples.ok) throw new CliError("VALIDATION_ERROR", tuples.errors.join("; "));
+  if (tuples.tuples.length > 0 && expected.tier === "pro") {
+    const cacheDir = context.env.MOEICONS_CACHE_DIR ?? join(homedir(), ".moeicons", "cache");
+    const cacheIo: CacheIo = {
+      mkdirSync: (path) => deps.fs.mkdirSync(path, { recursive: true }),
+      writeFileSync: deps.fs.writeFileSync,
+      renameSync: deps.fs.renameSync,
+      existsSync: deps.fs.existsSync,
+      rmSync: deps.fs.rmSync,
+      readFileSync: deps.fs.readFileSync,
+      readdirSync: deps.fs.readdirSync,
+    };
+    const cacheManifest = readBitmapShardCacheManifest(cacheDir, cacheIo);
+    const metadataPath = join(project.root, ".moeicons", "install-metadata.json");
+    const old = deps.fs.existsSync(metadataPath)
+      ? parseInstallMetadata(deps.fs.readFileSync(metadataPath, "utf8")) : undefined;
+    const existingPins = mergeBitmapShardCacheManifest(cacheManifest, old?.bitmapShards ?? [])
+      .filter((pin) => pin.resourceVersion === expected.version);
+    const accessToken = await runAccessTokenUseCase(context, deps.auth);
+    const { loopbackHost } = resolveProDescriptorEndpoint(context.env);
+    const allowedHosts = deps.allowedProHosts ?? (loopbackHost ? [...PRO_DOWNLOAD_HOSTS, loopbackHost] : PRO_DOWNLOAD_HOSTS);
+    const shards = await resolveConfiguredBitmapShards({
+      config: loaded.config,
+      catalog: candidateCatalog,
+      version: expected.version,
+      descriptorSha256: expected.descriptorSha256,
+      cacheDir,
+      io: cacheIo,
+      accessToken,
+      allowedHosts,
+      existingPins,
+      env: context.env,
+      now: context.now().getTime(),
+      signal: context.signal,
+      ...(deps.fetch ? { fetch: deps.fetch } : {}),
+    });
+    Object.assign(archiveFiles, shards.files);
+    bitmapPins = shards.pins;
+    bitmapShardSetSha256 = shards.bitmapShardSetSha256;
+    writeBitmapShardCacheManifest(cacheDir, cacheIo, mergeBitmapShardCacheManifest(cacheManifest, shards.pins), context.now().getTime());
+  }
   const generated = planGeneratedFiles(loaded.config, loaded.config.outputDir, {
-    archiveFiles: unpacked.files,
+    archiveFiles,
     catalog: candidateCatalog,
   });
   if (!generated.ok) throw new CliError("VALIDATION_ERROR", generated.errors.join("; "));
@@ -156,6 +212,7 @@ export async function runLibraryUpdateUseCase(
     ".moeicons/catalog.json": catalogJson,
     ".moeicons/manifest.json": manifestJson,
     ".moeicons/MANUAL.md": manualMd,
+    ".moeicons/artifact/package.json": '{"private":true,"type":"module","sideEffects":false}\n',
     [`${loaded.config.outputDir.replace(/\\/g, "/").replace(/\/$/, "")}/.moeicons-${expected.tier}.marker`]: `${expected.tier}\n`,
   };
   for (const file of generated.files) writes[file.path.replace(/\\/g, "/")] = file.content;
@@ -201,14 +258,21 @@ export async function runLibraryUpdateUseCase(
     catalogSha256,
     installedAt: context.now().toISOString(),
     managedFiles,
+    generatedOutputDir: loaded.config.outputDir,
     targetSha256: subtree.sha256,
     targetFileCount: subtree.fileCount,
     targetByteCount: subtree.byteCount,
+    ...(bitmapPins && bitmapShardSetSha256 ? { bitmapShards: bitmapPins, bitmapShardSetSha256 } : {}),
   };
   writes[".moeicons/install-metadata.json"] = serializeInstallMetadata(nextMetadata);
 
   await withProjectLock(project.root, "update", () => {
+    const currentConfig = readMoeiconsConfig(project.root, candidateCatalog);
+    if (currentConfig.kind !== "ok" || JSON.stringify(currentConfig.config) !== plannedConfig)
+      throw new CliError("VALIDATION_ERROR", "config changed while preparing update; retry");
     const metadataPath = join(project.root, ".moeicons", "install-metadata.json");
+    if (!plannedMetadata || !deps.fs.existsSync(metadataPath) || deps.fs.readFileSync(metadataPath, "utf8") !== plannedMetadata)
+      throw new CliError("VALIDATION_ERROR", "installation changed while preparing update; retry");
     if (!deps.fs.existsSync(metadataPath))
       throw new CliError("VALIDATION_ERROR", "managed install metadata is missing");
     const old = parseInstallMetadata(deps.fs.readFileSync(metadataPath, "utf8"));
@@ -221,6 +285,11 @@ export async function runLibraryUpdateUseCase(
         sha256Bytes(deps.fs.readFileSync(absolute) as string | Uint8Array) !== hash
       ) {
         throw new CliError("VALIDATION_ERROR", `managed file was modified or removed: ${path}`);
+      }
+    }
+    for (const path of Object.keys(managedFiles)) {
+      if (deps.fs.existsSync(join(project.root, path)) && !(path in old.managedFiles)) {
+        throw new CliError("VALIDATION_ERROR", `update path collides with an unowned user file: ${path}`);
       }
     }
     executeManagedReconcile(
