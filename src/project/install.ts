@@ -320,8 +320,9 @@ export function executeInstallPlan(
   const folded = validated.map((item) => item.rel.toLowerCase());
   if (new Set(folded).size !== folded.length) throw new Error("duplicate install paths");
   const metadataPath = join(project, ".moeicons", "install-metadata.json");
-  const prior = existsOnDisk(metadataPath)
-    ? parseInstallMetadata(realReadFileSync(metadataPath, "utf8"), { allowLocalTest: true })
+  const priorMetadataText = existsOnDisk(metadataPath) ? realReadFileSync(metadataPath, "utf8") : undefined;
+  const prior = priorMetadataText !== undefined
+    ? parseInstallMetadata(priorMetadataText, { allowLocalTest: true })
     : undefined;
   if (existsOnDisk(metadataPath) && !prior) throw new Error("existing install metadata is invalid; refusing to overwrite project files");
   if (prior) {
@@ -346,8 +347,26 @@ export function executeInstallPlan(
     : [];
 
   const backups: { original: string; backup: string }[] = [];
-  const installed: string[] = [];
+  const installed: { path: string; hash: string }[] = [];
   let preserveBackup = false;
+  const assertSafeTarget = (target: string) => {
+    if (lstatSync(project).isSymbolicLink()) throw new Error(`install root became a symbolic link: ${project}`);
+    for (let current = target; current !== project; current = dirname(current)) {
+      if (existsOnDisk(current) && lstatSync(current).isSymbolicLink()) {
+        throw new Error(`install path contains symbolic link: ${target}`);
+      }
+    }
+  };
+  const assertOwned = (rel: string, target: string) => {
+    assertSafeTarget(target);
+    if (!existsOnDisk(target)) {
+      if (prior?.managedFiles[rel] !== undefined) throw new Error(`managed file was removed during install: ${rel}`);
+      return;
+    }
+    const expected = prior?.managedFiles[rel];
+    if (expected === undefined) throw new Error(`install path collides with an unowned user file: ${rel}`);
+    if (sha256Bytes(realReadFileSync(target)) !== expected) throw new Error(`managed file was modified during install: ${rel}`);
+  };
   try {
     fs_.mkdirSync(project, { recursive: true });
     fs_.mkdirSync(stagingRoot, { recursive: false });
@@ -359,38 +378,69 @@ export function executeInstallPlan(
 
     // move staged files into place, backing up existing managed output
     for (const { rel, target } of staleOwned) {
+      assertOwned(rel, target);
       const backup = join(backupRoot, rel);
       fs_.mkdirSync(dirname(backup), { recursive: true });
       fs_.renameSync(target, backup);
       backups.push({ original: target, backup });
     }
-    for (const { rel, target } of validated) {
+    for (const { item, rel, target } of validated) {
       const staged = join(stagingRoot, rel);
+      if (rel !== ".moeicons/install-metadata.json") assertOwned(rel, target);
+      else {
+        assertSafeTarget(target);
+        const current = existsOnDisk(target) ? realReadFileSync(target, "utf8") : undefined;
+        if (current !== priorMetadataText) throw new Error("install metadata changed during install");
+      }
       if (fs_.existsSync(target)) {
         const backup = join(backupRoot, rel);
         fs_.mkdirSync(dirname(backup), { recursive: true });
         fs_.renameSync(target, backup);
         backups.push({ original: target, backup });
       }
+      assertSafeTarget(target);
+      if (fs_.existsSync(target)) throw new Error(`file appeared during install: ${rel}`);
       fs_.mkdirSync(dirname(target), { recursive: true });
       fs_.renameSync(staged, target);
-      installed.push(target);
+      installed.push({ path: target, hash: sha256Bytes(item.bytes ?? item.content ?? "") });
     }
   } catch (error) {
     const recoveryErrors: unknown[] = [];
-    for (const path of installed.reverse()) {
-      if (fs_.existsSync(path)) {
-        try { fs_.rmSync(path, { force: true }); } catch (recoveryError) { recoveryErrors.push(recoveryError); }
+    for (const { path, hash } of installed.reverse()) {
+      if (existsOnDisk(path)) {
+        try {
+          if (lstatSync(path).isSymbolicLink() || sha256Bytes(realReadFileSync(path)) !== hash) {
+            preserveBackup = true;
+            recoveryErrors.push(new Error(`concurrent file retained at ${path}`));
+            continue;
+          }
+          fs_.rmSync(path, { force: true });
+        } catch (recoveryError) { recoveryErrors.push(recoveryError); }
       }
     }
     // restore any backups made before the failure
     for (const b of backups.reverse()) {
       try {
-        if (fs_.existsSync(b.backup)) fs_.renameSync(b.backup, b.original);
+        if (fs_.existsSync(b.backup)) {
+          if (fs_.existsSync(b.original)) {
+            preserveBackup = true;
+            recoveryErrors.push(new Error(`concurrent file retained at ${b.original}`));
+            continue;
+          }
+          fs_.renameSync(b.backup, b.original);
+        }
       } catch (recoveryError) {
         preserveBackup = true;
         recoveryErrors.push(recoveryError);
       }
+    }
+    if (fs_.existsSync(stagingRoot)) {
+      try { fs_.rmSync(stagingRoot, { recursive: true, force: true }); }
+      catch (cleanupError) { recoveryErrors.push(cleanupError); }
+    }
+    if (!preserveBackup && fs_.existsSync(backupRoot)) {
+      try { fs_.rmSync(backupRoot, { recursive: true, force: true }); }
+      catch (cleanupError) { recoveryErrors.push(cleanupError); }
     }
     if (recoveryErrors.length > 0) {
       throw new AggregateError(
@@ -401,9 +451,16 @@ export function executeInstallPlan(
       );
     }
     throw error;
-  } finally {
-    if (fs_.existsSync(stagingRoot)) fs_.rmSync(stagingRoot, { recursive: true, force: true });
-    if (!preserveBackup && fs_.existsSync(backupRoot)) fs_.rmSync(backupRoot, { recursive: true, force: true });
+  }
+  // All files are committed. Cleanup failures must never roll back a state
+  // whose previous backups may already have been partly removed.
+  if (fs_.existsSync(stagingRoot)) {
+    try { fs_.rmSync(stagingRoot, { recursive: true, force: true }); }
+    catch (error) { throw new Error(`changes committed, staging cleanup failed at ${stagingRoot}: ${String(error)}`); }
+  }
+  if (fs_.existsSync(backupRoot)) {
+    try { fs_.rmSync(backupRoot, { recursive: true, force: true }); }
+    catch (error) { throw new Error(`changes committed, backup cleanup failed at ${backupRoot}: ${String(error)}`); }
   }
 }
 
@@ -530,10 +587,6 @@ export function executeGeneratedFilesDir(
     }
     fs_.renameSync(stagingRoot, outputRoot);
     installed = true;
-
-    if (backedUp) {
-      fs_.rmSync(backupRoot, { recursive: true, force: true });
-    }
   } catch (error) {
     if (backedUp && fs_.existsSync(backupRoot)) {
       try {
@@ -547,6 +600,11 @@ export function executeGeneratedFilesDir(
       fs_.rmSync(stagingRoot, { recursive: true, force: true });
     }
     throw error;
+  }
+  // The replacement is live. A partially removed backup cannot be restored.
+  if (backedUp) {
+    try { fs_.rmSync(backupRoot, { recursive: true, force: true }); }
+    catch (error) { throw new Error(`changes committed, backup cleanup failed at ${backupRoot}: ${String(error)}`); }
   }
 }
 

@@ -473,6 +473,29 @@ describe("CLI init + generate", () => {
     expect(readFileSync(join(output, "user-note.md"), "utf8")).toBe("keep me");
   });
 
+  it("keeps the new output and copied user file after partial backup cleanup", () => {
+    const output = join(dir, "src", "moeicons");
+    mkdirSync(output, { recursive: true });
+    writeFileSync(join(output, "user-note.md"), "keep me");
+    expect(() => executeGeneratedFilesDir(
+      [{ path: "src/moeicons/registry.ts", content: "new registry" }],
+      dir,
+      "src/moeicons",
+      {
+        mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, readdirSync, copyFileSync,
+        rmSync: (path, options) => {
+          if (String(path).includes(".bak-")) {
+            rmSync(join(String(path), "user-note.md"), { force: true });
+            throw new Error("simulated partial backup cleanup");
+          }
+          return rmSync(path, options);
+        },
+      },
+    )).toThrow("changes committed, backup cleanup failed");
+    expect(readFileSync(join(output, "registry.ts"), "utf8")).toBe("new registry");
+    expect(readFileSync(join(output, "user-note.md"), "utf8")).toBe("keep me");
+  });
+
   it("rejects output escape and symbolic-link escape before writing", () => {
     const outside = mkdtempSync(join(tmpdir(), "cli-outside-"));
     const fs_ = { mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, readdirSync, copyFileSync };
