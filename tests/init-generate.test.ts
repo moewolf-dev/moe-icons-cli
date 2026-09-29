@@ -359,9 +359,14 @@ describe("CLI init + generate", () => {
         if (String(path).endsWith("/src/moeicons/a.ts")) throw new Error("rollback cleanup failure");
         return rmSync(path, options);
       },
-    })).toThrow("recovery errors");
-    expect(readFileSync(first, "utf8")).toBe("old a");
+    })).toThrow("original files retained at");
+    // Deleting the new a.ts failed, so the transaction must keep the old
+    // bytes in backup instead of overwriting the still-present target.
+    expect(readFileSync(first, "utf8")).toBe("new a");
     expect(readFileSync(second, "utf8")).toBe("old b");
+    const backup = readdirSync(join(dir, ".moeicons")).find((name) => name.startsWith(".reconcile-backup-"));
+    expect(backup).toBeDefined();
+    expect(readFileSync(join(dir, ".moeicons", backup!, "src", "moeicons", "a.ts"), "utf8")).toBe("old a");
   });
 
   it("restores generated files when the staging→output rename fails", () => {
