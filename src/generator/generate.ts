@@ -221,27 +221,28 @@ export function useMoeiconsTheme(): MoeiconsThemeState {
       ? bitmapWrapperImportName(defaultTheme.theme, iconId)
       : svgInternalImportName(defaultTheme.theme, defaultActual.entry.styleGroup, iconId);
     const defaultRefType = defaultActual.kind === "bitmap" ? "HTMLImageElement" : "SVGSVGElement";
+    const singleTheme = themes.length === 1;
     files.push({
       path: rel(`icons/${pascal}.tsx`),
       content: `${OWNER_HEADER}
 import type { IconProps } from "../types";
-import { useMoeiconsTheme } from "../provider";
+${singleTheme ? "" : 'import { useMoeiconsTheme } from "../provider";'}
 import { cn } from "../cn";
-import type { Theme } from "../types";
 import * as React from "react";
 ${ownImports}
 
-${themeClassExpr(themes)}
-${themeDefaultsExpr(themes)}
+${singleTheme ? "" : themeClassExpr(themes)}
+${singleTheme ? "" : themeDefaultsExpr(themes)}
 export const ${pascal} = /* @__PURE__ */ React.forwardRef<SVGSVGElement | HTMLImageElement, IconProps>((props, ref) => {
   const { className, size, strokeWidth, ...rest } = props;
+${singleTheme ? `  return <${defaultSymbol} ref={ref as React.Ref<${defaultRefType}>} width={size ?? ${defaultTheme.entry.defaultSize ?? 24}} height={size ?? ${defaultTheme.entry.defaultSize ?? 24}} strokeWidth={strokeWidth ?? ${defaultTheme.entry.strokeWidth === undefined ? "undefined" : defaultTheme.entry.strokeWidth}} {...rest} className={cn("moe-icon", ${JSON.stringify(defaultTheme.entry.className ?? "")}, className)} />;` : `
   const { theme } = useMoeiconsTheme();
   const resolvedSize = size ?? themeDefaultSize[theme] ?? 24;
   switch (theme) {
 ${renderBranches}
     default:
       return <${defaultSymbol} ref={ref as React.Ref<${defaultRefType}>} width={resolvedSize} height={resolvedSize} strokeWidth={strokeWidth ?? themeStrokeWidth[${JSON.stringify(config.defaultTheme)}]} {...rest} className={cn("moe-icon", themeClassName[${JSON.stringify(config.defaultTheme)}], className)} />;
-  }
+  }`}
 });
 `,
     });
@@ -387,20 +388,27 @@ export function useMoeiconsTheme(): MoeiconsThemeState {
         : svgInternalImportName(theme.theme, actual.entry.styleGroup, iconId);
       return `  ${JSON.stringify(theme.theme)}: ${symbol},`;
     }).join("\n");
+    const singleTheme = themes.length === 1;
+    const onlyTheme = themes[0]!;
+    const onlyActual = effectiveThemeForIcon(iconId, onlyTheme, themes, config, sourceCatalog);
+    const onlySymbol = onlyActual.kind === "bitmap"
+      ? bitmapWrapperImportName(onlyTheme.theme, iconId)
+      : svgInternalImportName(onlyTheme.theme, onlyActual.entry.styleGroup, iconId);
     files.push({
       path: rel(`icons/${pascal}.ts`),
       content: `${OWNER_HEADER}
-import { computed, defineComponent, h, inject, type Component } from "vue";
-import { MOEICONS_THEME_KEY, type MoeiconsThemeState } from "../theme";
+import { ${singleTheme ? "defineComponent, h" : "computed, defineComponent, h, inject, type Component"} } from "vue";
+${singleTheme ? "" : 'import { MOEICONS_THEME_KEY, type MoeiconsThemeState } from "../theme";'}
 import { cn } from "../cn";
-import type { Theme } from "../types";
+${singleTheme ? "" : 'import type { Theme } from "../types";'}
 ${ownImports}
 
-${themeClassExpr(themes)}
-${themeDefaultsExpr(themes)}
+${singleTheme ? "" : themeClassExpr(themes)}
+${singleTheme ? "" : themeDefaultsExpr(themes)}
+${singleTheme ? "" : `
 const variants: Record<Theme, Component> = {
 ${ownVariants}
-};
+};`}
 
 export const ${pascal} = /* @__PURE__ */ defineComponent({
   name: "${pascal}",
@@ -419,11 +427,29 @@ export const ${pascal} = /* @__PURE__ */ defineComponent({
     draggable: { type: Boolean, default: undefined },
   },
   setup(props, { attrs }) {
+${singleTheme ? "" : `
     const state = inject<MoeiconsThemeState | undefined>(MOEICONS_THEME_KEY, undefined);
     const component = computed(() => variants[(state?.theme.value ?? ${JSON.stringify(config.defaultTheme)}) as Theme] ?? variants[${JSON.stringify(config.defaultTheme)}]);
+`}
     return () => {
       const className = attrs.class as Parameters<typeof cn>[number];
       const size = props.size;
+${singleTheme ? `
+      const resolvedSize = size ?? ${onlyTheme.entry.defaultSize ?? 24};
+      return h(${onlySymbol}, {
+        ...attrs,
+        width: props.width ?? resolvedSize,
+        height: props.height ?? resolvedSize,
+        strokeWidth: props.strokeWidth ?? ${onlyTheme.entry.strokeWidth === undefined ? "undefined" : onlyTheme.entry.strokeWidth},
+        color: props.color,
+        fill: props.fill,
+        stroke: props.stroke,
+        focusable: props.focusable,
+        alt: props.alt,
+        title: props.title,
+        draggable: props.draggable,
+        class: cn("moe-icon", ${JSON.stringify(onlyTheme.entry.className ?? "")}, className),
+      });` : `
       const theme = (state?.theme.value ?? ${JSON.stringify(config.defaultTheme)}) as Theme;
       const resolvedSize = size ?? themeDefaultSize[theme] ?? 24;
       return h(component.value, {
@@ -439,7 +465,7 @@ export const ${pascal} = /* @__PURE__ */ defineComponent({
         title: props.title,
         draggable: props.draggable,
         class: cn("moe-icon", themeClassName[theme], className),
-      });
+      });`}
     };
   },
 });
@@ -472,13 +498,16 @@ function parseSvgNodes(source: string): { viewBox: string; rootAttrs: readonly [
   const viewBox = svg[0].match(/\bviewBox\s*=\s*["']([^"']+)["']/i)?.[1] ?? "0 0 24 24";
   const rootAttrs: [string, string][] = [];
   const allowedRoot = new Set(["fill", "stroke", "stroke-width", "opacity", "transform", "color", "filter", "mask", "clip-path", "fill-opacity", "stroke-opacity", "stroke-linecap", "stroke-linejoin", "stroke-dasharray", "stroke-dashoffset", "fill-rule", "clip-rule", "role", "aria-hidden", "preserveAspectRatio"]);
+  const rootMetadata = new Set(["viewBox", "width", "height", "xmlns", "xmlns:xlink", "version"]);
   svg[0].replace(/([A-Za-z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g, (_full, name: string, doubleValue?: string, singleValue?: string) => {
-    if (allowedRoot.has(name) && name !== "viewBox") rootAttrs.push([name, doubleValue ?? singleValue ?? ""]);
+    if (allowedRoot.has(name)) rootAttrs.push([name, doubleValue ?? singleValue ?? ""]);
+    else if (!rootMetadata.has(name)) throw new Error(`unsupported SVG root attribute "${name}" in Vanilla raw fallback`);
     return "";
   });
   const inner = source.slice((svg.index ?? 0) + svg[0].length).replace(/<\/svg>\s*$/i, "")
     .replace(/^\s*<rect\s+width="24"\s+height="24"\s+fill="#1E1E1E"\s*\/\>\s*<rect\s+width="\d+"\s+height="\d+"\s+transform="translate\(-?\d+(?:\.\d+)? -?\d+(?:\.\d+)?\)"\s+fill="white"\s*\/\>\s*/i, "");
   const tokenRe = /<!--[\s\S]*?-->|<[^>]+>|[^<]+/g;
+  const supportedTags = new Set(["g", "defs", "clipPath", "mask", "filter", "path", "circle", "ellipse", "line", "polyline", "polygon", "rect", "text", "tspan", "use", "image", "linearGradient", "radialGradient", "stop"]);
   for (const match of inner.matchAll(tokenRe)) {
     const token = match[0];
     if (token.startsWith("<!--") || !token.trim()) continue;
@@ -493,9 +522,10 @@ function parseSvgNodes(source: string): { viewBox: string; rootAttrs: readonly [
     const selfClosing = /\/\s*>$/.test(token);
     const body = token.slice(1, token.length - (selfClosing ? 2 : 1)).trim();
     const name = body.match(/^[A-Za-z][\w:.-]*/)?.[0];
-    if (!name) continue;
+    if (!name || !supportedTags.has(name)) throw new Error(`unsupported SVG element "${name ?? token}" in Vanilla raw fallback`);
     const attrs: [string, string][] = [];
     body.slice(name.length).replace(/([A-Za-z_:][\w:.-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g, (_full, attr: string, doubleValue?: string, singleValue?: string, bareValue?: string) => {
+      if (/^on/i.test(attr)) throw new Error(`unsupported SVG event attribute "${attr}" in Vanilla raw fallback`);
       attrs.push([attr, doubleValue ?? singleValue ?? bareValue ?? ""]);
       return "";
     });

@@ -24,6 +24,26 @@ describe("toPascalCase", () => {
 });
 
 describe("planGeneratedFiles", () => {
+  it("generates direct icon proxies without theme context for one theme", () => {
+    for (const target of ["react", "vue"] as const) {
+      const single: MoeiconsConfigFile = {
+        ...config,
+        target,
+        icons: ["arrow-bold-right"],
+        themes: { outline: { styleGroup: "moe-outline", defaultSize: 37, strokeWidth: 3, className: "text-red-500" } },
+      };
+      const result = planGeneratedFiles(single, "src/moeicons");
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      const proxy = String(result.files.find((file) => file.path.endsWith(target === "react" ? "icons/ArrowBoldRight.tsx" : "icons/ArrowBoldRight.ts"))?.content);
+      expect(proxy).not.toContain("useMoeiconsTheme");
+      expect(proxy).not.toContain("MOEICONS_THEME_KEY");
+      expect(proxy).not.toContain("switch (theme)");
+      expect(proxy).toContain("37");
+      expect(proxy).toContain("text-red-500");
+    }
+  });
+
   it("generates types, per-icon proxies, and barrel without a global registry", () => {
     const result = planGeneratedFiles(config, "src/moeicons");
     expect(result.ok).toBe(true);

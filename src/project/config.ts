@@ -475,6 +475,10 @@ export function validateConfigDocument(
   if (document.kind !== "ok") return document;
   try {
     if (options.lenientCatalog !== true) {
+      const raw = asRecord(document.value);
+      if (document.version === 1 && (raw.target !== undefined || raw.integration !== undefined)) {
+        return { kind: "invalid", message: "v1 config cannot set target or integration; migrate to schema v2/v3" };
+      }
       const canonical = loadGeneratedConfigPackage().validateConfig(document.value, sourceCatalog);
       if (!canonical.ok) {
         if (canonical.kind === "unsupported" && typeof canonical.version === "number") {
@@ -482,6 +486,29 @@ export function validateConfigDocument(
         }
         return { kind: "invalid", message: canonical.message ?? "invalid configuration" };
       }
+      // The vendored contract owns normalization. Only the release-specific
+      // bitmap variant check and legacy in-memory version remain CLI concerns.
+      const normalized = canonical.config as MoeiconsConfigFile;
+      for (const [name, theme] of Object.entries(normalized.themes)) {
+        const group = findCatalogStyleGroup(theme.styleGroup, sourceCatalog);
+        if (group?.type !== "bitmap" || !group.variants?.length) continue;
+        const variantId = `${group.id}-${theme.imageSize ?? 256}-${theme.format ?? "webp"}`;
+        if (!group.variants.includes(variantId)) {
+          return { kind: "invalid", message: `variant ${variantId} is unavailable for ${group.id}` };
+        }
+      }
+      const warnings = [...(canonical.warnings ?? [])];
+      for (const [name, value] of Object.entries(raw.themes as Record<string, unknown>)) {
+        const styles = (value as Record<string, unknown>).styles;
+        if (Array.isArray(styles) && styles.length > 0) {
+          warnings.push(`theme "${name}": "styles" is deprecated and has no effect; remove it from your config`);
+        }
+      }
+      return {
+        kind: "ok",
+        config: { ...normalized, schemaVersion: document.version === 3 ? 3 : 2 },
+        warnings,
+      };
     }
     if (document.version === 1) {
       const validated = validateV1Config(document.value, sourceCatalog, options.lenientCatalog === true);

@@ -211,7 +211,7 @@ describe("E2E-C4 vanilla project runtime", () => {
 
   it("keeps SVG root paint and default dimensions in generated Vanilla factories", () => {
     const files = archiveFiles();
-    const source = new TextEncoder().encode('<svg viewBox="0 0 24 24" opacity="0.4" stroke-width="3"><path stroke="black" stroke-width="2" d="M0 0"/></svg>');
+    const source = new TextEncoder().encode('<svg viewBox="0 0 24 24" opacity="0.4" stroke-width="3" preserveAspectRatio="xMidYMid meet"><path stroke="black" stroke-width="2" d="M0 0"/></svg>');
     files["assets/moe-outline/ui-search.svg"] = source;
     const manifest = JSON.parse(new TextDecoder().decode(files["assets/manifest.json"])) as { assets: Array<{ path: string; size: number; sha256: string }> };
     const entry = manifest.assets.find((asset) => asset.path === "moe-outline/ui-search.svg")!;
@@ -224,8 +224,21 @@ describe("E2E-C4 vanilla project runtime", () => {
     const factory = String(plan.files.find((file) => file.path === "src/moeicons/moe-outline/UiSearch.ts")?.content);
     expect(factory).toContain('svg.setAttribute("opacity", "0.4")');
     expect(factory).toContain('svg.setAttribute("stroke-width", "3")');
+    expect(factory).toContain('svg.setAttribute("preserveAspectRatio", "xMidYMid meet")');
     expect(factory).toContain("svg.setAttribute('width', '24')");
     expect(factory).toContain('node0.setAttribute("stroke", "currentColor")');
     expect(factory).not.toContain('node0.setAttribute("stroke-width", "2")');
+  });
+
+  it("fails explicitly when a legacy raw SVG uses unsupported root syntax", () => {
+    const files = archiveFiles();
+    const source = new TextEncoder().encode('<svg viewBox="0 0 24 24" vector-effect="non-scaling-stroke"><path d="M0 0"/></svg>');
+    files["assets/moe-outline/ui-search.svg"] = source;
+    const manifest = JSON.parse(new TextDecoder().decode(files["assets/manifest.json"])) as { assets: Array<{ path: string; size: number; sha256: string }> };
+    const entry = manifest.assets.find((asset) => asset.path === "moe-outline/ui-search.svg")!;
+    entry.size = source.byteLength;
+    entry.sha256 = createHash("sha256").update(source).digest("hex");
+    files["assets/manifest.json"] = new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, assets: manifest.assets }));
+    expect(() => planGeneratedFiles(config, "src/moeicons", { archiveFiles: files })).toThrow(/unsupported SVG root attribute "vector-effect"/);
   });
 });
