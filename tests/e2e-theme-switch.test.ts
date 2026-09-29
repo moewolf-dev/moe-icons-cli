@@ -52,6 +52,7 @@ describe("E2E-07 theme-switch contract", () => {
     if (!plan.ok) return;
     const proxy = plan.files.find((f) => f.path.endsWith("icons/ArrowBoldRight.tsx"))?.content ?? "";
     expect(proxy).toContain("useMoeiconsTheme");
+    expect(proxy).toContain('import type { Theme } from "../types";');
     expect(proxy).toContain("switch (theme)");
     // User call sites must use logical theme keys, never style group ids.
     expect(proxy).toContain('case "outline":');

@@ -228,6 +228,7 @@ export function useMoeiconsTheme(): MoeiconsThemeState {
 import type { IconProps } from "../types";
 ${singleTheme ? "" : 'import { useMoeiconsTheme } from "../provider";'}
 import { cn } from "../cn";
+${singleTheme ? "" : 'import type { Theme } from "../types";'}
 import * as React from "react";
 ${ownImports}
 
