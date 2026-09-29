@@ -9,6 +9,7 @@ import {
   renameSync,
   readdirSync,
   copyFileSync,
+  symlinkSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -84,7 +85,7 @@ describe("CLI init + generate", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("init creates a v2 config and never overwrites an existing one", async () => {
+  it("init creates a v3 config and never overwrites an existing one", async () => {
     const { runtime, setCwd } = makeRuntime();
     setCwd(dir);
     const code = await main(["init", "--json", "--yes"], runtime);
@@ -92,7 +93,7 @@ describe("CLI init + generate", () => {
     const configPath = join(dir, "moeicons.config.jsonc");
     expect(existsSync(configPath)).toBe(true);
     const config = parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
-    expect(config.schemaVersion).toBe(2);
+    expect(config.schemaVersion).toBe(3);
     expect(config.target).toBe("react");
 
     // second init must not overwrite
@@ -116,7 +117,7 @@ describe("CLI init + generate", () => {
     expect(config.target).toBe("vue");
   });
 
-  it("generate writes proxy files into the configured output dir", async () => {
+  it("generate requires a pinned install before writing proxy files", async () => {
     const { runtime, setCwd } = makeRuntime();
     setCwd(dir);
     await main(["init", "--yes"], runtime);
@@ -127,12 +128,8 @@ describe("CLI init + generate", () => {
     writeFileSync(configPath, JSON.stringify(config, null, 2));
 
     const code = await main(["generate", "--json"], runtime);
-    expect(code).toBe(0);
-    expect(existsSync(join(dir, "src", "moeicons", "registry.ts"))).toBe(true);
-    expect(existsSync(join(dir, "src", "moeicons", "icons", "ArrowBoldRight.tsx"))).toBe(true);
-    expect(existsSync(join(dir, "src", "moeicons", "icons", "UserAccountCircle.tsx"))).toBe(true);
-    const registry = readFileSync(join(dir, "src", "moeicons", "registry.ts"), "utf8");
-    expect(registry).toContain("ArrowBoldRight");
+    expect(code).toBe(1);
+    expect(existsSync(join(dir, "src", "moeicons", "registry.ts"))).toBe(false);
   });
 
   it("generate fails cleanly when no config exists", async () => {
@@ -158,7 +155,7 @@ describe("CLI init + generate", () => {
     const userFile = join(dir, "src", "moeicons", "user-note.md");
     mkdirSync(join(dir, "src", "moeicons"), { recursive: true });
     writeFileSync(userFile, "keep me");
-    expect(await main(["generate"], runtime)).toBe(0);
+    expect(await main(["generate"], runtime)).toBe(1);
     expect(readFileSync(userFile, "utf8")).toBe("keep me");
   });
 
@@ -176,6 +173,7 @@ describe("CLI init + generate", () => {
     mkdirSync(join(dir, "src", "moeicons", "icons"), { recursive: true });
     writeFileSync(join(dir, ".moeicons", "catalog.json"), catalog);
     writeFileSync(join(dir, "src", "moeicons", "icons", "Old.tsx"), stale);
+    writeFileSync(join(dir, "src", "moeicons", "registry.ts"), stale);
     writeFileSync(join(dir, "src", "moeicons", "user-note.md"), "keep me");
     writeFileSync(
       join(dir, ".moeicons", "install-metadata.json"),
@@ -191,6 +189,7 @@ describe("CLI init + generate", () => {
         managedFiles: {
           ".moeicons/catalog.json": sha256Bytes(catalog),
           "src/moeicons/icons/Old.tsx": sha256Bytes(stale),
+          "src/moeicons/registry.ts": sha256Bytes(stale),
         },
       }),
     );
@@ -220,12 +219,14 @@ describe("CLI init + generate", () => {
     const result = await runGenerateUseCase(context, fs, { noTailwind: true, reconcileInstalled: true });
     expect(result.ok).toBe(true);
     expect(existsSync(join(dir, "src", "moeicons", "icons", "Old.tsx"))).toBe(false);
+    expect(existsSync(join(dir, "src", "moeicons", "registry.ts"))).toBe(false);
     expect(existsSync(join(dir, "src", "moeicons", "icons", "UiSearch.tsx"))).toBe(true);
     expect(readFileSync(join(dir, "src", "moeicons", "user-note.md"), "utf8")).toBe("keep me");
     const next = parseInstallMetadata(
       readFileSync(join(dir, ".moeicons", "install-metadata.json"), "utf8"),
     );
     expect(next?.managedFiles["src/moeicons/icons/Old.tsx"]).toBeUndefined();
+    expect(next?.managedFiles["src/moeicons/registry.ts"]).toBeUndefined();
     expect(next?.managedFiles["src/moeicons/icons/UiSearch.tsx"]).toMatch(/^[a-f0-9]{64}$/);
   });
 
@@ -324,6 +325,45 @@ describe("CLI init + generate", () => {
     expect(existsSync(join(dir, ".moeicons", "install-metadata.json"))).toBe(false);
   });
 
+  it("rejects case and file-directory managed path collisions before writing", () => {
+    const fs_ = { mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, readdirSync, copyFileSync };
+    expect(() => executeManagedReconcile(dir, {
+      "src/moeicons/Icon.ts": "one",
+      "src/moeicons/icon.ts": "two",
+    }, [], fs_)).toThrow("duplicate managed path");
+    expect(() => executeManagedReconcile(dir, {
+      "src/moeicons/icons": "one",
+      "src/moeicons/icons/Icon.ts": "two",
+    }, [], fs_)).toThrow("file and directory paths collide");
+    expect(existsSync(join(dir, "src", "moeicons"))).toBe(false);
+  });
+
+  it("continues restoring backups after an injected rollback cleanup error", () => {
+    const first = join(dir, "src", "moeicons", "a.ts");
+    const second = join(dir, "src", "moeicons", "b.ts");
+    mkdirSync(join(first, ".."), { recursive: true });
+    writeFileSync(first, "old a");
+    writeFileSync(second, "old b");
+    let renames = 0;
+    expect(() => executeManagedReconcile(dir, {
+      "src/moeicons/a.ts": "new a",
+      "src/moeicons/b.ts": "new b",
+    }, [], {
+      mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, copyFileSync,
+      renameSync: (...args: Parameters<typeof renameSync>) => {
+        renames++;
+        if (renames === 4) throw new Error("commit failure");
+        return renameSync(...args);
+      },
+      rmSync: (path, options) => {
+        if (String(path).endsWith("/src/moeicons/a.ts")) throw new Error("rollback cleanup failure");
+        return rmSync(path, options);
+      },
+    })).toThrow("recovery errors");
+    expect(readFileSync(first, "utf8")).toBe("old a");
+    expect(readFileSync(second, "utf8")).toBe("old b");
+  });
+
   it("restores generated files when the staging→output rename fails", () => {
     const output = join(dir, "src", "moeicons");
     const oldFile = join(output, "old.ts");
@@ -343,7 +383,6 @@ describe("CLI init + generate", () => {
     expect(() =>
       executeGeneratedFilesDir(
         [
-          { path: "src/moeicons/old.ts", content: "new content" },
           { path: "src/moeicons/new.ts", content: "new file" },
         ],
         dir,
@@ -364,14 +403,14 @@ describe("CLI init + generate", () => {
     expect(existsSync(join(output, "new.ts"))).toBe(false);
   });
 
-  it("removes stale managed files that are absent from the new plan", () => {
+  it("refuses an existing destination when ownership metadata is unavailable", () => {
     const output = join(dir, "src", "moeicons");
     mkdirSync(join(output, "icons"), { recursive: true });
     writeFileSync(join(output, "registry.ts"), `${GENERATED_HEADER}\nold registry`);
     writeFileSync(join(output, "icons", "OldOnly.tsx"), `${GENERATED_HEADER}\nold proxy`);
     writeFileSync(join(output, "user-note.md"), "keep me");
 
-    executeGeneratedFilesDir(
+    expect(() => executeGeneratedFilesDir(
       [
         { path: "src/moeicons/registry.ts", content: "new registry" },
         { path: "src/moeicons/icons/NewOnly.tsx", content: "new proxy" },
@@ -388,15 +427,15 @@ describe("CLI init + generate", () => {
         readdirSync,
         copyFileSync,
       },
-    );
+    )).toThrow("generated path collides with an unowned user file: registry.ts");
 
-    expect(readFileSync(join(output, "registry.ts"), "utf8")).toBe("new registry");
-    expect(readFileSync(join(output, "icons", "NewOnly.tsx"), "utf8")).toBe("new proxy");
-    expect(existsSync(join(output, "icons", "OldOnly.tsx"))).toBe(false);
+    expect(readFileSync(join(output, "registry.ts"), "utf8")).toContain("old registry");
+    expect(existsSync(join(output, "icons", "NewOnly.tsx"))).toBe(false);
+    expect(readFileSync(join(output, "icons", "OldOnly.tsx"), "utf8")).toContain("old proxy");
     expect(readFileSync(join(output, "user-note.md"), "utf8")).toBe("keep me");
   });
 
-  it("cleans leftover .staging and .bak directories before a new run", () => {
+  it("leaves unrelated .staging and .bak directories untouched", () => {
     const output = join(dir, "src", "moeicons");
     const staging = `${output}.staging`;
     const backup = `${output}.bak`;
@@ -423,10 +462,33 @@ describe("CLI init + generate", () => {
       },
     );
 
-    expect(existsSync(staging)).toBe(false);
-    expect(existsSync(backup)).toBe(false);
+    expect(readFileSync(join(staging, "icons", "stale.tsx"), "utf8")).toBe("stale staging file");
+    expect(readFileSync(join(backup, "icons", "stale.tsx"), "utf8")).toBe("stale backup file");
     expect(readFileSync(join(output, "registry.ts"), "utf8")).toBe("new registry");
     expect(readFileSync(join(output, "user-note.md"), "utf8")).toBe("keep me");
+  });
+
+  it("rejects output escape and symbolic-link escape before writing", () => {
+    const outside = mkdtempSync(join(tmpdir(), "cli-outside-"));
+    const fs_ = { mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, readdirSync, copyFileSync };
+    try {
+      expect(() => executeGeneratedFilesDir([{ path: "../outside/x.ts", content: "x" }], dir, "../outside", fs_)).toThrow();
+      expect(() => executeGeneratedFilesDir([{ path: "x.ts", content: "x" }], dir, ".", fs_)).toThrow();
+      symlinkSync(outside, join(dir, "linked"));
+      expect(() => executeGeneratedFilesDir([{ path: "linked/x.ts", content: "x" }], dir, "linked", fs_)).toThrow();
+      expect(existsSync(join(outside, "x.ts"))).toBe(false);
+    } finally { rmSync(outside, { recursive: true, force: true }); }
+  });
+
+  it("keeps the original output when copying a user file fails", () => {
+    const output = join(dir, "src", "moeicons");
+    mkdirSync(output, { recursive: true });
+    writeFileSync(join(output, "user.ts"), "original user content");
+    const fs_ = { mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, readdirSync,
+      copyFileSync: () => { throw new Error("simulated copy failure"); } };
+    expect(() => executeGeneratedFilesDir([{ path: "src/moeicons/index.ts", content: "new" }], dir, "src/moeicons", fs_)).toThrow("simulated copy failure");
+    expect(readFileSync(join(output, "user.ts"), "utf8")).toBe("original user content");
+    expect(existsSync(join(output, "index.ts"))).toBe(false);
   });
 
   it("preserves nested user-owned files when managed files share nearby paths", () => {
@@ -451,7 +513,7 @@ describe("CLI init + generate", () => {
       },
     );
 
-    expect(existsSync(join(output, "icons", "Legacy.tsx"))).toBe(false);
+    expect(readFileSync(join(output, "icons", "Legacy.tsx"), "utf8")).toContain("old managed file");
     expect(readFileSync(join(output, "icons", "NewIcon.tsx"), "utf8")).toBe("new managed file");
     expect(readFileSync(join(output, "icons", "notes", "README.md"), "utf8")).toBe(
       "keep nested note",

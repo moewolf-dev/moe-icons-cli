@@ -18,6 +18,8 @@ export interface InstallMetadata {
   readonly catalogSha256: string;
   readonly installedAt: string;
   readonly managedFiles: Readonly<Record<string, string>>;
+  /** Last successfully generated project proxy root; used for safe migrations. */
+  readonly generatedOutputDir?: string;
   /** Verified target subtree hash/size recorded at install time. */
   readonly targetSha256?: string;
   readonly targetFileCount?: number;
@@ -53,7 +55,8 @@ function safeManagedPath(path: string): boolean {
     !path.startsWith("/") &&
     !/^[A-Za-z]:/.test(path) &&
     !path.includes("\\") &&
-    !path.split("/").includes("..")
+    path.split("/").every((part) => part.length > 0 && part !== "." && part !== "..") &&
+    ![".git", "node_modules"].includes(path.split("/")[0] ?? "")
   );
 }
 
@@ -71,6 +74,7 @@ export function parseInstallMetadata(raw: string, opts: InstallMetadataParseOpti
       "catalogSha256",
       "installedAt",
       "managedFiles",
+      "generatedOutputDir",
       "targetSha256",
       "targetFileCount",
       "targetByteCount",
@@ -124,6 +128,9 @@ export function parseInstallMetadata(raw: string, opts: InstallMetadataParseOpti
     )
       return undefined;
     const managedFiles = value.managedFiles as Record<string, unknown>;
+    if (value.generatedOutputDir !== undefined &&
+        (typeof value.generatedOutputDir !== "string" || !safeManagedPath(value.generatedOutputDir) ||
+         value.generatedOutputDir.split("/").some((part) => !part || part === "." || part === ".."))) return undefined;
     if (
       Object.keys(managedFiles).length === 0 ||
       Object.entries(managedFiles).some(

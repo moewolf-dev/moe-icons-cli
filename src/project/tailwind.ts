@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { CliError } from "../errors/index.js";
 import { CLSX_VERSION_RANGE, TAILWIND_MERGE_VERSION_RANGE } from "../generator/cn.js";
 import { applyEdits, modify } from "jsonc-parser";
 
@@ -118,8 +117,8 @@ export function moeiconsContentGlob(
 }
 
 /**
- * Apply Tailwind content injection. Throws CliError(TAILWIND_VERSION_UNSUPPORTED)
- * for v4 when integration is requested.
+ * Apply Tailwind v3 content injection. Tailwind v4 discovers source files
+ * automatically, so generated components need no config rewrite.
  */
 export function planTailwindIntegration(
   projectRoot: string,
@@ -143,10 +142,7 @@ export function planTailwindIntegration(
     return { files: [], notes: ["no Tailwind config found; skipped content injection"] };
   }
   if (detected.kind === "v4") {
-    throw new CliError(
-      "TAILWIND_VERSION_UNSUPPORTED",
-      "Tailwind CSS v4 was detected; this CLI release only auto-integrates Tailwind v3. Pass --no-tailwind to skip Tailwind config changes.",
-    );
+    return { files: [], notes: ["Tailwind CSS v4 detected; generated icons use explicit dimensions and need no config rewrite"] };
   }
   if (detected.kind === "unknown") {
     return {

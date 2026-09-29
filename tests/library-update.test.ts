@@ -31,6 +31,7 @@ describe("atomic library update", () => {
     expect(result.artifactVersion).toBe("0.0.18");
     expect(existsSync(join(project, "src/moeicons/icons/UiSearch.tsx"))).toBe(true);
     expect(JSON.parse(readFileSync(join(project, ".moeicons/install-metadata.json"), "utf8")).artifactVersion).toBe("0.0.18");
+    expect(JSON.parse(readFileSync(join(project, ".moeicons/artifact/package.json"), "utf8")).type).toBe("module");
   });
 
   it("keeps the old installation byte-for-byte when commit fails", async () => {

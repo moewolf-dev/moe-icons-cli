@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { runProInstallUseCase } from "../src/core/pro-install.js";
+import { runLibraryUpdateUseCase } from "../src/core/library-update.js";
 import { parseInstallMetadata, sha256Bytes } from "../src/project/install-metadata.js";
 import { writeFreeReleaseFixture } from "./helpers/free-release-fixture.js";
 import type { CommandContext } from "../src/core/context.js";
@@ -169,6 +170,20 @@ describe("DEV-G10-R1 two-phase Pro bitmap install", () => {
     expect(metadata?.bitmapShardSetSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(shardCalls.filter((call) => call.kind === "api").every((call) => call.auth === "Bearer access-fixture")).toBe(true);
     expect(shardCalls.filter((call) => call.kind === "r2").every((call) => call.auth === null)).toBe(true);
+    const updated = await runLibraryUpdateUseCase(
+      context(dir, {
+        MOEICONS_CACHE_DIR: join(dir, ".cache"),
+        MOEICONS_PRO_DESCRIPTOR_URL: "http://127.0.0.1:1/v1/icon-library/pro/artifact-descriptor",
+        MOEICONS_BITMAP_SHARD_DESCRIPTOR_URL: "http://127.0.0.1:1/v1/icon-library/pro/bitmap-shard-descriptor",
+      }),
+      { fs: fs_, auth: { tokenStore: store() }, fetch: fetchMock, allowedProHosts: ["127.0.0.1:1"] },
+      { tier: "pro", version: VERSION, descriptorSha256: meta.descriptorSha },
+    );
+    expect(updated.artifactVersion).toBe(VERSION);
+    const afterUpdate = parseInstallMetadata(readFileSync(join(dir, ".moeicons", "install-metadata.json"), "utf8"), {});
+    expect(afterUpdate?.bitmapShards).toHaveLength(1);
+    expect(afterUpdate?.bitmapShardSetSha256).toBe(metadata?.bitmapShardSetSha256);
+    expect(JSON.parse(readFileSync(join(dir, ".moeicons", "artifact", "package.json"), "utf8")).type).toBe("module");
   });
 
   it("DEV-G10-R2: target and tuples come from a single config snapshot", async () => {

@@ -158,6 +158,19 @@ export interface FetchBitmapShardsDeps {
    * fetches the newly selected tuple.
    */
   readonly existingPins?: readonly BitmapShard[];
+  /** W2-B6: coarse per-tuple + byte-level progress for the UI. */
+  readonly onProgress?: (event: BitmapShardFetchProgress) => void;
+}
+
+/** W2-B6: progress events emitted while obtaining selected shards. */
+export interface BitmapShardFetchProgress {
+  readonly tuple: BitmapShardTuple;
+  /** 1-based index of the tuple being processed. */
+  readonly index: number;
+  readonly total: number;
+  readonly phase: "reuse" | "descriptor" | "download" | "done";
+  readonly downloadedBytes?: number;
+  readonly totalBytes?: number;
 }
 
 export interface ResolvedBitmapShards {
@@ -198,7 +211,10 @@ export async function fetchSelectedBitmapShards(
     existingByTuple.set(tupleKey({ styleGroupId: pin.styleGroupId, imageSize: pin.imageSize, format: pin.format }), pin);
   }
   let downloadedBytes = 0;
-  for (const request of requests) {
+  for (const [offset, request] of requests.entries()) {
+    const index = offset + 1;
+    const total = requests.length;
+    const tuple: BitmapShardTuple = { styleGroupId: request.styleGroupId, imageSize: request.imageSize, format: request.format };
     const published = existingByTuple.get(tupleKey(request));
     if (published) {
       // Re-verify the cached pinned shard; a miss/poison falls through to fetch.
@@ -211,11 +227,13 @@ export async function fetchSelectedBitmapShards(
         );
         Object.assign(files, cached.files);
         pins.push(cached.pins[0] as BitmapShard);
+        deps.onProgress?.({ tuple, index, total, phase: "reuse" });
         continue;
       } catch {
         // Fall through: re-fetch this tuple online.
       }
     }
+    deps.onProgress?.({ tuple, index, total, phase: "descriptor" });
     const descriptor: BitmapShardDescriptor = await fetchBitmapShardDescriptor(
       {
         version: deps.version,
@@ -246,7 +264,10 @@ export async function fetchSelectedBitmapShards(
       ...(deps.allowLoopback ? { allowLoopback: true } : {}),
       ...(deps.signal ? { signal: deps.signal } : {}),
       ...(deps.statfs ? { statfs: deps.statfs } : {}),
+      onProgress: ({ downloadedBytes: shardBytes, totalBytes }) =>
+        deps.onProgress?.({ tuple, index, total, phase: "download", downloadedBytes: shardBytes, ...(totalBytes !== undefined ? { totalBytes } : {}) }),
     });
+    deps.onProgress?.({ tuple, index, total, phase: "done", downloadedBytes: descriptor.size, totalBytes: descriptor.size });
     downloadedBytes += verified.descriptor.size;
     if (downloadedBytes > BITMAP_SHARD_BUDGET.totalDownloadBytes) {
       throw new CliError("VALIDATION_ERROR", `bitmap shard total download exceeds the budget (${BITMAP_SHARD_BUDGET.totalDownloadBytes})`);
@@ -273,6 +294,8 @@ export interface EnsureBitmapShardsDeps {
   readonly signal?: AbortSignal;
   readonly statfs?: (dir: string) => { readonly availableBytes: number } | undefined;
   readonly existingPins?: readonly BitmapShard[];
+  /** W2-B6: per-tuple progress for the configured-shard fetch. */
+  readonly onProgress?: (event: BitmapShardFetchProgress) => void;
 }
 
 export interface ConfiguredBitmapShards {
@@ -315,6 +338,7 @@ export async function resolveConfiguredBitmapShards(
     ...(deps.signal ? { signal: deps.signal } : {}),
     ...(deps.statfs ? { statfs: deps.statfs } : {}),
     ...(deps.existingPins ? { existingPins: deps.existingPins } : {}),
+    ...(deps.onProgress ? { onProgress: deps.onProgress } : {}),
   });
   return {
     tuples,

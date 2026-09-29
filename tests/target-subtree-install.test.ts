@@ -134,8 +134,8 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
   });
 
   it("routes pro installs for all four targets through the authenticated flow with a local mock", async () => {
-    writeConfig({ schemaVersion: 2, tier: "pro", target: "react", outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"] });
     for (const target of TARGETS) {
+      writeConfig({ schemaVersion: 2, tier: "pro", target, outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"] });
       const meta = writeFreeReleaseFixture(fixture, { tier: "pro", useBundledCatalog: true });
       const archive = new Uint8Array(readFileSync(join(fixture, meta.freeName)));
       const metadataArchive = new Uint8Array(readFileSync(join(fixture, meta.metadataName)));

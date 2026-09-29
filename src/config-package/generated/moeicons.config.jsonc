@@ -5,16 +5,10 @@
   "outputDir": "src/moeicons",
   "defaultTheme": "outline",
   "themes": {
-    // SVG themes: one entry per style group visible in this tier.
-    "lite-outline": {
-      "styleGroup": "moe-lite-outline"
-    },
     "outline": {
       "styleGroup": "moe-outline"
     },
-    "solid": {
-      "styleGroup": "moe-solid"
-    },
+    // "solid": { "styleGroup": "moe-solid" },
     // Bitmap style groups are commented out and selected with format/imageSize:
     // cute — bitmap style (moe-cute-3d)
     // format options: webp, png
@@ -24,21 +18,15 @@
     //   "format": "webp",
     //   "imageSize": 256
     // },
-    // Set defaultTheme above to one of: "lite-outline", "outline", "solid"
+    // Set defaultTheme above to any enabled theme key.
   },
-  // Comment out individual IDs or a complete prefix group to exclude it.
+  // Add icon ids from .moeicons/catalog.json as needed.
   "icons": {
-    // archive icons
-    "archive": [
-      "archive",
-      "archive-box",
-      "archive-box-close-open"
+    "arrow": [
+      "arrow-bold-right"
     ],
-    // ui icons
     "ui": [
-      "ui-search",
-      "ui-menu",
-      "ui-help"
+      "ui-search"
     ]
   },
   "missingIconPolicy": "fallback",

@@ -2,6 +2,7 @@ import { ConfirmPrompt, SelectPrompt, isCancel } from "@clack/core";
 import type { Readable, Writable } from "node:stream";
 import type { UiChoice } from "../core/context.js";
 import type { UiTheme } from "./theme.js";
+import { CONFIRM_KEY_HINTS, SELECT_KEY_HINTS, renderKeyHints } from "../tui/components.js";
 import { visibleWidth } from "./banner.js";
 
 export { isCancel };
@@ -30,6 +31,11 @@ export interface ConfirmFrameState {
   readonly value: boolean;
 }
 
+/** W3-D: opt-in key hints so existing golden output stays stable. */
+export interface FrameRenderOptions {
+  readonly hints?: boolean;
+}
+
 /** Format `1. label` with stable width for lists of 10+. */
 export function formatChoiceNumber(index: number, total: number, label: string): string {
   const width = String(Math.max(total, 1)).length;
@@ -37,7 +43,7 @@ export function formatChoiceNumber(index: number, total: number, label: string):
 }
 
 /** Renders every option with 1-based numbers. Back separators are blank lines. */
-export function renderSelectFrame(prompt: SelectFrameState, message: string, theme: UiTheme): string {
+export function renderSelectFrame(prompt: SelectFrameState, message: string, theme: UiTheme, options: FrameRenderOptions = {}): string {
   const { pointer, submit, cancel } = theme.symbols;
   const total = prompt.options.length;
   const numbered = (index: number, label: string) => formatChoiceNumber(index, total, label);
@@ -56,10 +62,11 @@ export function renderSelectFrame(prompt: SelectFrameState, message: string, the
     if (index === prompt.cursor) lines.push(theme.blue(`${pointer} ${text}`));
     else lines.push(`${inactivePad}${text}`);
   }
+  if (options.hints) lines.push(renderKeyHints(SELECT_KEY_HINTS, theme));
   return lines.join("\n");
 }
 
-export function renderConfirmFrame(prompt: ConfirmFrameState, message: string, theme: UiTheme): string {
+export function renderConfirmFrame(prompt: ConfirmFrameState, message: string, theme: UiTheme, options: FrameRenderOptions = {}): string {
   const { radio, submit, cancel } = theme.symbols;
   if (prompt.state === "cancel") return theme.red(`${cancel} Cancelled`);
   if (prompt.state === "submit") {
@@ -67,7 +74,7 @@ export function renderConfirmFrame(prompt: ConfirmFrameState, message: string, t
   }
   const yes = prompt.value ? theme.blue(`${radio} Yes`) : theme.blue("Yes");
   const no = prompt.value ? theme.red("No") : theme.red(`${radio} No`);
-  return `${message}\n${yes}  ${no}`;
+  return options.hints ? `${message}\n${yes}  ${no}\n${renderKeyHints(CONFIRM_KEY_HINTS, theme)}` : `${message}\n${yes}  ${no}`;
 }
 
 export async function brandedSelect(
@@ -91,6 +98,7 @@ export async function brandedSelect(
         { state: this.state, cursor: this.cursor, options: frameOptions },
         options.message,
         options.theme,
+        { hints: true },
       );
     },
   });
@@ -108,7 +116,7 @@ export async function brandedConfirm(
     ...(options.output ? { output: options.output } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
     render() {
-      return renderConfirmFrame(this, options.message, options.theme);
+      return renderConfirmFrame(this, options.message, options.theme, { hints: true });
     },
   });
   const value = await prompt.prompt();

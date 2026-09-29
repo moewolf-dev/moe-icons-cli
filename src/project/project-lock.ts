@@ -22,7 +22,7 @@ const defaultIo: ProjectLockIo = {
   pid: process.pid,
 };
 
-export async function withProjectLock<T>(projectRoot: string, operation: "install" | "update" | "reload", work: () => Promise<T> | T, io: ProjectLockIo = defaultIo): Promise<T> {
+export async function withProjectLock<T>(projectRoot: string, operation: "install" | "update" | "reload" | "doctor", work: () => Promise<T> | T, io: ProjectLockIo = defaultIo): Promise<T> {
   const path = join(projectRoot, ".moeicons.lock");
   if (io.exists(path)) {
     let stale = false;
@@ -42,7 +42,7 @@ export async function withProjectLock<T>(projectRoot: string, operation: "instal
   finally { if (io.exists(path)) io.remove(path); }
 }
 
-export function withProjectLockSync<T>(projectRoot: string, operation: "install" | "update" | "reload", work: () => T, io: ProjectLockIo = defaultIo): T {
+export function withProjectLockSync<T>(projectRoot: string, operation: "install" | "update" | "reload" | "doctor", work: () => T, io: ProjectLockIo = defaultIo): T {
   const path = join(projectRoot, ".moeicons.lock");
   if (io.exists(path)) {
     let stale = false;

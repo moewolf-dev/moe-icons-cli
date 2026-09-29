@@ -64,12 +64,18 @@ function checkPath(value, field) {
   if (value.includes('\0') || value.includes('\\')) {
     return fail(`${field} must be a POSIX relative path (no backslash/NUL)`);
   }
-  if (value.startsWith('/')) {
+  if (value.startsWith('/') || /^[A-Za-z]:/.test(value)) {
     return fail(`${field} must be relative, not absolute`);
   }
   const segments = value.split('/');
-  if (segments.some((seg) => seg === '..' || seg === '.')) {
+  if (segments.some((seg) => !seg || seg === '..' || seg === '.')) {
     return fail(`${field} must not contain '.' or '..' segments`);
+  }
+  if (field === 'outputDir' && ['.git', '.moeicons', 'node_modules'].includes(segments[0])) {
+    return fail('outputDir cannot use a project control directory');
+  }
+  if (field === 'outputDir' && !/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(value)) {
+    return fail('outputDir must use ASCII letters, digits, _, -, and safe dotted child segments');
   }
   return null;
 }
@@ -145,7 +151,16 @@ function validateConfig(raw, catalog) {
   if (!isRecord(raw.themes)) return fail('themes must be an object');
 
   const themes = {};
+  const themeNames = new Map();
   for (const [name, value] of Object.entries(raw.themes)) {
+    if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)) {
+      return fail(`theme key "${name}" must be lowercase kebab-case`);
+    }
+    const internalName = name.replace(/-/g, '').toLowerCase();
+    if (themeNames.has(internalName)) {
+      return fail(`theme keys "${themeNames.get(internalName)}" and "${name}" generate the same identifier`);
+    }
+    themeNames.set(internalName, name);
     if (!isRecord(value)) return fail(`theme ${name} is invalid`);
     for (const key of Object.keys(value)) {
       if (!ALLOWED_THEME_KEYS.has(key)) return fail(`unknown field "${key}" in theme "${name}"`);
@@ -155,6 +170,11 @@ function validateConfig(raw, catalog) {
     if (!group.tiers.includes(raw.tier)) {
       return fail(`style group "${group.id}" is not available in ${raw.tier} tier`);
     }
+    if (value.format !== undefined && typeof value.format !== 'string') return fail(`theme ${name}.format is invalid`);
+    if (value.imageSize !== undefined && typeof value.imageSize !== 'number') return fail(`theme ${name}.imageSize is invalid`);
+    if (value.defaultSize !== undefined && (typeof value.defaultSize !== 'number' || !Number.isFinite(value.defaultSize) || value.defaultSize <= 0)) return fail(`theme ${name}.defaultSize must be a positive finite number`);
+    if (value.strokeWidth !== undefined && (typeof value.strokeWidth !== 'number' || !Number.isFinite(value.strokeWidth) || value.strokeWidth < 0)) return fail(`theme ${name}.strokeWidth must be a nonnegative finite number`);
+    if (value.className !== undefined && typeof value.className !== 'string') return fail(`theme ${name}.className must be a string`);
     const format = typeof value.format === 'string' ? value.format : undefined;
     if (format !== undefined && !FORMATS.has(format)) return fail(`theme ${name}.format is invalid`);
     const imageSize = typeof value.imageSize === 'number' ? value.imageSize : undefined;

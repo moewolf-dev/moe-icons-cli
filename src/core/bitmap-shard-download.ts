@@ -382,6 +382,8 @@ export async function downloadAndCacheBitmapShard(
     readonly signal?: AbortSignal;
     readonly statfs?: (dir: string) => { readonly availableBytes: number } | undefined;
     readonly timeoutMs?: number;
+    /** W2-B6: byte-level progress for a single shard payload. */
+    readonly onProgress?: (event: { readonly downloadedBytes: number; readonly totalBytes?: number }) => void;
   },
 ): Promise<VerifiedBitmapShard> {
   // DEV-G08-R2: reject an over-budget shard BEFORE issuing any network request,
@@ -412,6 +414,7 @@ export async function downloadAndCacheBitmapShard(
       ...(deps.signal ? { signal: deps.signal } : {}),
       ...(deps.now !== undefined ? { now: deps.now } : {}),
       ...(deps.allowLoopback ? { allowLoopback: true } : {}),
+      ...(deps.onProgress ? { onProgress: deps.onProgress } : {}),
       timeoutMs: deps.timeoutMs ?? BITMAP_SHARD_BUDGET.downloadTimeoutMs,
     },
   );

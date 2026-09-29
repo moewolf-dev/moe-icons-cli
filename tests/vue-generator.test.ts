@@ -21,7 +21,7 @@ describe("planGeneratedFiles (Vue)", () => {
     const paths = result.files.map((f) => f.path);
     expect(paths).toContain("src/moeicons/types.ts");
     expect(paths).toContain("src/moeicons/theme.ts");
-    expect(paths).toContain("src/moeicons/registry.ts");
+    expect(paths).not.toContain("src/moeicons/registry.ts");
     expect(paths).toContain("src/moeicons/provider.ts");
     expect(paths).toContain("src/moeicons/composable.ts");
     expect(paths).toContain("src/moeicons/icons/ArrowBoldRight.ts");
@@ -57,19 +57,18 @@ describe("planGeneratedFiles (Vue)", () => {
     expect(proxy).toContain("defineComponent");
     expect(proxy).toContain("inject");
     expect(proxy).toContain("computed");
-    expect(proxy).toContain("registry[");
+    expect(proxy).toContain("variants[");
     expect(proxy).toContain("state?.theme.value");
   });
 
-  it("generates a registry typed with Vue Component", () => {
+  it("keeps each Vue proxy limited to its own variants", () => {
     const result = planGeneratedFiles(vueConfig, "src/moeicons");
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const registry = result.files.find((f) => f.path.endsWith("registry.ts"))?.content ?? "";
-    expect(registry).toContain('import type { Component } from "vue"');
-    expect(registry).toContain("readonly ArrowBoldRight: Component");
-    expect(registry).toContain('"outline"');
-    expect(registry).toContain('"solid"');
+    const proxy = result.files.find((f) => f.path.endsWith("icons/ArrowBoldRight.ts"))?.content ?? "";
+    expect(proxy).toContain('"outline"');
+    expect(proxy).toContain('"solid"');
+    expect(proxy).not.toContain("UserAccountCircle");
   });
 
   it("preserves hyphens and canonical ids in Vue proxy output", () => {

@@ -52,6 +52,13 @@ function gitHead(repo) {
   }
 }
 
+function matchesHead(repo, pkgRel, digest) {
+  try {
+    const committed = execFileSync("git", ["-C", repo, "show", `HEAD:config-package/${pkgRel}`]);
+    return createHash("sha256").update(committed).digest("hex") === digest;
+  } catch { return false; }
+}
+
 /**
  * Sync the canonical config-package generated copy from a pinned
  * moe-icons-code-library checkout into CLI `src/generated/config-package/`.
@@ -111,6 +118,8 @@ function main() {
     sourceRepo: "moewolf-dev/moe-icons-code-library",
     sourceDir: "config-package",
     sourceCommit: gitHead(repo),
+    sourceCommitExact: Object.entries(MAPPING).every(([pkgRel, localName]) =>
+      matchesHead(repo, pkgRel, files[localName].sha256)),
     files,
   };
   writeFileSync(join(outDir, "SOURCE.json"), `${JSON.stringify(source, null, 2)}\n`);

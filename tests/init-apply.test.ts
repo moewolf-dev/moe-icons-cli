@@ -78,7 +78,7 @@ describe("init apply (E2E-B5)", () => {
     const mainTsx = readFileSync(join(dir, "src", "main.tsx"), "utf8");
     expect(mainTsx).toContain("MoeiconsProvider");
     const css = readFileSync(join(dir, "src", "index.css"), "utf8");
-    expect(css).toContain("moeicons/styles.css");
+    expect(css).not.toContain("moeicons/styles.css");
     expect(out.join("")).toMatch(/Applied|moeicons\.config\.jsonc/);
   });
 

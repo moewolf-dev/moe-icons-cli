@@ -2,23 +2,24 @@
   "schemaVersion": 1,
   "sourceRepo": "moewolf-dev/moe-icons-code-library",
   "sourceDir": "config-package",
-  "sourceCommit": "069f4f7b9cdf7ffd6e24552a737e81aadb985207",
+  "sourceCommit": "c706474fa323331d51e9572b032f655275cb300e",
+  "sourceCommitExact": true,
   "files": {
     "render-config.cjs": {
-      "size": 4770,
-      "sha256": "f7283ebaff11701dbe862366f3ce572942ba3ad2255ebadb0028df827d7ebc72"
+      "size": 5738,
+      "sha256": "a1e21531d85fbc7b1fb540de5105b078c15bbd9fd097956f899524875c69244c"
     },
     "validate-config.cjs": {
-      "size": 8603,
-      "sha256": "4ac53769bc4abbcd73a20636d9e0d6d0cf8ba013c162fb4295d543fddff12c58"
+      "size": 10256,
+      "sha256": "f52b4edee8db791165b1a88bd5097d0c69a4d251eed1c25c593d80a12e7c8fb3"
     },
     "moeicons-config.schema.json": {
-      "size": 3174,
-      "sha256": "8f467d7040db7a8116e86da3ee2b2a7f5930c01ab3f2cae6200f17294c62ef86"
+      "size": 3491,
+      "sha256": "ec02f45b181de967618d40bf4f85c79524ca7c9eeecbf2b47a1f2d0f89d279b8"
     },
     "moeicons.config.jsonc": {
-      "size": 1304,
-      "sha256": "408cd6a0116c89ee5b9d4525a6dda260476d564916b4206943741df1e7f6e716"
+      "size": 1008,
+      "sha256": "a0dea0654a3eb02e36ce7574c3f7d22340690cf01ec154087f4633df3ef69d96"
     }
   }
 }

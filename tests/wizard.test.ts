@@ -58,13 +58,15 @@ describe("wizard TUI (CLI-04)", () => {
     rmSync(releaseDir, { recursive: true, force: true });
   });
 
-  it("selects free install, picks react, confirms root, and writes the managed output", async () => {
-    const { runtime, out, setCwd } = makeTtyRuntime(["2", "1", "y"], env);
+  it("selects free install, picks react, confirms root, writes output, then returns to the menu", async () => {
+    // W3-E1: after install the wizard returns to the home menu; "0" exits.
+    const { runtime, out, setCwd } = makeTtyRuntime(["2", "1", "y", "0"], env);
     setCwd(dir);
     const code = await main([], runtime);
     expect(code).toBe(0);
     expect(out.join("")).toContain("Install moeicons free");
     expect(out.join("")).toContain("Choose an output target");
+    expect(out.join("")).toContain("Install free (react)");
     expect(existsSync(join(dir, "src", "moeicons", ".moeicons-free.marker"))).toBe(true);
     expect(existsSync(join(dir, ".moeicons", "install-metadata.json"))).toBe(true);
   });
@@ -119,7 +121,8 @@ describe("wizard TUI (CLI-04)", () => {
   });
 
   it("skips the project-root confirmation when --yes is set", async () => {
-    const { runtime, setCwd } = makeTtyRuntime(["2", "1"], env);
+    // W3-E1: "0" exits the home menu after the install returns to it.
+    const { runtime, setCwd } = makeTtyRuntime(["2", "1", "0"], env);
     setCwd(dir);
     const code = await main(["--yes"], runtime);
     expect(code).toBe(0);

@@ -11,7 +11,9 @@ permissions:
 
 jobs:
   package:
-    runs-on: ubuntu-latest
+    # Pull-request code may be untrusted; only main/dispatch candidates use the
+    # organization self runner that also performs production packaging.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || fromJSON('["self-hosted","Linux","X64","moe-ci-server"]') }}
     timeout-minutes: 20
     env:
       MOEICONS_PACKAGE_MAKER_REPO: ${{ github.workspace }}/moe-icons-package-maker

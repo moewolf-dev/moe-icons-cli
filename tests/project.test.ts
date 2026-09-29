@@ -176,12 +176,12 @@ describe("readMoeiconsConfig / mergeMoeiconsConfig", () => {
     writeConfig(dir, { schemaVersion: 2, framework: undefined, target: undefined });
     let result = readMoeiconsConfig(dir);
     expect(result.kind).toBe("invalid");
-    if (result.kind === "invalid") expect(result.message).toContain("target is required");
+    if (result.kind === "invalid") expect(result.message).toContain("target must be");
 
     writeConfig(dir, { schemaVersion: 2, target: "react", framework: "react" });
     result = readMoeiconsConfig(dir);
     expect(result.kind).toBe("invalid");
-    if (result.kind === "invalid") expect(result.message).toContain("use target");
+    if (result.kind === "invalid") expect(result.message).toContain("framework");
   });
 
   it("rejects unparseable JSON", () => {
@@ -243,6 +243,15 @@ describe("readMoeiconsConfig / mergeMoeiconsConfig", () => {
     if (result.kind === "invalid") expect(result.message).toContain("missingIconPolicy");
   });
 
+  it("rejects unsafe integration path segments and Windows drive paths", () => {
+    for (const entry of ["src/../main.tsx", "src//main.tsx", "C:/main.tsx"]) {
+      writeConfig(dir, { schemaVersion: 3, framework: undefined, target: "react", integration: { adapter: "vite-react", entry } });
+      const result = readMoeiconsConfig(dir);
+      expect(result.kind).toBe("invalid");
+      if (result.kind === "invalid") expect(result.message).toContain("integration.entry");
+    }
+  });
+
   it("emits a deprecation warning for styles[] but still parses", () => {
     writeConfig(dir, {
       themes: { outline: { styleGroup: "moe-outline", styles: ["outline"] } },
@@ -299,26 +308,24 @@ describe("renderMoeiconsConfigJsonc", () => {
     expect(proJsonc).toContain('"tier": "pro"');
   });
 
-  it("default-selects all icons available in the requested tier", () => {
+  it("default-selects a small set of available icons", () => {
     const jsonc = renderMoeiconsConfigJsonc({ framework: "react", tier: "free" });
-    // Every free icon id should appear in the JSONC (at least ui-search which is a well-known free icon)
+    // The initial config is small enough for a first project build.
     expect(jsonc).toContain('"ui-search"');
-    // Total free icon count: the catalog has 554 icons; they should all be represented
     const matches = (jsonc.match(/"[a-z][a-z0-9-]+"/g) ?? []).filter((s) => !s.includes(":"));
-    // At minimum all icons the catalog lists as available in a free group should be present
-    expect(matches.length).toBeGreaterThan(100);
+    expect(matches.length).toBeLessThan(100);
   });
 
   it("JSONC output can be written and re-parsed successfully", () => {
     const jsonc = renderMoeiconsConfigJsonc({ framework: "react", tier: "free" });
     writeFileSync(join(dir, "moeicons.config.jsonc"), jsonc);
     const result = readMoeiconsConfig(dir);
-    // The rendered config is a valid, parseable JSONC with all catalog icons selected
+    // The rendered config is valid JSONC with two example icons.
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
-      expect(result.config.schemaVersion).toBe(2);
+      expect(result.config.schemaVersion).toBe(3);
       expect(result.config.target).toBe("react");
-      expect(result.config.icons.length).toBeGreaterThan(100);
+      expect(result.config.icons.length).toBe(2);
     }
   });
 

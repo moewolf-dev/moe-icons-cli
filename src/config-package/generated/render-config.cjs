@@ -8,8 +8,8 @@
 // full renderer.
 //
 // Behaviour contract:
-// - schemaVersion 2 output is byte-stable with the historical CLI renderer for
-//   the same catalog/target/tier inputs (semantics and ordering must not drift).
+// - `fullCatalog: true` retains the historical exhaustive renderer for users
+//   who explicitly request it. The default is a small, valid first-run config.
 // - When `integration` is supplied (adapter/entry/style confirmed by the user),
 //   the renderer emits schemaVersion 3 and adds the `integration` block. It
 //   never invents integration paths on its own.
@@ -24,7 +24,7 @@
  * @returns {string} JSONC skeleton text
  */
 function renderMoeiconsConfigJsonc(options) {
-  const ALLOWED = new Set(['target', 'framework', 'tier', 'catalog', 'integration']);
+  const ALLOWED = new Set(['target', 'framework', 'tier', 'catalog', 'integration', 'fullCatalog']);
   for (const key of Object.keys(options)) {
     if (!ALLOWED.has(key)) {
       throw new Error(`unknown render option "${key}"`);
@@ -40,7 +40,10 @@ function renderMoeiconsConfigJsonc(options) {
     .filter((g) => Array.isArray(g.tiers) && g.tiers.includes(tier))
     .sort((a, b) => a.id.localeCompare(b.id));
 
-  const defaultThemeName = 'outline';
+  const fullCatalog = options.fullCatalog === true;
+  const defaultGroup = availableGroups.find((group) => group.id === 'moe-outline') ?? availableGroups.find((group) => group.type !== 'bitmap');
+  if (!defaultGroup) throw new Error(`no SVG style group is available in ${tier} tier`);
+  const defaultThemeName = fullCatalog ? 'outline' : defaultGroup.id.replace(/^moe-/, '');
 
   const themeLines = [];
   for (const group of availableGroups) {
@@ -58,19 +61,26 @@ function renderMoeiconsConfigJsonc(options) {
         `    //   "imageSize": 256`,
         `    // },`,
       );
-    } else {
+    } else if (fullCatalog || group.id === defaultGroup.id) {
       themeLines.push(
         `    ${JSON.stringify(themeName)}: {`,
         `      "styleGroup": ${JSON.stringify(group.id)}`,
         `    },`,
       );
+    } else {
+      themeLines.push(`    // ${JSON.stringify(themeName)}: { "styleGroup": ${JSON.stringify(group.id)} },`);
     }
   }
 
-  const tierGroupIds = new Set(availableGroups.map((g) => g.id));
+  const tierGroupIds = new Set((fullCatalog ? availableGroups : [defaultGroup]).map((g) => g.id));
   const groups = new Map();
-  for (const icon of options.catalog ? options.catalog.icons : []) {
-    if (!icon.availableIn.some((sg) => tierGroupIds.has(sg))) continue;
+  const eligible = (options.catalog ? options.catalog.icons : [])
+    .filter((icon) => icon.availableIn.some((sg) => tierGroupIds.has(sg)));
+  const examples = fullCatalog ? eligible : [
+    ...['arrow-bold-right', 'ui-search'].map((id) => eligible.find((icon) => icon.id === id)).filter(Boolean),
+    ...eligible,
+  ].filter((icon, index, values) => values.findIndex((item) => item.id === icon.id) === index).slice(0, 2);
+  for (const icon of examples) {
     const ids = groups.get(icon.prefix) ?? [];
     ids.push(icon.id);
     groups.set(icon.prefix, ids);
@@ -84,7 +94,7 @@ function renderMoeiconsConfigJsonc(options) {
       '    ],',
     ]);
 
-  const schemaVersion = options.integration ? 3 : 2;
+  const schemaVersion = options.integration || !fullCatalog ? 3 : 2;
   const integrationBlock = options.integration
     ? [
         '',
@@ -116,7 +126,7 @@ function renderMoeiconsConfigJsonc(options) {
       .map((g) => JSON.stringify(g.id.replace(/^moe-/, '')))
       .join(', ')}`,
     '  },',
-    '  // Comment out individual IDs or a complete prefix group to exclude it.',
+    fullCatalog ? '  // Comment out individual IDs or a complete prefix group to exclude it.' : '  // Add more icon ids from .moeicons/catalog.json when needed.',
     '  "icons": {',
     ...iconLines,
     '  },',

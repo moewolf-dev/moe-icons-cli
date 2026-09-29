@@ -84,6 +84,8 @@ export function loginRecoveryChoices(): UiChoice[] {
 }
 
 /** Wizard state machine. No Clack/Commander/process imports. */
+export const HOME_MESSAGE = "Choose an option";
+
 export async function runWizardUseCase(
   context: CommandContext,
   options: {
@@ -91,6 +93,8 @@ export async function runWizardUseCase(
     readonly session?: WizardSessionState;
     readonly getLibraryStatus?: () => Promise<string>;
     readonly getProResourceLabel?: () => Promise<string | undefined>;
+    /** W3-E2: optional single-line recent-task status shown above the menu. */
+    readonly historyLine?: string;
   },
 ): Promise<WizardResult> {
   if (options.json) {
@@ -100,7 +104,8 @@ export async function runWizardUseCase(
   const session = options.session ?? "signed-out";
   const proLabel =
     session === "authenticated" ? await options.getProResourceLabel?.().catch(() => undefined) : undefined;
-  const choice = await context.ui.select("Choose an option", homeChoices(session, proLabel), context.signal);
+  const message = options.historyLine ? `${options.historyLine}\n\n${HOME_MESSAGE}` : HOME_MESSAGE;
+  const choice = await context.ui.select(message, homeChoices(session, proLabel), context.signal);
   // Esc on home == Exit (cancel path); explicit Exit menu item uses via=menu.
   if (choice === undefined) return { ok: true, action: "exit", via: "cancel" };
   if (choice === "exit") return { ok: true, action: "exit", via: "menu" };

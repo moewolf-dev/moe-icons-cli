@@ -19,7 +19,7 @@
     "outputDir": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(?!.*\\.\\.)(?!^/)(?!.*\\\\).*$"
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:/|^)\\.{1,2}(?:/|$))(?!(?:\\.git|\\.moeicons|node_modules)(?:/|$))[A-Za-z0-9_-]+(?:/[A-Za-z0-9_.-]+)*$"
     },
     "defaultTheme": {
       "type": "string",
@@ -30,6 +30,7 @@
     },
     "themes": {
       "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
@@ -50,10 +51,10 @@
             "enum": [64, 128, 256, 512]
           },
           "defaultSize": {
-            "type": "number"
+            "type": "number", "exclusiveMinimum": 0
           },
           "strokeWidth": {
-            "type": "number"
+            "type": "number", "minimum": 0
           },
           "className": {
             "type": "string"
@@ -88,12 +89,12 @@
         "entry": {
           "type": "string",
           "minLength": 1,
-          "pattern": "^(?!.*\\.\\.)(?!^/)(?!.*\\\\).*$"
+          "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*\\u0000)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/]+(?:/[^/]+)*$"
         },
         "style": {
           "type": "string",
           "minLength": 1,
-          "pattern": "^(?!.*\\.\\.)(?!^/)(?!.*\\\\).*$"
+          "pattern": "^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*\\u0000)(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/]+(?:/[^/]+)*$"
         }
       },
       "allOf": [
