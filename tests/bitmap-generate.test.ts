@@ -216,6 +216,7 @@ describe("bitmap wrapper + asset plan (G4/G5)", () => {
     expect(plan.ok).toBe(true);
     if (!plan.ok) return;
     const wrapper = String(plan.files.find((file) => file.path.includes("wrappers/CuteArrowBoldRightBitmap.ts"))?.content ?? "");
+    expect(wrapper).toContain("inheritAttrs: false");
     expect(wrapper).toContain('attrs["aria-hidden"] ?? (label ? undefined : true)');
     expect(wrapper).toContain('attrs.draggable ?? false');
     expect(wrapper).toContain('class: cn("moe-icon",');

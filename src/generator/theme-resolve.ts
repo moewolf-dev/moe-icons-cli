@@ -134,6 +134,7 @@ import assetUrl from "${assetImport}";
 
 export const ${wrapperName} = /* @__PURE__ */ defineComponent({
   name: "${wrapperName}",
+  inheritAttrs: false,
   setup(_props, { attrs }) {
     return () => {
       const size = typeof attrs.size === "number" ? attrs.size : undefined;
