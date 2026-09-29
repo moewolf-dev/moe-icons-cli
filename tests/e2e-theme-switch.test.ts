@@ -52,10 +52,11 @@ describe("E2E-07 theme-switch contract", () => {
     if (!plan.ok) return;
     const proxy = plan.files.find((f) => f.path.endsWith("icons/ArrowBoldRight.tsx"))?.content ?? "";
     expect(proxy).toContain("useMoeiconsTheme");
-    expect(proxy).toContain('variants[theme] ?? variants["outline"]');
+    expect(proxy).toContain("switch (theme)");
     // User call sites must use logical theme keys, never style group ids.
-    expect(proxy).toContain('"outline": OutlineMoeOutlineArrowBoldRight');
-    expect(proxy).toContain('"solid": SolidMoeSolidArrowBoldRight');
+    expect(proxy).toContain('case "outline":');
+    expect(proxy).toContain('case "solid":');
+    expect(proxy).not.toContain("ComponentType<any>");
   });
 
   it("proxy types and runtime passthrough keep className, size, and aria-label", () => {
@@ -79,7 +80,7 @@ describe("E2E-07 theme-switch contract", () => {
     expect(provider).toContain("const theme = props.theme ?? localTheme");
     const proxy = plan.files.find((f) => f.path.endsWith("icons/ArrowBoldRight.tsx"))?.content ?? "";
     // Unknown theme key → proxy variant miss → defaultTheme component.
-    expect(proxy).toContain('variants["outline"]');
+    expect(proxy).toContain('default:\n      return <OutlineMoeOutlineArrowBoldRight');
   });
 
   it("missing icons follow the configured fallback policy", () => {
