@@ -369,6 +369,29 @@ describe("CLI init + generate", () => {
     expect(readFileSync(join(dir, ".moeicons", backup!, "src", "moeicons", "a.ts"), "utf8")).toBe("old a");
   });
 
+  it("retains a concurrent edit to an installed file during reconcile rollback", () => {
+    const first = join(dir, "src", "moeicons", "a.ts");
+    let installs = 0;
+    expect(() => executeManagedReconcile(dir, {
+      "src/moeicons/a.ts": "generated a",
+      "src/moeicons/b.ts": "generated b",
+    }, [], {
+      mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, copyFileSync,
+      renameSync: (from, to) => {
+        if (String(from).includes(".reconcile-staging-")) {
+          installs += 1;
+          if (installs === 2) {
+            writeFileSync(first, "user edit");
+            throw new Error("later install failed");
+          }
+        }
+        return renameSync(from, to);
+      },
+    })).toThrow("reconcile failed");
+    expect(readFileSync(first, "utf8")).toBe("user edit");
+    expect(existsSync(join(dir, "src", "moeicons", "b.ts"))).toBe(false);
+  });
+
   it("restores generated files when the staging→output rename fails", () => {
     const output = join(dir, "src", "moeicons");
     const oldFile = join(output, "old.ts");

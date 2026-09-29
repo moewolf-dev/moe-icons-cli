@@ -97,7 +97,7 @@ export function executeManagedReconcile(
     }
   }
   const backedUp: Array<{ target: string; backup: string }> = [];
-  const installed: string[] = [];
+  const installed: Array<{ target: string; hash: string }> = [];
   let preserveBackup = false;
   try {
     for (const entry of entries) {
@@ -122,13 +122,20 @@ export function executeManagedReconcile(
       if (fs_.existsSync(entry.target)) throw new Error(`file changed since planning: ${entry.normalized}`);
       fs_.mkdirSync(join(entry.target, ".."), { recursive: true });
       fs_.renameSync(staged, entry.target);
-      installed.push(entry.target);
+      installed.push({ target: entry.target, hash: sha256Bytes(entry.content) });
     }
   } catch (error) {
     const recoveryErrors: unknown[] = [];
-    for (const target of installed.reverse()) {
-      if (fs_.existsSync(target)) {
-        try { fs_.rmSync(target, { force: true }); } catch (recoveryError) { recoveryErrors.push(recoveryError); }
+    for (const { target, hash } of installed.reverse()) {
+      if (existsOnDisk(target)) {
+        try {
+          if (lstatSync(target).isSymbolicLink() || sha256Bytes(realReadFileSync(target)) !== hash) {
+            preserveBackup = true;
+            recoveryErrors.push(new Error(`concurrent file retained at ${target}`));
+            continue;
+          }
+          fs_.rmSync(target, { force: true });
+        } catch (recoveryError) { recoveryErrors.push(recoveryError); }
       }
     }
     for (const item of backedUp.reverse()) {
