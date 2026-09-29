@@ -489,7 +489,7 @@ export function validateConfigDocument(
       // The vendored contract owns normalization. Only the release-specific
       // bitmap variant check and legacy in-memory version remain CLI concerns.
       const normalized = canonical.config as MoeiconsConfigFile;
-      for (const [name, theme] of Object.entries(normalized.themes)) {
+      for (const theme of Object.values(normalized.themes)) {
         const group = findCatalogStyleGroup(theme.styleGroup, sourceCatalog);
         if (group?.type !== "bitmap" || !group.variants?.length) continue;
         const variantId = `${group.id}-${theme.imageSize ?? 256}-${theme.format ?? "webp"}`;

@@ -506,7 +506,7 @@ function parseSvgNodes(source: string): { viewBox: string; rootAttrs: readonly [
     return "";
   });
   const inner = source.slice((svg.index ?? 0) + svg[0].length).replace(/<\/svg>\s*$/i, "")
-    .replace(/^\s*<rect\s+width="24"\s+height="24"\s+fill="#1E1E1E"\s*\/\>\s*<rect\s+width="\d+"\s+height="\d+"\s+transform="translate\(-?\d+(?:\.\d+)? -?\d+(?:\.\d+)?\)"\s+fill="white"\s*\/\>\s*/i, "");
+    .replace(/^\s*<rect\s+width="24"\s+height="24"\s+fill="#1E1E1E"\s*\/>\s*<rect\s+width="\d+"\s+height="\d+"\s+transform="translate\(-?\d+(?:\.\d+)? -?\d+(?:\.\d+)?\)"\s+fill="white"\s*\/>\s*/i, "");
   const tokenRe = /<!--[\s\S]*?-->|<[^>]+>|[^<]+/g;
   const supportedTags = new Set(["g", "defs", "clipPath", "mask", "filter", "path", "circle", "ellipse", "line", "polyline", "polygon", "rect", "text", "tspan", "use", "image", "linearGradient", "radialGradient", "stop"]);
   for (const match of inner.matchAll(tokenRe)) {

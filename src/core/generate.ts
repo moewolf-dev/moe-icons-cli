@@ -343,6 +343,8 @@ export function loadArchiveFiles(
   return { ok: false, reason: "installed artifact not found" };
 }
 
+// Keep the public asynchronous command contract while all filesystem work is synchronous.
+// eslint-disable-next-line @typescript-eslint/require-await
 export async function runGenerateUseCase(
   context: CommandContext,
   fs_: TransactionalFsWithCopy,
