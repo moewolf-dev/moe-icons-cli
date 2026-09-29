@@ -137,6 +137,10 @@ export interface IconProps extends React.AriaAttributes, React.DOMAttributes<Ele
   width?: number | string;
   height?: number | string;
   strokeWidth?: number;
+  color?: string;
+  fill?: string;
+  stroke?: string;
+  focusable?: boolean | "auto" | "true" | "false";
   alt?: string;
   title?: string;
   role?: React.AriaRole;
@@ -202,13 +206,21 @@ export function useMoeiconsTheme(): MoeiconsThemeState {
       const symbol = svgInternalImportName(theme.theme, actual.entry.styleGroup, iconId);
       return `import ${symbol} from "${installedIconImport(posix.join(config.outputDir, "icons"), "react", actual.entry.styleGroup, iconId)}";`;
     }).join("\n");
-    const ownVariants = themes.map((theme) => {
+    const renderBranches = themes.map((theme) => {
       const actual = effectiveThemeForIcon(iconId, theme, themes, config, sourceCatalog);
       const symbol = actual.kind === "bitmap"
         ? bitmapWrapperImportName(theme.theme, iconId)
         : svgInternalImportName(theme.theme, actual.entry.styleGroup, iconId);
-      return `  ${JSON.stringify(theme.theme)}: ${symbol},`;
+      const refType = actual.kind === "bitmap" ? "HTMLImageElement" : "SVGSVGElement";
+      return `    case ${JSON.stringify(theme.theme)}:
+      return <${symbol} ref={ref as React.Ref<${refType}>} width={resolvedSize} height={resolvedSize} strokeWidth={strokeWidth ?? themeStrokeWidth[${JSON.stringify(theme.theme)}]} {...rest} className={cn("moe-icon", themeClassName[${JSON.stringify(theme.theme)}], className)} />;`;
     }).join("\n");
+    const defaultTheme = themes.find((theme) => theme.theme === config.defaultTheme)!;
+    const defaultActual = effectiveThemeForIcon(iconId, defaultTheme, themes, config, sourceCatalog);
+    const defaultSymbol = defaultActual.kind === "bitmap"
+      ? bitmapWrapperImportName(defaultTheme.theme, iconId)
+      : svgInternalImportName(defaultTheme.theme, defaultActual.entry.styleGroup, iconId);
+    const defaultRefType = defaultActual.kind === "bitmap" ? "HTMLImageElement" : "SVGSVGElement";
     files.push({
       path: rel(`icons/${pascal}.tsx`),
       content: `${OWNER_HEADER}
@@ -221,16 +233,15 @@ ${ownImports}
 
 ${themeClassExpr(themes)}
 ${themeDefaultsExpr(themes)}
-const variants: Record<Theme, React.ComponentType<any>> = {
-${ownVariants}
-};
-
 export const ${pascal} = /* @__PURE__ */ React.forwardRef<SVGSVGElement | HTMLImageElement, IconProps>((props, ref) => {
   const { className, size, strokeWidth, ...rest } = props;
   const { theme } = useMoeiconsTheme();
-  const Component = variants[theme] ?? variants[${JSON.stringify(config.defaultTheme)}];
   const resolvedSize = size ?? themeDefaultSize[theme] ?? 24;
-  return <Component ref={ref} width={resolvedSize} height={resolvedSize} strokeWidth={strokeWidth ?? themeStrokeWidth[theme]} {...rest} className={cn("moe-icon", themeClassName[theme as Theme], className)} />;
+  switch (theme) {
+${renderBranches}
+    default:
+      return <${defaultSymbol} ref={ref as React.Ref<${defaultRefType}>} width={resolvedSize} height={resolvedSize} strokeWidth={strokeWidth ?? themeStrokeWidth[${JSON.stringify(config.defaultTheme)}]} {...rest} className={cn("moe-icon", themeClassName[${JSON.stringify(config.defaultTheme)}], className)} />;
+  }
 });
 `,
     });
@@ -268,10 +279,15 @@ export interface IconProps {
   width?: number | string;
   height?: number | string;
   strokeWidth?: number;
+  color?: string;
+  fill?: string;
+  stroke?: string;
+  focusable?: boolean | "auto" | "true" | "false";
   "aria-label"?: string;
   alt?: string;
   title?: string;
-  [key: string]: unknown;
+  "aria-hidden"?: boolean | "true" | "false";
+  draggable?: boolean;
 }
 
 export type Theme =
@@ -394,6 +410,13 @@ export const ${pascal} = /* @__PURE__ */ defineComponent({
     width: [Number, String],
     height: [Number, String],
     strokeWidth: Number,
+    color: String,
+    fill: String,
+    stroke: String,
+    focusable: { type: [Boolean, String], default: undefined },
+    alt: String,
+    title: String,
+    draggable: { type: Boolean, default: undefined },
   },
   setup(props, { attrs }) {
     const state = inject<MoeiconsThemeState | undefined>(MOEICONS_THEME_KEY, undefined);
@@ -408,6 +431,13 @@ export const ${pascal} = /* @__PURE__ */ defineComponent({
         width: props.width ?? resolvedSize,
         height: props.height ?? resolvedSize,
         strokeWidth: props.strokeWidth ?? themeStrokeWidth[theme],
+        color: props.color,
+        fill: props.fill,
+        stroke: props.stroke,
+        focusable: props.focusable,
+        alt: props.alt,
+        title: props.title,
+        draggable: props.draggable,
         class: cn("moe-icon", themeClassName[theme], className),
       });
     };
