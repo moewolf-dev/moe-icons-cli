@@ -149,7 +149,7 @@ export const ${wrapperName} = /* @__PURE__ */ defineComponent({
         alt: label ?? "",
         "aria-hidden": attrs["aria-hidden"] ?? (label ? undefined : true),
         draggable: attrs.draggable ?? false,
-        class: cn("moe-icon", ${defaultClass}, attrs.class),
+        class: cn("moe-icon", ${defaultClass}, attrs.class as Parameters<typeof cn>[number]),
       });
     };
   },
