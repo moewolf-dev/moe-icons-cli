@@ -151,7 +151,7 @@ describe("apply: transactional plan with rollback + idempotency", () => {
       ...fs_,
       renameSync(from, to) {
         fs_.renameSync(from, to);
-        if (from.includes(".doctor-staging-") && to.endsWith("first.ts")) {
+        if (from.includes(".reconcile-staging-") && to.endsWith("first.ts")) {
           writeFileSync(join(dir, "second.ts"), "concurrent user edit");
         }
       },
@@ -167,13 +167,31 @@ describe("apply: transactional plan with rollback + idempotency", () => {
     const result = applyPlannedChanges(dir, [{ kind: "replace", path: "entry.ts", before: "old", after: "new" }], {
       ...fs_,
       renameSync(from, to) {
-        if (from.includes(".doctor-staging-") || (from.includes(".doctor-backup-") && to.endsWith("entry.ts"))) throw new Error("injected failure");
+        if (from.includes(".reconcile-staging-") || (from.includes(".reconcile-backup-") && to.endsWith("entry.ts"))) throw new Error("injected failure");
         fs_.renameSync(from, to);
       },
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.message).toContain("recovery incomplete");
-    const backup = readdirSync(join(dir, ".moeicons")).find((name) => name.startsWith(".doctor-backup-"));
+    const backup = readdirSync(join(dir, ".moeicons")).find((name) => name.startsWith(".reconcile-backup-"));
+    expect(backup).toBeDefined();
+    expect(readFileSync(join(dir, ".moeicons", backup!, "entry.ts"), "utf8")).toBe("old");
+  });
+
+  it("reports a committed change when only backup cleanup fails", () => {
+    writeFileSync(join(dir, "entry.ts"), "old");
+    const fs_ = makeFs();
+    const result = applyPlannedChanges(dir, [{ kind: "replace", path: "entry.ts", before: "old", after: "new" }], {
+      ...fs_,
+      rmSync(path, options) {
+        if (path.includes(".reconcile-backup-")) throw new Error("cleanup denied");
+        fs_.rmSync(path, options);
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toContain("changes committed, backup cleanup failed");
+    expect(readFileSync(join(dir, "entry.ts"), "utf8")).toBe("new");
+    const backup = readdirSync(join(dir, ".moeicons")).find((name) => name.startsWith(".reconcile-backup-"));
     expect(backup).toBeDefined();
     expect(readFileSync(join(dir, ".moeicons", backup!, "entry.ts"), "utf8")).toBe("old");
   });

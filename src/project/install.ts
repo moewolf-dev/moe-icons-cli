@@ -48,6 +48,21 @@ export interface TransactionalFsWithCopy extends TransactionalFs {
   readonly copyFileSync: typeof copyFileSync;
 }
 
+/** Shared path boundary for install/update and doctor/init writes. */
+export function safeManagedPath(projectRoot: string, relative: string): { normalized: string; target: string } {
+  const normalized = relative.replace(/\\/g, "/");
+  if (!normalized || relative.includes("\\") || normalized.startsWith("/") || normalized.split("/").some((part) => !part || part === "." || part === "..") || /^[A-Za-z]:/.test(normalized)) throw new Error(`unsafe managed path: ${relative}`);
+  const project = realpathSync(projectRoot);
+  const target = resolve(project, normalized);
+  if (!target.startsWith(`${project}${sep}`)) throw new Error(`managed path escapes project: ${relative}`);
+  let ancestor = target;
+  while (ancestor !== project && !existsOnDisk(ancestor)) ancestor = dirname(ancestor);
+  for (let current = ancestor; current !== project; current = dirname(current)) {
+    if (lstatSync(current).isSymbolicLink()) throw new Error(`managed path contains symbolic link: ${relative}`);
+  }
+  return { normalized, target };
+}
+
 /**
  * Atomically reconcile an explicit cross-directory managed set. `removePaths`
  * must come from trusted metadata; this function never scans or uses globs.
@@ -57,26 +72,22 @@ export function executeManagedReconcile(
   writes: Readonly<Record<string, string | Uint8Array>>,
   removePaths: readonly string[],
   fs_: TransactionalFsWithCopy,
+  options: { readonly expectedText?: Readonly<Record<string, string | undefined>> } = {},
 ): void {
   const operationId = randomUUID();
   const stagingRoot = join(projectRoot, ".moeicons", `.reconcile-staging-${operationId}`);
   const backupRoot = join(projectRoot, ".moeicons", `.reconcile-backup-${operationId}`);
-  const safe = (relative: string) => {
-    const normalized = relative.replace(/\\/g, "/");
-    if (!normalized || relative.includes("\\") || normalized.startsWith("/") || normalized.split("/").some((part) => !part || part === "." || part === "..") || /^[A-Za-z]:/.test(normalized)) throw new Error(`unsafe managed path: ${relative}`);
-    const project = realpathSync(projectRoot);
-    const target = resolve(project, normalized);
-    if (!target.startsWith(`${project}${sep}`)) throw new Error(`managed path escapes project: ${relative}`);
-    let ancestor = target;
-    while (ancestor !== project && !existsOnDisk(ancestor)) ancestor = dirname(ancestor);
-    for (let current = ancestor; current !== project; current = dirname(current)) {
-      if (lstatSync(current).isSymbolicLink()) throw new Error(`managed path contains symbolic link: ${relative}`);
-    }
-    return { normalized, target };
+  const safe = (relative: string) => safeManagedPath(projectRoot, relative);
+  const checkExpected = (relative: string, target: string) => {
+    if (!Object.hasOwn(options.expectedText ?? {}, relative)) return;
+    const expected = options.expectedText?.[relative];
+    const current = fs_.existsSync(target) ? fs_.readFileSync(target, "utf8") : undefined;
+    if (current !== expected) throw new Error(`file changed since planning: ${relative}`);
   };
   const entries = Object.entries(writes).map(([relative, content]) => ({ ...safe(relative), content }));
   const removals = [...new Set(removePaths)].map(safe).filter((item) => !Object.hasOwn(writes, item.normalized));
   const allPaths = [...entries, ...removals].map((item) => item.normalized.toLowerCase()).sort();
+  for (const entry of entries) checkExpected(entry.normalized, entry.target);
   for (let i = 1; i < allPaths.length; i++) {
     const previous = allPaths[i - 1]!;
     const current = allPaths[i]!;
@@ -96,6 +107,7 @@ export function executeManagedReconcile(
     }
     for (const item of [...removals, ...entries]) {
       safe(item.normalized);
+      checkExpected(item.normalized, item.target);
       if (!fs_.existsSync(item.target)) continue;
       const backup = join(backupRoot, item.normalized);
       fs_.mkdirSync(join(backup, ".."), { recursive: true });
@@ -105,6 +117,9 @@ export function executeManagedReconcile(
     for (const entry of entries) {
       safe(entry.normalized);
       const staged = join(stagingRoot, entry.normalized);
+      // Each target was moved to backup above. A newly appearing target is a
+      // concurrent user write; never replace it with staged bytes.
+      if (fs_.existsSync(entry.target)) throw new Error(`file changed since planning: ${entry.normalized}`);
       fs_.mkdirSync(join(entry.target, ".."), { recursive: true });
       fs_.renameSync(staged, entry.target);
       installed.push(entry.target);
@@ -119,6 +134,11 @@ export function executeManagedReconcile(
     for (const item of backedUp.reverse()) {
       if (fs_.existsSync(item.backup)) {
         try {
+          if (fs_.existsSync(item.target)) {
+            preserveBackup = true;
+            recoveryErrors.push(new Error(`concurrent file retained at ${item.target}`));
+            continue;
+          }
           fs_.mkdirSync(join(item.target, ".."), { recursive: true });
           fs_.renameSync(item.backup, item.target);
         } catch (recoveryError) {
@@ -141,7 +161,12 @@ export function executeManagedReconcile(
   }
   // The new state is committed. A cleanup failure must not trigger rollback
   // after any backup bytes have already been removed.
-  if (fs_.existsSync(backupRoot)) fs_.rmSync(backupRoot, { recursive: true, force: true });
+  if (fs_.existsSync(backupRoot)) {
+    try { fs_.rmSync(backupRoot, { recursive: true, force: true }); }
+    catch (error) {
+      throw new Error(`changes committed, backup cleanup failed at ${backupRoot}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 }
 
 

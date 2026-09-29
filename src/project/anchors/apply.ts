@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { lstatSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { realpathSync, readdirSync, copyFileSync, type existsSync, type mkdirSync, type readFileSync, type renameSync, type rmSync, type writeFileSync } from "node:fs";
+import { executeManagedReconcile, safeManagedPath, type TransactionalFsWithCopy } from "../install.js";
 import type { PlannedFileChange } from "./types.js";
 
 /**
@@ -47,21 +46,7 @@ export function applyPlannedChanges(
   }
   const entries = [...seen.values()];
   const root = realpathSync(projectRoot);
-  const targetFor = (path: string): string => {
-    if (!path || isAbsolute(path) || path.includes("\\") || /^[A-Za-z]:/.test(path) ||
-      path.split("/").some((part) => !part || part === "." || part === "..")) {
-      throw new Error(`unsafe planned path: ${path}`);
-    }
-    const target = resolve(root, path);
-    if (relative(root, target).startsWith(`..${sep}`) || target === root) throw new Error(`unsafe planned path: ${path}`);
-    for (let part = dirname(target); part !== root; part = dirname(part)) {
-      try { if (lstatSync(part).isSymbolicLink()) throw new Error(`symlink in planned path: ${path}`); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    }
-    try { if (lstatSync(target).isSymbolicLink()) throw new Error(`symlink target: ${path}`); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    return target;
-  };
+  const targetFor = (path: string): string => safeManagedPath(root, path).target;
   let pending: PlannedFileChange[];
   try {
     pending = entries.filter((entry) => {
@@ -76,61 +61,23 @@ export function applyPlannedChanges(
     return { ok: false, message: error instanceof Error ? error.message : String(error) };
   }
 
-  const operationId = randomUUID();
-  const backupRoot = join(root, ".moeicons", `.doctor-backup-${operationId}`);
-  const stagingRoot = join(root, ".moeicons", `.doctor-staging-${operationId}`);
-  const backedUp: Array<{ target: string; backup: string }> = [];
-  const installed: string[] = [];
+  const writes = Object.fromEntries(pending.map((entry) => [entry.path, entry.after]));
+  const expectedText = Object.fromEntries(pending.map((entry) => [entry.path, entry.before]));
+  const transactionFs: TransactionalFsWithCopy = {
+    existsSync: fs_.existsSync as typeof existsSync,
+    readFileSync: ((path: string) => fs_.readTextFileSync(path)) as typeof readFileSync,
+    mkdirSync: fs_.mkdirSync as typeof mkdirSync,
+    writeFileSync: ((path: string, content: string | Uint8Array) => fs_.writeTextFileSync(path, String(content))) as typeof writeFileSync,
+    renameSync: fs_.renameSync as typeof renameSync,
+    rmSync: fs_.rmSync as typeof rmSync,
+    readdirSync,
+    copyFileSync,
+  };
   try {
-    targetFor(".moeicons");
-    for (const entry of pending) {
-      const staged = join(stagingRoot, entry.path);
-      fs_.mkdirSync(dirname(staged), { recursive: true });
-      fs_.writeTextFileSync(staged, entry.after);
-    }
-    // Recheck before moving any original: a preview must never overwrite edits.
-    for (const entry of pending) {
-      const full = targetFor(entry.path);
-      const current = fs_.existsSync(full) ? fs_.readTextFileSync(full) : undefined;
-      if (current !== entry.before) throw new Error(`file changed since planning: ${entry.path}`);
-    }
-    for (const entry of pending) {
-      const full = targetFor(entry.path);
-      const current = fs_.existsSync(full) ? fs_.readTextFileSync(full) : undefined;
-      if (current !== entry.before) throw new Error(`file changed since planning: ${entry.path}`);
-      if (fs_.existsSync(full)) {
-        const backup = join(backupRoot, entry.path);
-        fs_.mkdirSync(dirname(backup), { recursive: true });
-        fs_.renameSync(full, backup);
-        backedUp.push({ target: full, backup });
-      }
-      fs_.mkdirSync(dirname(full), { recursive: true });
-      fs_.renameSync(join(stagingRoot, entry.path), full);
-      installed.push(full);
-    }
+    executeManagedReconcile(root, writes, [], transactionFs, { expectedText });
   } catch (error) {
-    let recoveryFailed = false;
-    for (const target of installed.reverse()) {
-      try { if (fs_.existsSync(target)) fs_.rmSync(target, { force: true }); }
-      catch { recoveryFailed = true; }
-    }
-    for (const item of backedUp.reverse()) {
-      if (fs_.existsSync(item.backup)) {
-        try {
-          fs_.mkdirSync(dirname(item.target), { recursive: true });
-          fs_.renameSync(item.backup, item.target);
-        } catch { recoveryFailed = true; }
-      }
-    }
-    try { if (fs_.existsSync(stagingRoot)) fs_.rmSync(stagingRoot, { recursive: true, force: true }); } catch { /* retain for inspection */ }
     const reason = error instanceof Error ? error.message : String(error);
-    return { ok: false, message: recoveryFailed ? `${reason}; recovery incomplete, originals at ${backupRoot}` : reason };
-  }
-  try {
-    if (fs_.existsSync(stagingRoot)) fs_.rmSync(stagingRoot, { recursive: true, force: true });
-    if (fs_.existsSync(backupRoot)) fs_.rmSync(backupRoot, { recursive: true, force: true });
-  } catch (error) {
-    return { ok: false, message: `changes committed, backup cleanup failed at ${backupRoot}: ${error instanceof Error ? error.message : String(error)}` };
+    return { ok: false, message: reason.includes("original files retained at") ? `recovery incomplete; ${reason}` : reason };
   }
   return { ok: true, alreadyConfigured: false, written: pending.map((e) => e.path) };
 }
