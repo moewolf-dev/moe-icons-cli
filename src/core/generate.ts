@@ -5,8 +5,8 @@ import {
   type TransactionalFsWithCopy,
 } from "../project/install.js";
 import { detectProject } from "../project/detect.js";
-import { readMoeiconsConfig, type MoeiconsConfigFile } from "../project/config.js";
-import { findCatalogIcon, parseCatalog, type IconCatalog } from "../catalog/catalog.js";
+import { readMoeiconsConfig, loadConfigDocument, type MoeiconsConfigFile } from "../project/config.js";
+import { parseCatalog, type IconCatalog } from "../catalog/catalog.js";
 import { toProxyName } from "./icon-names.js";
 import { planGeneratedFiles } from "../generator/generate.js";
 import { ensureClassMergeDependencies, planTailwindIntegration } from "../project/tailwind.js";
@@ -27,6 +27,7 @@ import {
 import { withProjectLockSync } from "../project/project-lock.js";
 import type { Target } from "../commands/parser.js";
 import { allowLocalTestFromEnv } from "./local-test-env.js";
+import { resolveIconTheme } from "./icon-selection.js";
 
 export type GenerateResult =
   | {
@@ -365,6 +366,7 @@ export async function runGenerateUseCase(
     return { ok: false, reason: "validation", errors: [catalogState.message] };
   }
   const sourceCatalog = catalogState.status === "ok" ? catalogState.catalog : undefined;
+  const plannedConfigDocument = JSON.stringify(loadConfigDocument(project.root));
   const loaded = readMoeiconsConfig(project.root, sourceCatalog);
   if (loaded.kind === "invalid") return { ok: false, reason: "validation", errors: [loaded.message] };
   if (loaded.kind !== "ok") return { ok: false, reason: `config state: ${loaded.kind}` };
@@ -372,6 +374,8 @@ export async function runGenerateUseCase(
   const effectiveConfig = options.target
     ? { ...loaded.config, target: options.target }
     : loaded.config;
+  const plannedMetadataPath = join(project.root, ".moeicons", "install-metadata.json");
+  const plannedMetadataText = fs_.existsSync(plannedMetadataPath) ? fs_.readFileSync(plannedMetadataPath, "utf8") : undefined;
   const installedMeta = readInstallMetadata(project.root, fs_.readFileSync, fs_.existsSync);
   if (!installedMeta) {
     return {
@@ -423,6 +427,7 @@ export async function runGenerateUseCase(
 
   const notes: string[] = [];
   const sideFiles: { path: string; content: string }[] = [];
+  const expectedSideFiles: Record<string, string | undefined> = {};
 
   try {
     const tw = planTailwindIntegration(project.root, loaded.config.outputDir, {
@@ -431,6 +436,8 @@ export async function runGenerateUseCase(
     });
     notes.push(...tw.notes);
     sideFiles.push(...tw.files);
+    for (const file of tw.files) expectedSideFiles[relative(project.root, file.path).replace(/\\/g, "/")] =
+      fs_.existsSync(file.path) ? sha256Bytes(fs_.readFileSync(file.path)) : undefined;
   } catch (error) {
     if (isCliError(error) && error.code === "TAILWIND_VERSION_UNSUPPORTED") {
       return { ok: false, reason: error.message, code: error.code };
@@ -441,6 +448,7 @@ export async function runGenerateUseCase(
   const pkgPath = join(project.root, "package.json");
   if (fs_.existsSync(pkgPath)) {
     const pkgSource = fs_.readFileSync(pkgPath, "utf8");
+    expectedSideFiles["package.json"] = sha256Bytes(pkgSource);
     const target = effectiveConfig.target;
     const deps =
       target === "react" || target === "vue"
@@ -463,6 +471,8 @@ export async function runGenerateUseCase(
 
   try {
     return withProjectLockSync(project.root, "reload", () => {
+      if (JSON.stringify(loadConfigDocument(project.root)) !== plannedConfigDocument)
+        return { ok: false, reason: "config changed while preparing generate; retry" };
       const metadataPath = join(project.root, ".moeicons", "install-metadata.json");
       if (!fs_.existsSync(metadataPath))
         return {
@@ -470,6 +480,8 @@ export async function runGenerateUseCase(
           reason: "managed install metadata is missing; run 'moeicons install' to repair or reinstall",
         };
       const metadata = parseInstallMetadata(fs_.readFileSync(metadataPath, "utf8"), { allowLocalTest });
+      if (fs_.readFileSync(metadataPath, "utf8") !== plannedMetadataText)
+        return { ok: false, reason: "installation changed while preparing generate; retry" };
       if (!metadata || metadata.tier !== loaded.config.tier)
         return {
           ok: false,
@@ -496,12 +508,11 @@ export async function runGenerateUseCase(
       if (hasInstalledComponents && (effectiveConfig.target === "react" || effectiveConfig.target === "vue")) {
         const resolved = resolveThemes(effectiveConfig, sourceCatalog);
         if (!resolved.ok) return { ok: false, reason: resolved.errors.join("; ") };
-        const defaultGroup = effectiveConfig.themes[effectiveConfig.defaultTheme]?.styleGroup;
-        if (!defaultGroup) return { ok: false, reason: "default theme is missing" };
         for (const iconId of effectiveConfig.icons) {
-          const available = findCatalogIcon(iconId, sourceCatalog)?.availableIn ?? [];
           for (const theme of resolved.themes) {
-            const group = available.includes(theme.entry.styleGroup) ? theme.entry.styleGroup : defaultGroup;
+            const selected = resolveIconTheme(effectiveConfig, sourceCatalog!, theme.theme, iconId);
+            if (!selected) return { ok: false, reason: `icon "${iconId}" has no selected variant for theme "${theme.theme}"` };
+            const group = effectiveConfig.themes[selected]!.styleGroup;
             const kind = resolved.themes.find((candidate) => candidate.entry.styleGroup === group)?.kind;
             if (kind === "bitmap") continue;
             const suffix = effectiveConfig.target === "vue" ? ".vue.js" : ".js";
@@ -541,7 +552,11 @@ export async function runGenerateUseCase(
       const stale = Object.keys(metadata.managedFiles).filter(
         (path) => (path.startsWith(outputPrefix) || path.startsWith(previousPrefix)) && !(path in generated),
       );
-      executeManagedReconcile(project.root, writes, stale, fs_);
+      const expectedSha256: Record<string, string | undefined> = { ...metadata.managedFiles, ...expectedSideFiles,
+        ".moeicons/install-metadata.json": sha256Bytes(fs_.readFileSync(metadataPath)),
+      };
+      for (const path of Object.keys(generated)) if (!(path in expectedSha256)) expectedSha256[path] = undefined;
+      executeManagedReconcile(project.root, writes, stale, fs_, { expectedSha256 });
       return {
         ok: true,
         files: plan.files.map((file) => file.path),

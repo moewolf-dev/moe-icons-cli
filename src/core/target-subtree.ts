@@ -5,7 +5,8 @@ import type { Target } from "../commands/parser.js";
 import { posix } from "node:path";
 import { toProxyName } from "./icon-names.js";
 import type { MoeiconsConfigFile } from "../project/config.js";
-import { findCatalogIcon, findCatalogStyleGroup, type IconCatalog } from "../catalog/catalog.js";
+import { findCatalogStyleGroup, type IconCatalog } from "../catalog/catalog.js";
+import { resolveIconTheme } from "./icon-selection.js";
 
 /**
  * Select the target subtree the CLI must install. Mirrors the archive layout
@@ -70,12 +71,11 @@ export function configuredComponentFiles(
     }
   };
   visit("types.d.ts");
-  const defaultGroup = config.themes[config.defaultTheme]?.styleGroup;
-  if (!defaultGroup) throw new Error(`default theme ${config.defaultTheme} is missing`);
   for (const iconId of config.icons) {
-    const available = findCatalogIcon(iconId, catalog)?.availableIn ?? [];
-    for (const entry of Object.values(config.themes)) {
-      const group = available.includes(entry.styleGroup) ? entry.styleGroup : defaultGroup;
+    for (const theme of Object.keys(config.themes)) {
+      const actual = resolveIconTheme(config, catalog, theme, iconId);
+      if (!actual) throw new Error(`icon "${iconId}" has no selected variant for theme "${theme}"`);
+      const group = config.themes[actual]!.styleGroup;
       if (findCatalogStyleGroup(group, catalog)?.type === "bitmap") continue;
       const basename = `${group}/${toProxyName(iconId)}${target === "vue" ? ".vue" : ""}`;
       visit(`${basename}.js`);

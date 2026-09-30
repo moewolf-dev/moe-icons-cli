@@ -23,6 +23,7 @@ const ALLOWED_COMMON_KEYS = new Set([
 
 const ALLOWED_THEME_KEYS = new Set([
   'styleGroup',
+  'icons',
   'styles',
   'format',
   'imageSize',
@@ -175,6 +176,9 @@ function validateConfig(raw, catalog) {
     if (value.defaultSize !== undefined && (typeof value.defaultSize !== 'number' || !Number.isFinite(value.defaultSize) || value.defaultSize <= 0)) return fail(`theme ${name}.defaultSize must be a positive finite number`);
     if (value.strokeWidth !== undefined && (typeof value.strokeWidth !== 'number' || !Number.isFinite(value.strokeWidth) || value.strokeWidth < 0)) return fail(`theme ${name}.strokeWidth must be a nonnegative finite number`);
     if (value.className !== undefined && typeof value.className !== 'string') return fail(`theme ${name}.className must be a string`);
+    if (value.icons !== undefined && (!Array.isArray(value.icons) || value.icons.some((id) => typeof id !== 'string') || new Set(value.icons).size !== value.icons.length)) {
+      return fail(`theme ${name}.icons must be an array of unique icon IDs`);
+    }
     const format = typeof value.format === 'string' ? value.format : undefined;
     if (format !== undefined && !FORMATS.has(format)) return fail(`theme ${name}.format is invalid`);
     const imageSize = typeof value.imageSize === 'number' ? value.imageSize : undefined;
@@ -203,6 +207,7 @@ function validateConfig(raw, catalog) {
     }
     themes[name] = {
       styleGroup: value.styleGroup,
+      ...(value.icons !== undefined ? { icons: [...value.icons] } : {}),
       ...(format !== undefined ? { format } : {}),
       ...(imageSize !== undefined ? { imageSize } : {}),
       ...(typeof value.defaultSize === 'number' ? { defaultSize: value.defaultSize } : {}),
@@ -222,6 +227,11 @@ function validateConfig(raw, catalog) {
   }
   for (const iconId of icons) {
     if (!findIcon(iconId, catalog)) return fail(`unknown icon "${iconId}"`);
+  }
+  for (const [name, theme] of Object.entries(themes)) {
+    for (const iconId of theme.icons || []) {
+      if (!icons.includes(iconId)) return fail(`theme ${name}.icons contains unregistered icon "${iconId}"; add it to project icons first`);
+    }
   }
 
   let integration;

@@ -13,6 +13,7 @@ import type { Target } from "../commands/parser.js";
 
 export interface MoeiconsThemeConfig {
   readonly styleGroup: string;
+  readonly icons?: readonly string[];
   readonly styles?: readonly string[];
   readonly format?: "svg" | "webp" | "png";
   readonly imageSize?: 64 | 128 | 256 | 512;
@@ -145,6 +146,7 @@ const ALLOWED_COMMON_KEYS = new Set([
 
 const ALLOWED_THEME_KEYS = new Set([
   "styleGroup",
+  "icons",
   "styles",
   "format",
   "imageSize",
@@ -260,6 +262,9 @@ function requireCommonConfigFields(
     if (theme.defaultSize !== undefined && (typeof theme.defaultSize !== "number" || !Number.isFinite(theme.defaultSize) || theme.defaultSize <= 0)) throw new Error(`theme ${name}.defaultSize must be a positive finite number`);
     if (theme.strokeWidth !== undefined && (typeof theme.strokeWidth !== "number" || !Number.isFinite(theme.strokeWidth) || theme.strokeWidth < 0)) throw new Error(`theme ${name}.strokeWidth must be a nonnegative finite number`);
     if (theme.className !== undefined && typeof theme.className !== "string") throw new Error(`theme ${name}.className must be a string`);
+    if (theme.icons !== undefined && (!Array.isArray(theme.icons) || theme.icons.some((id) => typeof id !== "string") || new Set(theme.icons).size !== theme.icons.length)) {
+      throw new Error(`theme ${name}.icons must be an array of unique icon IDs`);
+    }
     const format = typeof theme.format === "string" ? theme.format : undefined;
     if (format !== undefined && format !== "svg" && format !== "webp" && format !== "png") {
       throw new Error(`theme ${name}.format is invalid`);
@@ -296,6 +301,7 @@ function requireCommonConfigFields(
     }
     themes[name] = {
       styleGroup: theme.styleGroup,
+      ...(theme.icons !== undefined ? { icons: theme.icons as string[] } : {}),
       ...(format !== undefined ? { format } : {}),
       ...(imageSize !== undefined ? { imageSize: imageSize as 64 | 128 | 256 | 512 } : {}),
       ...(typeof theme.defaultSize === "number" ? { defaultSize: theme.defaultSize } : {}),
@@ -306,6 +312,11 @@ function requireCommonConfigFields(
   if (!(obj.defaultTheme in themes))
     throw new Error(`defaultTheme "${obj.defaultTheme}" is not defined`);
   const icons = flattenIcons(obj.icons);
+  for (const [name, theme] of Object.entries(themes)) {
+    for (const iconId of theme.icons ?? []) {
+      if (!icons.includes(iconId)) throw new Error(`theme ${name}.icons contains unregistered icon "${iconId}"; add it to project icons first`);
+    }
+  }
   if (!lenientCatalog) {
     for (const iconId of icons)
       if (!findCatalogIcon(iconId, sourceCatalog)) throw new Error(`unknown icon "${iconId}"`);

@@ -71,6 +71,36 @@ config, run `moeicons install` again before `moeicons generate`; generate report
 the missing installed component if this step is skipped. The verified release
 archive is still downloaded as a whole, so this reduces project files, not
 network transfer.
+Each theme may select a subset of the registered project icons:
+
+```json
+{
+  "icons": ["ui-search", "arrow-bold-right"],
+  "defaultTheme": "outline",
+  "missingIconPolicy": "fallback",
+  "themes": {
+    "outline": { "styleGroup": "moe-outline", "icons": ["ui-search"] },
+    "solid": { "styleGroup": "moe-solid", "icons": ["arrow-bold-right"] }
+  }
+}
+```
+
+Omitting a theme's `icons` selects all registered icons; `[]` selects none.
+Fallback searches the requested theme, then the default theme, then configured
+themes in ASCII name order. An unregistered icon or an icon unavailable in every
+selected theme fails validation/generation. `error` requires each theme to have
+every registered icon. Adding a selected variant requires installing again.
+
+Transactions preserve a recovery journal with original bytes in
+`.moeicons/.reconcile-backup-<id>/files`. After a process interruption, run `moeicons recover` at the project root
+before rerunning the original command. It reclaims a lock only when its owner
+process is dead, restores the previous state, and requires a fresh plan. If a file changed after the interruption, recovery stops and retains both
+the user's file and the backups; compare them before restoring manually. A
+completed transaction is identified by its commit marker and is never rolled
+back because backup cleanup failed. Do not delete these directories to bypass
+a recovery conflict. Recovery covers process termination, not power loss or a
+hostile filesystem replacing directories during filesystem operations.
+
 The installer rejects a target that disagrees with the config. Import generated
 PascalCase components from your configured `outputDir` (default `src/moeicons`):
 

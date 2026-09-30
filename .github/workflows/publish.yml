@@ -413,7 +413,9 @@ jobs:
           if npm view "@moewolf/moe-icons-cli@${version}" version >/dev/null 2>&1; then
             echo "npm version already exists; verifying registry CONTENT matches the candidate"
             mkdir -p registry candidate-extract registry-extract
-            npm pack "@moewolf/moe-icons-cli@${version}" --pack-destination registry --silent >/dev/null
+            registry_url="$(npm view "@moewolf/moe-icons-cli@${version}" dist.tarball)"
+            [[ "$registry_url" == https://registry.npmjs.org/* ]] || { echo "unexpected registry tarball URL" >&2; exit 1; }
+            curl --fail --location --proto '=https' --proto-redir '=https' "$registry_url" --output registry/package.tgz
             tar -xzf "$tgz" -C candidate-extract
             tar -xzf registry/*.tgz -C registry-extract
             (cd candidate-extract && find . -type f | sort | xargs shasum -a 256) > candidate-digests

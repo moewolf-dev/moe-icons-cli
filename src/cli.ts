@@ -16,6 +16,8 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { runGenerateUseCase } from "./core/generate.js";
+import { recoverManagedReconcile, safeManagedPath } from "./project/install.js";
+import { withProjectLockSync } from "./project/project-lock.js";
 import { runInstallUseCase } from "./core/install.js";
 import { runWizardUseCase, loginRecoveryChoices } from "./core/wizard.js";
 import type { CommandContext } from "./core/context.js";
@@ -272,6 +274,16 @@ async function dispatchSync(
       throw new CliError("NOT_IMPLEMENTED", "groups is not implemented yet");
     case "generate":
       return await runGenerate(runtime, json, noTailwind, false, target, yes);
+    case "recover": {
+      const root = runtime.cwd();
+      safeManagedPath(root, ".moeicons");
+      const recovered = withProjectLockSync(root, "recover", () => recoverManagedReconcile(root, {
+        mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, readdirSync, copyFileSync,
+      }));
+      if (json) writeJson(runtime, { ok: true, recovered });
+      else runtime.stdout(`Recovered ${recovered} interrupted transaction(s). Rerun the original command.\n`);
+      return 0;
+    }
     case "init":
       return await runInit(runtime, json, yes, command.dryRun === true);
     case "doctor":

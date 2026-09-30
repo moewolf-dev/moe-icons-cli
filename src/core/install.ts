@@ -1,6 +1,6 @@
 import { createInstallPlan, executeInstallPlan, type TransactionalFs } from "../project/install.js";
 import { detectProject } from "../project/detect.js";
-import { readMoeiconsConfig } from "../project/config.js";
+import { readMoeiconsConfig, loadConfigDocument } from "../project/config.js";
 import type { CommandContext } from "./context.js";
 import type { PackageManager } from "../project/detect.js";
 import { bundledSourceVersion, downloadFreeRelease, type FreeDownloadIo } from "./free-download.js";
@@ -102,6 +102,7 @@ export async function runInstallUseCase(
     };
   }
 
+  const plannedConfigDocument = JSON.stringify(loadConfigDocument(project.root));
   const config = readMoeiconsConfig(project.root);
   if (config.kind === "invalid" || config.kind === "unsupported") {
     return {
@@ -191,7 +192,11 @@ export async function runInstallUseCase(
 
   const plan = createInstallPlan(project.root, files);
   try {
-    await withProjectLock(project.root, "install", () => executeInstallPlan(plan, deps.fs));
+    await withProjectLock(project.root, "install", () => {
+      if (JSON.stringify(loadConfigDocument(project.root)) !== plannedConfigDocument)
+        throw new Error("config changed while preparing install; retry");
+      executeInstallPlan(plan, deps.fs);
+    });
   } catch (error) {
     return {
       ok: false,

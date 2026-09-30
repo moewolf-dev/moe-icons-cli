@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { decodeUtf8 } from "../project/tar-gz.js";
 import { CN_HELPER_SOURCE } from "./cn.js";
+import { resolveIconTheme, themeHasIcon } from "../core/icon-selection.js";
 import {
   bitmapWrapperImportName,
   reactBitmapWrapperSource,
@@ -109,9 +110,10 @@ function effectiveThemeForIcon(
   config: MoeiconsConfigFile,
   sourceCatalog: IconCatalog,
 ): ResolvedTheme {
-  const icon = findCatalogIcon(iconId, sourceCatalog);
-  if (icon?.availableIn.includes(logical.entry.styleGroup)) return logical;
-  return themes.find((theme) => theme.theme === config.defaultTheme) ?? logical;
+  const selected = resolveIconTheme(config, sourceCatalog, logical.theme, iconId);
+  const actual = themes.find((theme) => theme.theme === selected);
+  if (!actual) throw new Error(`icon "${iconId}" has no selected variant for theme "${logical.theme}"`);
+  return actual;
 }
 
 function appendReactFiles(
@@ -777,11 +779,9 @@ export function planGeneratedFiles(
       continue;
     }
     for (const [theme, entry] of Object.entries(config.themes)) {
-      if (!catalogIcon.availableIn.includes(entry.styleGroup)) {
-        if (theme === config.defaultTheme || config.missingIconPolicy !== "fallback") errors.push(
-          `icon "${iconId}" is not available in style group "${entry.styleGroup}" for theme "${theme}"`,
-        );
-      }
+      if (!resolveIconTheme(config, options.catalog ?? catalog, theme, iconId)) errors.push(
+        `icon "${iconId}" is not available in style group "${entry.styleGroup}" for theme "${theme}"; no selected variant satisfies missingIconPolicy`,
+      );
     }
   }
 
@@ -810,7 +810,7 @@ export function planGeneratedFiles(
     files.push({ path: rel("types.ts"), content: "export interface VanillaIconOptions extends Record<string, string | number | undefined> { className?: string; strokeWidth?: number; }\nexport type Theme = " + Object.keys(config.themes).map((t) => JSON.stringify(t)).join(" | ") + ";\n" });
     for (const styleGroup of groups) {
       const exports: string[] = ["// Vanilla factory exports"];
-      for (const iconId of config.icons.filter((id) => findCatalogIcon(id, options.catalog ?? catalog)?.availableIn.includes(styleGroup))) {
+      for (const iconId of config.icons.filter((id) => resolved.themes.some((theme) => theme.entry.styleGroup === styleGroup && themeHasIcon(config, options.catalog ?? catalog, theme.theme, id)))) {
         const name = toPascalCase(iconId);
         const source = rawByPath.get(`${styleGroup}/${iconId}.svg`);
         if (!source || typeof source === "string") return { ok: false, errors: [`raw asset missing: ${styleGroup}/${iconId}.svg`] };

@@ -361,7 +361,7 @@ describe("B7: v1->v2 migration, update preservation and dependency isolation", (
   }
 
   it("migrates a v1 framework config to a v2 target on install and never defaults", async () => {
-    const meta = writeFreeReleaseFixture(fixture);
+    const meta = writeFreeReleaseFixture(fixture, { useBundledCatalog: true });
     writeFileSync(
       join(project, "moeicons.config.json"),
       JSON.stringify({ schemaVersion: 1, tier: "free", framework: "vue", outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"] }),
@@ -375,7 +375,7 @@ describe("B7: v1->v2 migration, update preservation and dependency isolation", (
       expect(loaded.warnings).toContain('config schema v1 migrated "framework" to "target"');
     }
     const result = await runInstallUseCase(context(project), { fs: realFs, download: download(fixture) }, { group: "free", sourceVersion: meta.version });
-    expect(result).toMatchObject({ ok: true, target: "vue" });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, target: "vue" });
     const metadata = parseInstallMetadata(readFileSync(join(project, ".moeicons", "install-metadata.json"), "utf8"));
     expect(metadata?.target).toBe("vue");
   });

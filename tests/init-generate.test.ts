@@ -366,7 +366,7 @@ describe("CLI init + generate", () => {
     expect(readFileSync(second, "utf8")).toBe("old b");
     const backup = readdirSync(join(dir, ".moeicons")).find((name) => name.startsWith(".reconcile-backup-"));
     expect(backup).toBeDefined();
-    expect(readFileSync(join(dir, ".moeicons", backup!, "src", "moeicons", "a.ts"), "utf8")).toBe("old a");
+    expect(readFileSync(join(dir, ".moeicons", backup!, "files", "src", "moeicons", "a.ts"), "utf8")).toBe("old a");
   });
 
   it("retains a concurrent edit to an installed file during reconcile rollback", () => {

@@ -224,18 +224,22 @@ export async function runLibraryUpdateUseCase(
     noTailwind: false,
     target,
   });
+  const expectedSideFiles: Record<string, string | undefined> = {};
   for (const side of tailwindPlan.files) {
     const rel = relative(project.root, resolve(side.path)).replace(/\\/g, "/");
     if (!rel || rel === ".." || rel.startsWith("../"))
       throw new CliError("VALIDATION_ERROR", `side file escapes project: ${side.path}`);
     writes[rel] = side.content;
+    expectedSideFiles[rel] = deps.fs.existsSync(side.path) ? sha256Bytes(deps.fs.readFileSync(side.path)) : undefined;
   }
   const pkgPath = join(project.root, "package.json");
   if (deps.fs.existsSync(pkgPath)) {
+    const pkgSource = deps.fs.readFileSync(pkgPath, "utf8");
+    expectedSideFiles["package.json"] = sha256Bytes(pkgSource);
     const dependencyPlan =
       target === "react" || target === "vue"
-        ? ensureClassMergeDependencies(deps.fs.readFileSync(pkgPath, "utf8"))
-        : { nextSource: deps.fs.readFileSync(pkgPath, "utf8"), changed: false, notes: [] };
+        ? ensureClassMergeDependencies(pkgSource)
+        : { nextSource: pkgSource, changed: false, notes: [] };
     if (dependencyPlan.changed) writes["package.json"] = dependencyPlan.nextSource;
   }
   const sidePaths = new Set([
@@ -298,6 +302,9 @@ export async function runLibraryUpdateUseCase(
       writes,
       Object.keys(old.managedFiles).filter((path) => !(path in managedFiles)),
       deps.fs,
+      { expectedSha256: { ...Object.fromEntries([...Object.keys(writes), ...Object.keys(old.managedFiles)].map((path) => [path,
+        old.managedFiles[path] ?? (path === ".moeicons/install-metadata.json" ? sha256Bytes(plannedMetadata) : undefined),
+      ])), ...expectedSideFiles } },
     );
   });
   return {

@@ -94,6 +94,7 @@ export async function runProInstallUseCase(
   // phase validate this same document, so a rewrite during download can never
   // combine an old target with new bitmap tuples.
   const document = loadConfigDocument(project.root);
+  const plannedConfigDocument = JSON.stringify(document);
   // DEV-G10-R1 phase 1: catalog-independent bootstrap. A Pro bitmap config
   // references groups the bundled catalog does not ship, so validate only the
   // safe fields (tier/target/syntax) before the release catalog is available.
@@ -223,9 +224,11 @@ export async function runProInstallUseCase(
     // A-1b: record the accepted local-test model so a later generate can verify it.
     ...(downloaded.descriptor.channel === "local-test" ? { channel: "local-test" as const, publishable: false } : {}),
   });
-  await withProjectLock(project.root, "install", () =>
-    executeInstallPlan(createInstallPlan(project.root, files), deps.fs),
-  );
+  await withProjectLock(project.root, "install", () => {
+    if (JSON.stringify(loadConfigDocument(project.root)) !== plannedConfigDocument)
+      throw new CliError("VALIDATION_ERROR", "config changed while preparing install; retry");
+    executeInstallPlan(createInstallPlan(project.root, files), deps.fs);
+  });
   return {
     projectRoot: project.root,
     artifactVersion: downloaded.descriptor.version,

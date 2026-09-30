@@ -36,6 +36,12 @@
         "additionalProperties": false,
         "required": ["styleGroup"],
         "properties": {
+          "icons": {
+            "description": "Optional subset of project icons selected for this theme. Omit to select all registered icons; an empty array selects none. Missing variants follow missingIconPolicy.",
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string" }
+          },
           "styleGroup": {
             "type": "string",
             "pattern": "^moe-[a-z0-9]+(?:-[a-z0-9]+)*$"

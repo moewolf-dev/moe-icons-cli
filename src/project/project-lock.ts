@@ -17,18 +17,18 @@ const defaultIo: ProjectLockIo = {
   read: (path) => readFileSync(path, "utf8"),
   createExclusive: (path, content) => { const fd = openSync(path, "wx", 0o600); try { writeFileSync(fd, content); } finally { closeSync(fd); } },
   remove: unlinkSync,
-  isProcessAlive: (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } },
+  isProcessAlive: (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; } },
   now: Date.now,
   pid: process.pid,
 };
 
-export async function withProjectLock<T>(projectRoot: string, operation: "install" | "update" | "reload" | "doctor", work: () => Promise<T> | T, io: ProjectLockIo = defaultIo): Promise<T> {
+export async function withProjectLock<T>(projectRoot: string, operation: "install" | "update" | "reload" | "doctor" | "recover", work: () => Promise<T> | T, io: ProjectLockIo = defaultIo): Promise<T> {
   const path = join(projectRoot, ".moeicons.lock");
   if (io.exists(path)) {
     let stale = false;
     try {
       const value = JSON.parse(io.read(path)) as { pid?: unknown; createdAt?: unknown };
-      stale = typeof value.pid === "number" && typeof value.createdAt === "number" && io.now() - value.createdAt > 30 * 60_000 && !io.isProcessAlive(value.pid);
+      stale = typeof value.pid === "number" && typeof value.createdAt === "number" && (operation === "recover" || io.now() - value.createdAt > 30 * 60_000) && !io.isProcessAlive(value.pid);
     } catch { stale = false; }
     if (!stale) throw new CliError("VALIDATION_ERROR", "another moeicons install/update/reload operation is already running");
     io.remove(path);
@@ -42,13 +42,13 @@ export async function withProjectLock<T>(projectRoot: string, operation: "instal
   finally { if (io.exists(path)) io.remove(path); }
 }
 
-export function withProjectLockSync<T>(projectRoot: string, operation: "install" | "update" | "reload" | "doctor", work: () => T, io: ProjectLockIo = defaultIo): T {
+export function withProjectLockSync<T>(projectRoot: string, operation: "install" | "update" | "reload" | "doctor" | "recover", work: () => T, io: ProjectLockIo = defaultIo): T {
   const path = join(projectRoot, ".moeicons.lock");
   if (io.exists(path)) {
     let stale = false;
     try {
       const value = JSON.parse(io.read(path)) as { pid?: unknown; createdAt?: unknown };
-      stale = typeof value.pid === "number" && typeof value.createdAt === "number" && io.now() - value.createdAt > 30 * 60_000 && !io.isProcessAlive(value.pid);
+      stale = typeof value.pid === "number" && typeof value.createdAt === "number" && (operation === "recover" || io.now() - value.createdAt > 30 * 60_000) && !io.isProcessAlive(value.pid);
     } catch { stale = false; }
     if (!stale) throw new CliError("VALIDATION_ERROR", "another moeicons install/update/reload operation is already running");
     io.remove(path);
