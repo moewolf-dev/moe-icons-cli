@@ -25,13 +25,7 @@ export interface MoeiconsThemeConfig {
 /** User-confirmed project integration anchors (config schema v3). */
 export interface MoeiconsIntegration {
   readonly adapter:
-    | "vite-react"
-    | "next-app"
-    | "next-pages"
-    | "vite-vue"
-    | "nuxt"
-    | "vanilla"
-    | "assets-only";
+    "vite-react" | "next-app" | "next-pages" | "vite-vue" | "nuxt" | "vanilla" | "assets-only";
   readonly entry?: string;
   readonly style?: string;
 }
@@ -51,6 +45,7 @@ export interface MoeiconsConfigFile {
   readonly defaultTheme: string;
   readonly themes: Readonly<Record<string, MoeiconsThemeConfig>>;
   readonly icons: readonly string[];
+  readonly downloadMode?: "auto" | "icons" | "full";
   readonly missingIconPolicy?: "fallback" | "error";
   readonly integration?: MoeiconsIntegration;
 }
@@ -67,6 +62,7 @@ export interface LegacyConfigInput {
   readonly defaultTheme: string;
   readonly themes: Readonly<Record<string, MoeiconsThemeConfig>>;
   readonly icons: readonly string[];
+  readonly downloadMode?: "auto" | "icons" | "full";
   readonly missingIconPolicy?: "fallback" | "error";
 }
 
@@ -141,6 +137,7 @@ const ALLOWED_COMMON_KEYS = new Set([
   "themes",
   "icons",
   "missingIconPolicy",
+  "downloadMode",
   "integration",
 ]);
 
@@ -188,6 +185,7 @@ function requireCommonConfigFields(
   defaultTheme: string;
   themes: Readonly<Record<string, MoeiconsThemeConfig>>;
   icons: readonly string[];
+  downloadMode?: "auto" | "icons" | "full";
   missingIconPolicy?: "fallback" | "error";
 } {
   const warnings: string[] = [];
@@ -196,22 +194,33 @@ function requireCommonConfigFields(
   if (typeof obj.outputDir !== "string" || obj.outputDir.length === 0)
     throw new Error("outputDir is required");
   const outputParts = obj.outputDir.split("/");
-  if (obj.outputDir.includes("\\") || obj.outputDir.includes("\0") ||
-      obj.outputDir.startsWith("/") || /^[A-Za-z]:/.test(obj.outputDir) ||
-      outputParts.some((part) => !part || part === "." || part === "..")) {
+  if (
+    obj.outputDir.includes("\\") ||
+    obj.outputDir.includes("\0") ||
+    obj.outputDir.startsWith("/") ||
+    /^[A-Za-z]:/.test(obj.outputDir) ||
+    outputParts.some((part) => !part || part === "." || part === "..")
+  ) {
     throw new Error("outputDir must be a POSIX relative path without '.' or '..' segments");
   }
   if ([".git", ".moeicons", "node_modules"].includes(outputParts[0] ?? "")) {
     throw new Error("outputDir cannot use a project control directory");
   }
   if (!/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(obj.outputDir)) {
-    throw new Error("outputDir must use ASCII letters, digits, _, -, and safe dotted child segments");
+    throw new Error(
+      "outputDir must use ASCII letters, digits, _, -, and safe dotted child segments",
+    );
   }
   if (typeof obj.defaultTheme !== "string" || obj.defaultTheme.length === 0)
     throw new Error("defaultTheme is required");
   if (typeof obj.themes !== "object" || obj.themes === null || Array.isArray(obj.themes)) {
     throw new Error("themes must be an object");
   }
+  if (
+    obj.downloadMode !== undefined &&
+    !["auto", "icons", "full"].includes(String(obj.downloadMode))
+  )
+    throw new Error('downloadMode must be "auto", "icons" or "full"');
   if (
     obj.missingIconPolicy !== undefined &&
     obj.missingIconPolicy !== "fallback" &&
@@ -228,7 +237,8 @@ function requireCommonConfigFields(
     }
     const internalName = toProxyName(name).toLowerCase();
     const previous = themeNames.get(internalName);
-    if (previous) throw new Error(`theme keys "${previous}" and "${name}" generate the same identifier`);
+    if (previous)
+      throw new Error(`theme keys "${previous}" and "${name}" generate the same identifier`);
     themeNames.set(internalName, name);
     if (typeof value !== "object" || value === null || Array.isArray(value))
       throw new Error(`theme ${name} is invalid`);
@@ -257,12 +267,32 @@ function requireCommonConfigFields(
       );
     }
 
-    if (theme.format !== undefined && typeof theme.format !== "string") throw new Error(`theme ${name}.format is invalid`);
-    if (theme.imageSize !== undefined && typeof theme.imageSize !== "number") throw new Error(`theme ${name}.imageSize is invalid`);
-    if (theme.defaultSize !== undefined && (typeof theme.defaultSize !== "number" || !Number.isFinite(theme.defaultSize) || theme.defaultSize <= 0)) throw new Error(`theme ${name}.defaultSize must be a positive finite number`);
-    if (theme.strokeWidth !== undefined && (typeof theme.strokeWidth !== "number" || !Number.isFinite(theme.strokeWidth) || theme.strokeWidth < 0)) throw new Error(`theme ${name}.strokeWidth must be a nonnegative finite number`);
-    if (theme.className !== undefined && typeof theme.className !== "string") throw new Error(`theme ${name}.className must be a string`);
-    if (theme.icons !== undefined && (!Array.isArray(theme.icons) || theme.icons.some((id) => typeof id !== "string") || new Set(theme.icons).size !== theme.icons.length)) {
+    if (theme.format !== undefined && typeof theme.format !== "string")
+      throw new Error(`theme ${name}.format is invalid`);
+    if (theme.imageSize !== undefined && typeof theme.imageSize !== "number")
+      throw new Error(`theme ${name}.imageSize is invalid`);
+    if (
+      theme.defaultSize !== undefined &&
+      (typeof theme.defaultSize !== "number" ||
+        !Number.isFinite(theme.defaultSize) ||
+        theme.defaultSize <= 0)
+    )
+      throw new Error(`theme ${name}.defaultSize must be a positive finite number`);
+    if (
+      theme.strokeWidth !== undefined &&
+      (typeof theme.strokeWidth !== "number" ||
+        !Number.isFinite(theme.strokeWidth) ||
+        theme.strokeWidth < 0)
+    )
+      throw new Error(`theme ${name}.strokeWidth must be a nonnegative finite number`);
+    if (theme.className !== undefined && typeof theme.className !== "string")
+      throw new Error(`theme ${name}.className must be a string`);
+    if (
+      theme.icons !== undefined &&
+      (!Array.isArray(theme.icons) ||
+        theme.icons.some((id) => typeof id !== "string") ||
+        new Set(theme.icons).size !== theme.icons.length)
+    ) {
       throw new Error(`theme ${name}.icons must be an array of unique icon IDs`);
     }
     const format = typeof theme.format === "string" ? theme.format : undefined;
@@ -314,7 +344,10 @@ function requireCommonConfigFields(
   const icons = flattenIcons(obj.icons);
   for (const [name, theme] of Object.entries(themes)) {
     for (const iconId of theme.icons ?? []) {
-      if (!icons.includes(iconId)) throw new Error(`theme ${name}.icons contains unregistered icon "${iconId}"; add it to project icons first`);
+      if (!icons.includes(iconId))
+        throw new Error(
+          `theme ${name}.icons contains unregistered icon "${iconId}"; add it to project icons first`,
+        );
     }
   }
   if (!lenientCatalog) {
@@ -328,9 +361,10 @@ function requireCommonConfigFields(
     defaultTheme: obj.defaultTheme,
     themes,
     icons,
-    ...(obj.missingIconPolicy !== undefined
-      ? { missingIconPolicy: obj.missingIconPolicy }
+    ...(obj.downloadMode !== undefined
+      ? { downloadMode: obj.downloadMode as "auto" | "icons" | "full" }
       : {}),
+    ...(obj.missingIconPolicy !== undefined ? { missingIconPolicy: obj.missingIconPolicy } : {}),
   };
 }
 
@@ -350,7 +384,7 @@ function validateV2Config(
 ): ValidatedConfig {
   const obj = asRecord(raw);
   if (obj.framework !== undefined)
-    throw new Error('framework is only supported in schemaVersion 1; use target');
+    throw new Error("framework is only supported in schemaVersion 1; use target");
   for (const key of Object.keys(obj)) {
     if (!ALLOWED_COMMON_KEYS.has(key)) {
       throw new Error(`unknown config field "${key}"`);
@@ -368,6 +402,7 @@ function validateV2Config(
       defaultTheme: common.defaultTheme,
       themes: common.themes,
       icons: common.icons,
+      ...(common.downloadMode !== undefined ? { downloadMode: common.downloadMode } : {}),
       ...(common.missingIconPolicy !== undefined
         ? { missingIconPolicy: common.missingIconPolicy }
         : {}),
@@ -392,9 +427,15 @@ function validateIntegration(value: unknown): MoeiconsIntegration {
   const adapter = record.adapter as IntegrationAdapter;
   const checkRel = (field: unknown, name: string): string | undefined => {
     if (field === undefined) return undefined;
-    if (typeof field !== "string" || !field || field.startsWith("/") || /^[A-Za-z]:/.test(field) ||
-      field.includes("\\") || field.includes("\0") ||
-      field.split("/").some((part) => !part || part === "." || part === "..")) {
+    if (
+      typeof field !== "string" ||
+      !field ||
+      field.startsWith("/") ||
+      /^[A-Za-z]:/.test(field) ||
+      field.includes("\\") ||
+      field.includes("\0") ||
+      field.split("/").some((part) => !part || part === "." || part === "..")
+    ) {
       throw new Error(`${name} must be a POSIX-relative path without .. or escapes`);
     }
     return field;
@@ -412,7 +453,11 @@ function validateIntegration(value: unknown): MoeiconsIntegration {
 }
 
 /** Validate a legacy schema version 1 config: framework is required, target is rejected. */
-function validateV1Config(raw: unknown, sourceCatalog: IconCatalog, lenientCatalog = false): ValidatedConfig {
+function validateV1Config(
+  raw: unknown,
+  sourceCatalog: IconCatalog,
+  lenientCatalog = false,
+): ValidatedConfig {
   const obj = asRecord(raw);
   for (const key of Object.keys(obj)) {
     if (!ALLOWED_COMMON_KEYS.has(key) && key !== "framework") {
@@ -433,6 +478,7 @@ function validateV1Config(raw: unknown, sourceCatalog: IconCatalog, lenientCatal
       defaultTheme: common.defaultTheme,
       themes: common.themes,
       icons: common.icons,
+      ...(common.downloadMode !== undefined ? { downloadMode: common.downloadMode } : {}),
       ...(common.missingIconPolicy !== undefined
         ? { missingIconPolicy: common.missingIconPolicy }
         : {}),
@@ -488,7 +534,10 @@ export function validateConfigDocument(
     if (options.lenientCatalog !== true) {
       const raw = asRecord(document.value);
       if (document.version === 1 && (raw.target !== undefined || raw.integration !== undefined)) {
-        return { kind: "invalid", message: "v1 config cannot set target or integration; migrate to schema v2/v3" };
+        return {
+          kind: "invalid",
+          message: "v1 config cannot set target or integration; migrate to schema v2/v3",
+        };
       }
       const canonical = loadGeneratedConfigPackage().validateConfig(document.value, sourceCatalog);
       if (!canonical.ok) {
@@ -505,14 +554,19 @@ export function validateConfigDocument(
         if (group?.type !== "bitmap" || !group.variants?.length) continue;
         const variantId = `${group.id}-${theme.imageSize ?? 256}-${theme.format ?? "webp"}`;
         if (!group.variants.includes(variantId)) {
-          return { kind: "invalid", message: `variant ${variantId} is unavailable for ${group.id}` };
+          return {
+            kind: "invalid",
+            message: `variant ${variantId} is unavailable for ${group.id}`,
+          };
         }
       }
       const warnings = [...(canonical.warnings ?? [])];
       for (const [name, value] of Object.entries(raw.themes as Record<string, unknown>)) {
         const styles = (value as Record<string, unknown>).styles;
         if (Array.isArray(styles) && styles.length > 0) {
-          warnings.push(`theme "${name}": "styles" is deprecated and has no effect; remove it from your config`);
+          warnings.push(
+            `theme "${name}": "styles" is deprecated and has no effect; remove it from your config`,
+          );
         }
       }
       return {
@@ -522,11 +576,20 @@ export function validateConfigDocument(
       };
     }
     if (document.version === 1) {
-      const validated = validateV1Config(document.value, sourceCatalog, options.lenientCatalog === true);
+      const validated = validateV1Config(
+        document.value,
+        sourceCatalog,
+        options.lenientCatalog === true,
+      );
       validated.warnings.unshift('config schema v1 migrated "framework" to "target"');
       return { kind: "ok", config: validated.config, warnings: validated.warnings };
     }
-    const validated = validateV2Config(document.value, sourceCatalog, document.version, options.lenientCatalog === true);
+    const validated = validateV2Config(
+      document.value,
+      sourceCatalog,
+      document.version,
+      options.lenientCatalog === true,
+    );
     return { kind: "ok", config: validated.config, warnings: validated.warnings };
   } catch (error) {
     return { kind: "invalid", message: error instanceof Error ? error.message : String(error) };
@@ -551,7 +614,8 @@ export function mergeMoeiconsConfig(
   current: MoeiconsConfigFile | LegacyConfigInput,
   patch: Partial<Omit<MoeiconsConfigFile, "schemaVersion">>,
 ): MoeiconsConfigFile {
-  const integration = patch.integration ?? ("integration" in current ? current.integration : undefined);
+  const integration =
+    patch.integration ?? ("integration" in current ? current.integration : undefined);
   return {
     schemaVersion: integration ? 3 : 2,
     tier: patch.tier ?? current.tier,

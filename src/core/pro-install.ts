@@ -1,30 +1,54 @@
 import { detectProject } from "../project/detect.js";
 import { loadConfigDocument, validateConfigDocument } from "../project/config.js";
-import { createInstallPlan, executeInstallPlan, type TransactionalFs, type TransactionalFsWithCopy } from "../project/install.js";
-import { parseInstallMetadata, serializeInstallMetadata, sha256Bytes } from "../project/install-metadata.js";
+import {
+  createInstallPlan,
+  executeInstallPlan,
+  type TransactionalFs,
+  type TransactionalFsWithCopy,
+} from "../project/install.js";
+import {
+  parseInstallMetadata,
+  serializeInstallMetadata,
+  sha256Bytes,
+} from "../project/install-metadata.js";
 import { withProjectLock } from "../project/project-lock.js";
 import { runAccessTokenUseCase, type AuthUseCaseDependencies } from "./auth.js";
 import type { CommandContext } from "./context.js";
-import { downloadProArtifact, PRO_DOWNLOAD_HOSTS, resolveProDescriptorEndpoint } from "./pro-download.js";
+import {
+  downloadProArtifact,
+  PRO_DOWNLOAD_HOSTS,
+  resolveProDescriptorEndpoint,
+} from "./pro-download.js";
 import { artifactCachePath, metadataCachePath } from "./free-download.js";
-import { configuredComponentFiles, selectTargetSubtree } from "./target-subtree.js";
+import {
+  configuredComponentFiles,
+  selectTargetSubtree,
+  computeSubtreeHash,
+} from "./target-subtree.js";
 import { typesReexport } from "./install.js";
 import { CliError } from "../errors/index.js";
 import type { Target } from "../commands/parser.js";
 import { catalog as bundledCatalog, parseCatalog } from "../catalog/catalog.js";
 import { resolveBitmapTuples, resolveConfiguredBitmapShards } from "./bitmap-shard-resolver.js";
-import { mergeBitmapShardCacheManifest, readBitmapShardCacheManifest, writeBitmapShardCacheManifest } from "./bitmap-shard-cache.js";
+import {
+  mergeBitmapShardCacheManifest,
+  readBitmapShardCacheManifest,
+  writeBitmapShardCacheManifest,
+} from "./bitmap-shard-cache.js";
 import type { BitmapShard } from "./bitmap-shards.js";
 import type { CacheIo } from "./cache.js";
 import { allowLocalTestFromEnv } from "./local-test-env.js";
 
-type ProInstallFs = TransactionalFs & Partial<Pick<TransactionalFsWithCopy, "readFileSync" | "readdirSync" | "copyFileSync">>;
+type ProInstallFs = TransactionalFs &
+  Partial<Pick<TransactionalFsWithCopy, "readFileSync" | "readdirSync" | "copyFileSync">>;
 
 function toCacheIo(fs_: ProInstallFs): CacheIo {
   return {
     // Shard cache keys are nested several levels deep; the CacheIo contract
     // requires recursive creation.
-    mkdirSync: (path: string) => { fs_.mkdirSync(path, { recursive: true }); },
+    mkdirSync: (path: string) => {
+      fs_.mkdirSync(path, { recursive: true });
+    },
     writeFileSync: fs_.writeFileSync,
     renameSync: fs_.renameSync,
     existsSync: fs_.existsSync,
@@ -83,6 +107,10 @@ export async function runProInstallUseCase(
   readonly descriptorSha256: string;
   readonly catalogSha256: string;
   readonly artifactBytes: number;
+  readonly downloadMode: "icons" | "full";
+  readonly downloadNotes: readonly string[];
+  readonly networkBytes?: number;
+  readonly selectedFiles?: number;
 }> {
   const project = detectProject(context.cwd);
   if (!project)
@@ -111,14 +139,28 @@ export async function runProInstallUseCase(
   const downloaded = await downloadProArtifact(
     context,
     deps.auth,
-    { version: expected.version, descriptorSha256: expected.descriptorSha256, ...(expected.allowLocalTest === true ? { allowLocalTest: true } : {}) },
     {
+      version: expected.version,
+      descriptorSha256: expected.descriptorSha256,
+      ...(expected.allowLocalTest === true ? { allowLocalTest: true } : {}),
+    },
+    {
+      selection: { config: bootstrap.config, document },
       ...(deps.fetch ? { fetch: deps.fetch } : {}),
       ...(deps.allowedHosts ? { allowedHosts: deps.allowedHosts } : {}),
       ...(deps.onProgress ? { onProgress: deps.onProgress } : {}),
     },
   );
-  const subtree = selectTargetSubtree(downloaded.artifactBytes, downloaded.descriptor, target);
+  const selectedTarget = downloaded.selected
+    ? Object.fromEntries(
+        Object.entries(downloaded.selected.files)
+          .filter(([path]) => path.startsWith(`${target}/`))
+          .map(([path, bytes]) => [path.slice(target.length + 1), bytes]),
+      )
+    : undefined;
+  const subtree = selectedTarget
+    ? { ok: true as const, target, files: selectedTarget, ...computeSubtreeHash(selectedTarget) }
+    : selectTargetSubtree(downloaded.artifactBytes, downloaded.descriptor, target);
   if (!subtree.ok) {
     throw new CliError("VALIDATION_ERROR", subtree.message);
   }
@@ -129,7 +171,10 @@ export async function runProInstallUseCase(
   try {
     installedCatalog = parseCatalog(JSON.parse(downloaded.catalogJson));
   } catch (error) {
-    throw new CliError("VALIDATION_ERROR", error instanceof Error ? error.message : "invalid pro catalog");
+    throw new CliError(
+      "VALIDATION_ERROR",
+      error instanceof Error ? error.message : "invalid pro catalog",
+    );
   }
   // DEV-G10-R1 phase 2: re-validate the SAME snapshot against the verified
   // release catalog. A style group / icon / variant the release does not ship
@@ -142,16 +187,36 @@ export async function runProInstallUseCase(
     );
   }
   const config = strict.config;
-  const installedFiles = configuredComponentFiles(subtree.files, target, config, installedCatalog);
+  const installedFiles = downloaded.selected
+    ? subtree.files
+    : configuredComponentFiles(subtree.files, target, config, installedCatalog);
   // Only after the snapshot passes strict validation do we persist the
   // content-addressed code/metadata caches. A rejected config writes nothing.
-  cacheVerifiedArtifact(deps.fs, cacheDir, downloaded.descriptor.version, downloaded.descriptor.sha256, downloaded.artifactBytes);
+  if (!downloaded.selected)
+    cacheVerifiedArtifact(
+      deps.fs,
+      cacheDir,
+      downloaded.descriptor.version,
+      downloaded.descriptor.sha256,
+      downloaded.artifactBytes,
+    );
   if (downloaded.metadataBytes && downloaded.descriptor.metadata) {
-    cacheVerifiedArtifact(deps.fs, cacheDir, downloaded.descriptor.version, downloaded.descriptor.metadata.sha256, downloaded.metadataBytes, "metadata");
+    cacheVerifiedArtifact(
+      deps.fs,
+      cacheDir,
+      downloaded.descriptor.version,
+      downloaded.descriptor.metadata.sha256,
+      downloaded.metadataBytes,
+      "metadata",
+    );
   }
   const resolvedTuples = resolveBitmapTuples(config, installedCatalog);
   if (!resolvedTuples.ok) throw new CliError("VALIDATION_ERROR", resolvedTuples.errors.join("; "));
-  if (resolvedTuples.tuples.length > 0 && downloaded.descriptor.channel !== "local-test") {
+  if (
+    !downloaded.selected &&
+    resolvedTuples.tuples.length > 0 &&
+    downloaded.descriptor.channel !== "local-test"
+  ) {
     const accessToken = await runAccessTokenUseCase(context, deps.auth);
     const { loopbackHost } = resolveProDescriptorEndpoint(context.env);
     const allowedHosts = loopbackHost ? [...PRO_DOWNLOAD_HOSTS, loopbackHost] : PRO_DOWNLOAD_HOSTS;
@@ -166,11 +231,14 @@ export async function runProInstallUseCase(
     const cacheManifest = readBitmapShardCacheManifest(cacheDir, cacheIo);
     const metadataPath = join(project.root, ".moeicons", "install-metadata.json");
     if (deps.fs.existsSync(metadataPath) && deps.fs.readFileSync) {
-      const existing = parseInstallMetadata(deps.fs.readFileSync(metadataPath, "utf8"), { allowLocalTest: allowLocalTestFromEnv(context.env) });
+      const existing = parseInstallMetadata(deps.fs.readFileSync(metadataPath, "utf8"), {
+        allowLocalTest: allowLocalTestFromEnv(context.env),
+      });
       existingPins = existing?.bitmapShards ?? [];
     }
-    existingPins = mergeBitmapShardCacheManifest(cacheManifest, existingPins)
-      .filter((pin) => pin.resourceVersion === downloaded.descriptor.version);
+    existingPins = mergeBitmapShardCacheManifest(cacheManifest, existingPins).filter(
+      (pin) => pin.resourceVersion === downloaded.descriptor.version,
+    );
     const shards = await resolveConfiguredBitmapShards({
       existingPins,
       config,
@@ -189,18 +257,32 @@ export async function runProInstallUseCase(
     bitmapPins = shards.pins;
     bitmapShardSetSha256Value = shards.bitmapShardSetSha256;
     // Record every verified shard in the global cache manifest (idempotent).
-    writeBitmapShardCacheManifest(cacheDir, cacheIo, mergeBitmapShardCacheManifest(cacheManifest, shards.pins), context.now().getTime());
+    writeBitmapShardCacheManifest(
+      cacheDir,
+      cacheIo,
+      mergeBitmapShardCacheManifest(cacheManifest, shards.pins),
+      context.now().getTime(),
+    );
   }
   const files: Record<string, string | Uint8Array> = {
     ".moeicons/catalog.json": downloaded.catalogJson,
     ".moeicons/manifest.json": downloaded.manifestJson,
     ".moeicons/MANUAL.md": downloaded.manualMd,
     ".moeicons/artifact/package.json": '{"private":true,"type":"module","sideEffects":false}\n',
-    [`${config.outputDir.replace(/\\/g, "/").replace(/\/$/, "")}/types.ts`]: typesReexport("pro", target, config.outputDir),
+    [`${config.outputDir.replace(/\\/g, "/").replace(/\/$/, "")}/types.ts`]: typesReexport(
+      "pro",
+      target,
+      config.outputDir,
+    ),
     [`${config.outputDir.replace(/\\/g, "/").replace(/\/$/, "")}/.moeicons-pro.marker`]: "pro\n",
   };
   for (const [rel, bytes] of Object.entries(installedFiles)) {
     files[`.moeicons/artifact/${target}/${rel}`] = bytes;
+  }
+  if (downloaded.selected) {
+    files[".moeicons/resource-index.json.gz"] = downloaded.selected.indexBytes;
+    for (const [rel, bytes] of Object.entries(downloaded.selected.files))
+      files[`.moeicons/artifact/${rel}`] = bytes;
   }
   const managedFiles = Object.fromEntries(
     Object.entries(files).map(([path, content]) => [path, sha256Bytes(content)]),
@@ -215,6 +297,15 @@ export async function runProInstallUseCase(
     catalogSha256: downloaded.descriptor.catalogSha256,
     installedAt: context.now().toISOString(),
     managedFiles,
+    ...(downloaded.selected
+      ? {
+          delivery: {
+            mode: "icons" as const,
+            indexSha256: downloaded.selected.refs.index.sha256,
+            bundleSha256: downloaded.selected.refs.bundle.sha256,
+          },
+        }
+      : {}),
     targetSha256: subtree.sha256,
     targetFileCount: subtree.fileCount,
     targetByteCount: subtree.byteCount,
@@ -222,7 +313,9 @@ export async function runProInstallUseCase(
       ? { bitmapShards: bitmapPins, bitmapShardSetSha256: bitmapShardSetSha256Value }
       : {}),
     // A-1b: record the accepted local-test model so a later generate can verify it.
-    ...(downloaded.descriptor.channel === "local-test" ? { channel: "local-test" as const, publishable: false } : {}),
+    ...(downloaded.descriptor.channel === "local-test"
+      ? { channel: "local-test" as const, publishable: false }
+      : {}),
   });
   await withProjectLock(project.root, "install", () => {
     if (JSON.stringify(loadConfigDocument(project.root)) !== plannedConfigDocument)
@@ -234,6 +327,20 @@ export async function runProInstallUseCase(
     artifactVersion: downloaded.descriptor.version,
     descriptorSha256: downloaded.descriptor.descriptorSha256,
     catalogSha256: downloaded.descriptor.catalogSha256,
-    artifactBytes: downloaded.artifactBytes.byteLength,
+    artifactBytes: downloaded.selected?.payloadBytes ?? downloaded.artifactBytes.byteLength,
+    downloadMode: downloaded.selected ? "icons" : "full",
+    downloadNotes:
+      downloaded.selected?.fallbacks ??
+      (config.downloadMode === "full"
+        ? []
+        : [
+            "Release does not advertise selected downloads; auto used the verified full archive. Set downloadMode=icons to require selected downloads.",
+          ]),
+    ...(downloaded.selected
+      ? {
+          networkBytes: downloaded.selected.networkBytes,
+          selectedFiles: Object.keys(downloaded.selected.files).length,
+        }
+      : {}),
   };
 }

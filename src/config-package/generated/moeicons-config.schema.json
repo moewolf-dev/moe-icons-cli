@@ -5,16 +5,32 @@
   "description": "Canonical user-project configuration. Version 3 adds the optional `integration` object (application/style anchors confirmed by the CLI) on top of the schema v2 fields. The pixel-ladder field remains `imageSize` and is never called `size`.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "tier", "target", "outputDir", "defaultTheme", "themes", "icons"],
+  "required": [
+    "schemaVersion",
+    "tier",
+    "target",
+    "outputDir",
+    "defaultTheme",
+    "themes",
+    "icons"
+  ],
   "properties": {
     "schemaVersion": {
       "const": 3
     },
     "tier": {
-      "enum": ["free", "pro"]
+      "enum": [
+        "free",
+        "pro"
+      ]
     },
     "target": {
-      "enum": ["react", "vue", "vanilla", "assets"]
+      "enum": [
+        "react",
+        "vue",
+        "vanilla",
+        "assets"
+      ]
     },
     "outputDir": {
       "type": "string",
@@ -26,21 +42,30 @@
       "minLength": 1
     },
     "missingIconPolicy": {
-      "enum": ["fallback", "error"]
+      "enum": [
+        "fallback",
+        "error"
+      ]
     },
     "themes": {
       "type": "object",
-      "propertyNames": { "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+      },
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["styleGroup"],
+        "required": [
+          "styleGroup"
+        ],
         "properties": {
           "icons": {
             "description": "Optional subset of project icons selected for this theme. Omit to select all registered icons; an empty array selects none. Missing variants follow missingIconPolicy.",
             "type": "array",
             "uniqueItems": true,
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           },
           "styleGroup": {
             "type": "string",
@@ -48,19 +73,32 @@
           },
           "styles": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           },
           "format": {
-            "enum": ["svg", "webp", "png"]
+            "enum": [
+              "svg",
+              "webp",
+              "png"
+            ]
           },
           "imageSize": {
-            "enum": [64, 128, 256, 512]
+            "enum": [
+              64,
+              128,
+              256,
+              512
+            ]
           },
           "defaultSize": {
-            "type": "number", "exclusiveMinimum": 0
+            "type": "number",
+            "exclusiveMinimum": 0
           },
           "strokeWidth": {
-            "type": "number", "minimum": 0
+            "type": "number",
+            "minimum": 0
           },
           "className": {
             "type": "string"
@@ -73,13 +111,17 @@
       "oneOf": [
         {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         {
           "type": "object",
           "additionalProperties": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           }
         }
       ]
@@ -87,10 +129,20 @@
     "integration": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["adapter"],
+      "required": [
+        "adapter"
+      ],
       "properties": {
         "adapter": {
-          "enum": ["vite-react", "next-app", "next-pages", "vite-vue", "nuxt", "vanilla", "assets-only"]
+          "enum": [
+            "vite-react",
+            "next-app",
+            "next-pages",
+            "vite-vue",
+            "nuxt",
+            "vanilla",
+            "assets-only"
+          ]
         },
         "entry": {
           "type": "string",
@@ -107,13 +159,33 @@
         {
           "if": {
             "not": {
-              "properties": { "adapter": { "const": "assets-only" } },
-              "required": ["adapter"]
+              "properties": {
+                "adapter": {
+                  "const": "assets-only"
+                }
+              },
+              "required": [
+                "adapter"
+              ]
             }
           },
-          "then": { "required": ["entry"] }
+          "then": {
+            "required": [
+              "entry"
+            ]
+          }
         }
       ]
+    },
+    "downloadMode": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "icons",
+        "full"
+      ],
+      "default": "auto",
+      "description": "Prefer configuration-selected resources (auto), require them (icons), or download the full archive (full)."
     }
   }
 }

@@ -212,7 +212,7 @@ describe("runInstallUseCase", () => {
     const result = await runInstallUseCase(context(project), deps(), { group: "free" });
     expect(result).toMatchObject({ ok: false, reason: "validation" });
     if (result.ok === false && result.reason === "validation") {
-      expect(result.message).toContain("target must be");
+      expect(result.message).toContain("target is required");
     }
     expect(existsSync(join(project, ".moeicons"))).toBe(false);
   });

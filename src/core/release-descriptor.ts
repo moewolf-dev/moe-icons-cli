@@ -1,3 +1,4 @@
+import { parseResourceRefs, type ResourceRefs } from "./selected-resources.js";
 const SHA256_HEX = /^[0-9a-f]{64}$/i;
 const SAFE_FILENAME = /^[A-Za-z0-9._-]+$/;
 const SAFE_SUBTREE_PATH = /^[A-Za-z0-9._/-]+$/;
@@ -39,6 +40,7 @@ export interface ReleaseAssetsRef {
 }
 
 export interface ReleaseTierArtifact {
+  readonly resources?: ResourceRefs;
   readonly filename: string;
   readonly sha256: string;
   readonly size?: number;
@@ -109,10 +111,18 @@ function parseTargetMetadata(
     if (typeof entry.path !== "string" || !SAFE_SUBTREE_PATH.test(entry.path)) {
       throw new Error(`${field}.${key}.path must be a safe subtree path`);
     }
-    if (typeof entry.fileCount !== "number" || !Number.isSafeInteger(entry.fileCount) || entry.fileCount < 0) {
+    if (
+      typeof entry.fileCount !== "number" ||
+      !Number.isSafeInteger(entry.fileCount) ||
+      entry.fileCount < 0
+    ) {
       throw new Error(`${field}.${key}.fileCount must be a non-negative integer`);
     }
-    if (typeof entry.byteCount !== "number" || !Number.isSafeInteger(entry.byteCount) || entry.byteCount < 0) {
+    if (
+      typeof entry.byteCount !== "number" ||
+      !Number.isSafeInteger(entry.byteCount) ||
+      entry.byteCount < 0
+    ) {
       throw new Error(`${field}.${key}.byteCount must be a non-negative integer`);
     }
     result[target] = {
@@ -164,18 +174,29 @@ function parseAssetsRef(value: unknown, field: string): ReleaseAssetsRef {
   };
 }
 
-function parseTier(value: unknown, field: string): ReleaseTierArtifact {
+function parseTier(value: unknown, field: string, version: string): ReleaseTierArtifact {
   if (!isRecord(value)) throw new Error(`${field} must be an object`);
+  const resources = value.resources !== undefined ? parseResourceRefs(value.resources) : undefined;
+  if (
+    resources &&
+    (resources.index.filename !== `moe-icons-${field}-resource-index-${version}.json.gz` ||
+      resources.bundle.filename !== `moe-icons-${field}-resources-${version}.bin`)
+  )
+    throw new Error(`${field}.resources filenames do not match tier/version`);
   return {
+    ...(resources ? { resources } : {}),
     filename: requireFilename(value.filename, `${field}.filename`),
     sha256: requireSha(value.sha256, `${field}.sha256`),
     ...(typeof value.size === "number" && Number.isSafeInteger(value.size) && value.size > 0
       ? { size: value.size }
       : {}),
-    ...(Array.isArray(value.styleGroups) && value.styleGroups.every((item) => typeof item === "string")
+    ...(Array.isArray(value.styleGroups) &&
+    value.styleGroups.every((item) => typeof item === "string")
       ? { styleGroups: value.styleGroups }
       : {}),
-    ...(typeof value.styleGroupCount === "number" ? { styleGroupCount: value.styleGroupCount } : {}),
+    ...(typeof value.styleGroupCount === "number"
+      ? { styleGroupCount: value.styleGroupCount }
+      : {}),
     ...(Array.isArray(value.targets)
       ? { targets: value.targets.map((item) => requireTarget(item, `${field}.targets[]`)) }
       : {}),
@@ -185,7 +206,9 @@ function parseTier(value: unknown, field: string): ReleaseTierArtifact {
     ...(value.metadata !== undefined
       ? { metadata: parseMetadataRef(value.metadata, `${field}.metadata`) }
       : {}),
-    ...(value.assets !== undefined ? { assets: parseAssetsRef(value.assets, `${field}.assets`) } : {}),
+    ...(value.assets !== undefined
+      ? { assets: parseAssetsRef(value.assets, `${field}.assets`) }
+      : {}),
   };
 }
 
@@ -203,18 +226,22 @@ export function parseReleaseDescriptor(bytes: Uint8Array): ReleaseDescriptor {
   }
   if (!isRecord(parsed.catalog)) throw new Error("release-descriptor.json missing catalog");
   const channel = parsed.channel === "local-test" ? ("local-test" as const) : undefined;
-  const publishable = parsed.publishable === true || parsed.publishable === false
-    ? parsed.publishable
-    : undefined;
+  const publishable =
+    parsed.publishable === true || parsed.publishable === false ? parsed.publishable : undefined;
   return {
     fullVersion: parsed.fullVersion,
-    free: parseTier(parsed.free, "free"),
+    free: parseTier(parsed.free, "free", parsed.fullVersion),
     catalog: {
       filename: requireFilename(parsed.catalog.filename, "catalog.filename"),
       sha256: requireSha(parsed.catalog.sha256, "catalog.sha256"),
-      schemaVersion: typeof parsed.catalog.schemaVersion === "number" ? parsed.catalog.schemaVersion : 1,
-      ...(typeof parsed.catalog.iconCount === "number" ? { iconCount: parsed.catalog.iconCount } : {}),
-      ...(typeof parsed.catalog.styleGroupCount === "number" ? { styleGroupCount: parsed.catalog.styleGroupCount } : {}),
+      schemaVersion:
+        typeof parsed.catalog.schemaVersion === "number" ? parsed.catalog.schemaVersion : 1,
+      ...(typeof parsed.catalog.iconCount === "number"
+        ? { iconCount: parsed.catalog.iconCount }
+        : {}),
+      ...(typeof parsed.catalog.styleGroupCount === "number"
+        ? { styleGroupCount: parsed.catalog.styleGroupCount }
+        : {}),
     },
     ...(channel ? { channel } : {}),
     ...(publishable !== undefined ? { publishable } : {}),
@@ -233,10 +260,15 @@ export function isLocalTestVersion(fullVersion: string): boolean {
  * non-publishable: an HTTP/remote source, a missing `local-test` channel, or
  * `publishable: true` must never be accepted by the free install flow.
  */
-export function assertLocalCandidateAllowed(descriptor: ReleaseDescriptor, viaLocalFixture: boolean): void {
+export function assertLocalCandidateAllowed(
+  descriptor: ReleaseDescriptor,
+  viaLocalFixture: boolean,
+): void {
   if (!isLocalTestVersion(descriptor.fullVersion)) return;
   if (!viaLocalFixture) {
-    throw new Error("local-test candidate descriptors are only accepted from a local release directory");
+    throw new Error(
+      "local-test candidate descriptors are only accepted from a local release directory",
+    );
   }
   if (descriptor.channel !== "local-test") {
     throw new Error("local-test candidate descriptor must declare channel local-test");
@@ -255,7 +287,8 @@ export function assertLocalCandidateAllowed(descriptor: ReleaseDescriptor, viaLo
 /** Parse `hex  filename` sidecar produced next to the descriptor. */
 export function parseSha256Sidecar(text: string): string {
   const token = text.trim().split(/\s+/)[0] ?? "";
-  if (!SHA256_HEX.test(token)) throw new Error("descriptor sha256 sidecar is not a 64-character hex digest");
+  if (!SHA256_HEX.test(token))
+    throw new Error("descriptor sha256 sidecar is not a 64-character hex digest");
   return token.toLowerCase();
 }
 

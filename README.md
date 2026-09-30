@@ -173,3 +173,36 @@ out keeps cached archives but blocks new unauthenticated installs/updates.
 Metadata distribution (`MANUAL-DIST`) implemented: builder-generated manual,
 catalog and manifest, per-tier archives and descriptors, Free bootstrap,
 metadata-only sync, and authenticated Pro pre-download/update.
+
+### Download modes and resource selection
+
+Set `downloadMode` in `moeicons.config.json` (schemaVersion 3):
+
+```json
+{
+  "schemaVersion": 3,
+  "tier": "free",
+  "target": "react",
+  "outputDir": "src/icons",
+  "downloadMode": "auto",
+  "icons": ["ui-search", "arrow-bold-right"],
+  "defaultTheme": "outline",
+  "themes": {
+    "outline": { "styleGroup": "moe-outline", "icons": ["ui-search"] },
+    "solid": { "styleGroup": "moe-solid", "icons": ["arrow-bold-right"] }
+  },
+  "missingIconPolicy": "fallback"
+}
+```
+
+- `auto` (default): selected resources when the fixed release advertises them. A legacy release without this capability uses the full archive and explains why.
+- `icons`: require selected resources. Unsupported releases, authorization failures, bad ranges and invalid digests stop the operation; they never trigger a full archive download.
+- `full`: download and verify the complete archive, then install the configured target/resources.
+
+`icons` registers the allowed icon IDs. A theme's `icons` restricts that theme to a subset; omitting it selects every registered ID available in the style group, and `[]` selects none. Fallback chooses the requested theme, then the default theme, then theme names in ASCII order. An icon with no selected variant fails validation. Bitmap themes also select `format` and `imageSize`; changing these fields may require new resources.
+
+The CLI reads the release metadata before planning resources, so validation uses that release's catalog. It shows the target, registered icon/theme counts, required file count and compressed payload budget before reading the data object. Verified cache entries reduce traffic. `--json` reports `downloadMode`, `downloadNotes`, `selectedFiles` and `networkBytes` (resource payload only; descriptor/metadata/index traffic is separate).
+
+Run `moeicons install free` or `moeicons install pro` after changing the selected icons, themes, bitmap format or size, then `moeicons generate`. `moeicons update` also reconciles the configuration when the release version is unchanged. Missing resources name the affected path and ask for reinstall; stale resources are removed only if still owned and unmodified. A configuration change during download stops before project writes; retry with the final configuration.
+
+Generation works offline from the project's verified installed resources; `moeicons recover` also needs no network. Install/update still consult the fixed descriptor and metadata, and Pro checks current entitlement. A resource cache hit does not bypass authorization, and there is no offline install flag. Corrupt cache entries are rejected and fetched again online. Interrupted downloads retain only verified cache members; project files change in one recoverable transaction after all required resources have verified.

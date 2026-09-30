@@ -1,5 +1,14 @@
+import { parseResourceRefs, type ResourceRefs } from "./selected-resources.js";
+import { downloadProSelected } from "./pro-selected-download.js";
+import type { ConfigDocument, MoeiconsConfigFile } from "../project/config.js";
+import type { SelectedResourceDownload } from "./free-download.js";
 import { CliError } from "../errors/index.js";
-import { extractTarGz, decodeUtf8, ICON_ARCHIVE_MAX_ENTRIES, ICON_ARCHIVE_MAX_EXPANDED_BYTES } from "../project/tar-gz.js";
+import {
+  extractTarGz,
+  decodeUtf8,
+  ICON_ARCHIVE_MAX_ENTRIES,
+  ICON_ARCHIVE_MAX_EXPANDED_BYTES,
+} from "../project/tar-gz.js";
 import { sha256Bytes } from "../project/install-metadata.js";
 import {
   downloadSignedArtifact,
@@ -12,7 +21,9 @@ import type { ReleaseTarget, ReleaseTargetMetadata } from "./release-descriptor.
 import { extractAndVerifyMetadataArchive } from "../metadata/archive.js";
 
 const ENDPOINT = "https://api.moeicons.com/v1/icon-library/pro/artifact-descriptor";
-export const PRO_DOWNLOAD_HOSTS = ["06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com"] as const;
+export const PRO_DOWNLOAD_HOSTS = [
+  "06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com",
+] as const;
 const SHA = /^[a-f0-9]{64}$/;
 const VERSION = /^\d+\.\d+\.\d+(?:-(?:alpha|beta))?$/;
 /** A-1b: local-test candidate version; only accepted with an explicit local context. */
@@ -25,8 +36,11 @@ const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1"]);
  * production behavior is unchanged and a local mock can drive the packed CLI
  * during candidate acceptance.
  */
-export function resolveProDescriptorEndpoint(env: Readonly<Record<string, string | undefined>>):
-  { readonly url: string; readonly allowLoopback: boolean; readonly loopbackHost: string | null } {
+export function resolveProDescriptorEndpoint(env: Readonly<Record<string, string | undefined>>): {
+  readonly url: string;
+  readonly allowLoopback: boolean;
+  readonly loopbackHost: string | null;
+} {
   const override = env.MOEICONS_PRO_DESCRIPTOR_URL;
   if (!override) return { url: ENDPOINT, allowLoopback: false, loopbackHost: null };
   let parsed: URL;
@@ -37,12 +51,16 @@ export function resolveProDescriptorEndpoint(env: Readonly<Record<string, string
   }
   const loopback = parsed.protocol === "http:" && LOOPBACK.has(parsed.hostname);
   if (parsed.protocol !== "https:" && !loopback) {
-    throw new CliError("VALIDATION_ERROR", "MOEICONS_PRO_DESCRIPTOR_URL must be https or loopback http");
+    throw new CliError(
+      "VALIDATION_ERROR",
+      "MOEICONS_PRO_DESCRIPTOR_URL must be https or loopback http",
+    );
   }
   return { url: override, allowLoopback: loopback, loopbackHost: loopback ? parsed.host : null };
 }
 
 export interface ProArtifactDescriptor extends SignedArtifactDescriptor {
+  readonly resources?: ResourceRefs;
   readonly tier: "pro";
   readonly version: string;
   readonly descriptorSha256: string;
@@ -75,20 +93,17 @@ function parseTargetMetadata(
   const record = value as Record<string, unknown>;
   const result: Partial<Record<ReleaseTarget, ReleaseTargetMetadata>> = {};
   for (const [key, entry] of Object.entries(record)) {
-    if (
-      key !== "react" &&
-      key !== "vue" &&
-      key !== "vanilla" &&
-      key !== "assets"
-    ) {
+    if (key !== "react" && key !== "vue" && key !== "vanilla" && key !== "assets") {
       return undefined;
     }
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return undefined;
     const item = entry as Record<string, unknown>;
     if (typeof item.path !== "string" || /(^|[\\/])\.\.([\\/]|$)/.test(item.path)) return undefined;
     if (typeof item.sha256 !== "string" || !SHA.test(item.sha256)) return undefined;
-    if (typeof item.fileCount !== "number" || !Number.isSafeInteger(item.fileCount)) return undefined;
-    if (typeof item.byteCount !== "number" || !Number.isSafeInteger(item.byteCount)) return undefined;
+    if (typeof item.fileCount !== "number" || !Number.isSafeInteger(item.fileCount))
+      return undefined;
+    if (typeof item.byteCount !== "number" || !Number.isSafeInteger(item.byteCount))
+      return undefined;
     result[key] = {
       path: item.path,
       sha256: item.sha256,
@@ -99,36 +114,92 @@ function parseTargetMetadata(
   return result;
 }
 
-function parse(value: unknown, expected: { version: string; descriptorSha256: string; allowLocalTest?: boolean }, now: number, allowLoopback: boolean): ProArtifactDescriptor {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new CliError("VALIDATION_ERROR", "invalid pro artifact descriptor");
+function parse(
+  value: unknown,
+  expected: { version: string; descriptorSha256: string; allowLocalTest?: boolean },
+  now: number,
+  allowLoopback: boolean,
+): ProArtifactDescriptor {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new CliError("VALIDATION_ERROR", "invalid pro artifact descriptor");
   const item = value as Record<string, unknown>;
   const allowLocalTest = expected.allowLocalTest === true;
-  const baseAllowed = ["ok", "tier", "version", "descriptorSha256", "catalogFilename", "catalogSha256", "url", "expiresAt", "size", "sha256", "targetMetadata", "metadata"];
+  const baseAllowed = [
+    "ok",
+    "tier",
+    "version",
+    "descriptorSha256",
+    "catalogFilename",
+    "catalogSha256",
+    "url",
+    "expiresAt",
+    "size",
+    "sha256",
+    "targetMetadata",
+    "metadata",
+    "resources",
+  ];
   const allowed = allowLocalTest ? [...baseAllowed, "channel", "publishable"] : baseAllowed;
   const strictVersion = typeof item.version === "string" && VERSION.test(item.version);
   // A formal (stable/alpha/beta) version must never carry the local-test marker.
   if (strictVersion && (item.channel !== undefined || item.publishable !== undefined)) {
     throw new CliError("VALIDATION_ERROR", "invalid or changed pro artifact descriptor");
   }
-  const versionAllowed = typeof item.version === "string" && (strictVersion || isLocalTestDescriptor(item, allowLocalTest));
-  if (Object.keys(item).some((key) => !allowed.includes(key)) || item.ok !== true || item.tier !== "pro" || item.version !== expected.version || item.descriptorSha256 !== expected.descriptorSha256 ||
-      !versionAllowed || typeof item.descriptorSha256 !== "string" || !SHA.test(item.descriptorSha256) ||
-      item.catalogFilename !== "catalog.json" || typeof item.catalogSha256 !== "string" || !SHA.test(item.catalogSha256) || typeof item.url !== "string" ||
-      typeof item.expiresAt !== "string" || typeof item.size !== "number" || !Number.isSafeInteger(item.size) || item.size < 1 || typeof item.sha256 !== "string" || !SHA.test(item.sha256)) {
+  const versionAllowed =
+    typeof item.version === "string" &&
+    (strictVersion || isLocalTestDescriptor(item, allowLocalTest));
+  if (
+    Object.keys(item).some((key) => !allowed.includes(key)) ||
+    item.ok !== true ||
+    item.tier !== "pro" ||
+    item.version !== expected.version ||
+    item.descriptorSha256 !== expected.descriptorSha256 ||
+    !versionAllowed ||
+    typeof item.descriptorSha256 !== "string" ||
+    !SHA.test(item.descriptorSha256) ||
+    item.catalogFilename !== "catalog.json" ||
+    typeof item.catalogSha256 !== "string" ||
+    !SHA.test(item.catalogSha256) ||
+    typeof item.url !== "string" ||
+    typeof item.expiresAt !== "string" ||
+    typeof item.size !== "number" ||
+    !Number.isSafeInteger(item.size) ||
+    item.size < 1 ||
+    typeof item.sha256 !== "string" ||
+    !SHA.test(item.sha256)
+  ) {
     throw new CliError("VALIDATION_ERROR", "invalid or changed pro artifact descriptor");
   }
-  const targetMetadata = item.targetMetadata !== undefined ? parseTargetMetadata(item.targetMetadata) : undefined;
-  const metadata = item.metadata !== undefined ? parseSignedDescriptor(item.metadata, now, { allowLoopback }) : undefined;
+  if (item.resources !== undefined) {
+    const refs = parseResourceRefs(item.resources);
+    if (
+      refs.index.filename !== `moe-icons-pro-resource-index-${item.version}.json.gz` ||
+      refs.bundle.filename !== `moe-icons-pro-resources-${item.version}.bin`
+    )
+      throw new CliError("VALIDATION_ERROR", "pro resource filenames do not match tier/version");
+  }
+  const targetMetadata =
+    item.targetMetadata !== undefined ? parseTargetMetadata(item.targetMetadata) : undefined;
+  const metadata =
+    item.metadata !== undefined
+      ? parseSignedDescriptor(item.metadata, now, { allowLoopback })
+      : undefined;
   const localTest = isLocalTestDescriptor(item, allowLocalTest);
   return {
     ...(item as unknown as ProArtifactDescriptor),
     ...(targetMetadata ? { targetMetadata } : {}),
     ...(metadata ? { metadata } : {}),
+    ...(item.resources !== undefined ? { resources: parseResourceRefs(item.resources) } : {}),
     ...(localTest ? { channel: "local-test" as const, publishable: false } : {}),
   };
 }
 
-async function requestDescriptor(token: string, endpoint: string, expected: { version: string; descriptorSha256: string; allowLocalTest?: boolean }, deps: { fetch: typeof fetch; signal: AbortSignal; now: number; allowLoopback: boolean }): Promise<{ status: number; value?: ProArtifactDescriptor }> {
+async function requestDescriptor(
+  token: string,
+  endpoint: string,
+  expected: { version: string; descriptorSha256: string; allowLocalTest?: boolean },
+  deps: { fetch: typeof fetch; signal: AbortSignal; now: number; allowLoopback: boolean },
+): Promise<{ status: number; value?: ProArtifactDescriptor }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5_000);
   const abort = () => controller.abort();
@@ -136,42 +207,105 @@ async function requestDescriptor(token: string, endpoint: string, expected: { ve
   deps.signal.addEventListener("abort", abort, { once: true });
   try {
     const response = await deps.fetch(endpoint, {
-      method: "POST", redirect: "error", signal: controller.signal,
-      headers: { authorization: `Bearer ${token}`, accept: "application/json", "content-type": "application/json" },
+      method: "POST",
+      redirect: "error",
+      signal: controller.signal,
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/json",
+        "content-type": "application/json",
+        "X-Moeicons-Resources": "v1",
+      },
       body: JSON.stringify(expected),
     });
-    if (!response.ok) return { status: response.status };
-    return { status: response.status, value: parse(await response.json(), expected, deps.now, deps.allowLoopback) };
+    if (!response.ok) {
+      await response.body?.cancel();
+      return { status: response.status };
+    }
+    const reader = response.body?.getReader() as ReadableStreamDefaultReader<Uint8Array> | undefined;
+    if (!reader) throw new CliError("NETWORK_ERROR", "empty pro descriptor response");
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) break;
+        size += part.value.length;
+        if (size > 256 * 1024) {
+          await reader.cancel();
+          throw new CliError("VALIDATION_ERROR", "pro descriptor exceeds 256 KiB");
+        }
+        chunks.push(part.value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    return {
+      status: response.status,
+      value: parse(
+        JSON.parse(Buffer.concat(chunks).toString("utf8")),
+        expected,
+        deps.now,
+        deps.allowLoopback,
+      ),
+    };
   } catch (error) {
     if (error instanceof CliError) throw error;
-    throw new CliError(deps.signal.aborted ? "CANCELLED" : "NETWORK_ERROR", deps.signal.aborted ? "pro download cancelled" : "pro descriptor request failed");
-  } finally { clearTimeout(timer); deps.signal.removeEventListener("abort", abort); }
+    throw new CliError(
+      deps.signal.aborted ? "CANCELLED" : "NETWORK_ERROR",
+      deps.signal.aborted ? "pro download cancelled" : "pro descriptor request failed",
+    );
+  } finally {
+    clearTimeout(timer);
+    deps.signal.removeEventListener("abort", abort);
+  }
 }
 
 /** Exchange auth for the Pro descriptor (token dance + error mapping). */
-export async function fetchProDescriptor(context: CommandContext, auth: AuthUseCaseDependencies, expected: { version: string; descriptorSha256: string; allowLocalTest?: boolean }, deps: {
-  readonly fetch?: typeof fetch;
-} = {}): Promise<ProArtifactDescriptor> {
+export async function fetchProDescriptor(
+  context: CommandContext,
+  auth: AuthUseCaseDependencies,
+  expected: { version: string; descriptorSha256: string; allowLocalTest?: boolean },
+  deps: {
+    readonly fetch?: typeof fetch;
+  } = {},
+): Promise<ProArtifactDescriptor> {
   const fetchFn = deps.fetch ?? fetch;
   const { url: endpoint, allowLoopback } = resolveProDescriptorEndpoint(context.env);
   let token = await runAccessTokenUseCase(context, auth);
   const now = () => context.now().getTime();
-  let response = await requestDescriptor(token, endpoint, expected, { fetch: fetchFn, signal: context.signal, now: now(), allowLoopback });
+  let response = await requestDescriptor(token, endpoint, expected, {
+    fetch: fetchFn,
+    signal: context.signal,
+    now: now(),
+    allowLoopback,
+  });
   if (response.status === 401) {
     token = await runAccessTokenUseCase(context, auth, true);
-    response = await requestDescriptor(token, endpoint, expected, { fetch: fetchFn, signal: context.signal, now: now(), allowLoopback });
+    response = await requestDescriptor(token, endpoint, expected, {
+      fetch: fetchFn,
+      signal: context.signal,
+      now: now(),
+      allowLoopback,
+    });
   }
   token = "";
-  if (response.status === 401) throw new CliError("AUTH_ERROR", "pro download authentication failed after one refresh");
+  if (response.status === 401)
+    throw new CliError("AUTH_ERROR", "pro download authentication failed after one refresh");
   if (response.status === 403) throw new CliError("FORBIDDEN", "active pro entitlement required");
   if (response.status === 404) throw new CliError("NOT_FOUND", "pro artifact not found");
-  if (!response.value) throw new CliError("NETWORK_ERROR", `pro descriptor request failed with ${response.status}`);
+  if (!response.value)
+    throw new CliError("NETWORK_ERROR", `pro descriptor request failed with ${response.status}`);
   return response.value;
 }
 
 /** Extract + verify the pro metadata archive; the manifest must match the pro release. */
-export function extractProMetadata(artifactBytes: Uint8Array, catalogSha256: string, version: string, allowLocalTest = false):
-  { readonly manifestJson: string; readonly manualMd: string; readonly catalogJson: string } {
+export function extractProMetadata(
+  artifactBytes: Uint8Array,
+  catalogSha256: string,
+  version: string,
+  allowLocalTest = false,
+): { readonly manifestJson: string; readonly manualMd: string; readonly catalogJson: string } {
   const result = extractAndVerifyMetadataArchive(artifactBytes, {
     expectedCatalogSha: catalogSha256,
     expectedTier: "pro",
@@ -183,14 +317,22 @@ export function extractProMetadata(artifactBytes: Uint8Array, catalogSha256: str
 }
 
 /** Shared signed-download options for the Pro archive (endpoint-aware loopback). */
-export function proSignedDownloadOptions(context: CommandContext, deps: {
-  readonly fetch?: typeof fetch;
-  readonly allowedHosts?: readonly string[];
-  readonly onProgress?: (event: { readonly downloadedBytes: number; readonly totalBytes?: number }) => void;
-} = {}) {
+export function proSignedDownloadOptions(
+  context: CommandContext,
+  deps: {
+    readonly fetch?: typeof fetch;
+    readonly allowedHosts?: readonly string[];
+    readonly onProgress?: (event: {
+      readonly downloadedBytes: number;
+      readonly totalBytes?: number;
+    }) => void;
+  } = {},
+) {
   const { allowLoopback, loopbackHost } = resolveProDescriptorEndpoint(context.env);
   return {
-    allowedHosts: deps.allowedHosts ?? (loopbackHost ? [...PRO_DOWNLOAD_HOSTS, loopbackHost] : PRO_DOWNLOAD_HOSTS),
+    allowedHosts:
+      deps.allowedHosts ??
+      (loopbackHost ? [...PRO_DOWNLOAD_HOSTS, loopbackHost] : PRO_DOWNLOAD_HOSTS),
     ...(deps.fetch ? { fetch: deps.fetch } : {}),
     signal: context.signal,
     now: context.now().getTime(),
@@ -199,27 +341,94 @@ export function proSignedDownloadOptions(context: CommandContext, deps: {
   };
 }
 
-export async function downloadProArtifact(context: CommandContext, auth: AuthUseCaseDependencies, expected: { version: string; descriptorSha256: string; allowLocalTest?: boolean }, deps: {
-  readonly fetch?: typeof fetch;
-  readonly allowedHosts?: readonly string[];
-  readonly onProgress?: (event: { readonly downloadedBytes: number; readonly totalBytes?: number }) => void;
-} = {}): Promise<{ readonly descriptor: ProArtifactDescriptor; readonly artifactBytes: Uint8Array; readonly catalogJson: string; readonly manifestJson: string; readonly manualMd: string; readonly metadataSha256: string; readonly metadataBytes?: Uint8Array }> {
+export async function downloadProArtifact(
+  context: CommandContext,
+  auth: AuthUseCaseDependencies,
+  expected: { version: string; descriptorSha256: string; allowLocalTest?: boolean },
+  deps: {
+    readonly selection?: { config: MoeiconsConfigFile; document: ConfigDocument };
+    readonly fetch?: typeof fetch;
+    readonly allowedHosts?: readonly string[];
+    readonly onProgress?: (event: {
+      readonly downloadedBytes: number;
+      readonly totalBytes?: number;
+    }) => void;
+  } = {},
+): Promise<{
+  readonly descriptor: ProArtifactDescriptor;
+  readonly artifactBytes: Uint8Array;
+  readonly catalogJson: string;
+  readonly manifestJson: string;
+  readonly manualMd: string;
+  readonly metadataSha256: string;
+  readonly metadataBytes?: Uint8Array;
+  readonly selected?: SelectedResourceDownload;
+}> {
   const fetchFn = deps.fetch ?? fetch;
   const descriptor = await fetchProDescriptor(context, auth, expected, { fetch: fetchFn });
+  if (
+    deps.selection &&
+    deps.selection.config.downloadMode !== "full" &&
+    descriptor.resources &&
+    descriptor.channel !== "local-test"
+  ) {
+    const selected = await downloadProSelected(context, auth, descriptor, deps.selection, deps);
+    if (selected)
+      return {
+        descriptor,
+        artifactBytes: new Uint8Array(),
+        ...selected,
+        metadataSha256: descriptor.metadata!.sha256,
+      };
+  }
+  if (deps.selection?.config.downloadMode === "icons" && !descriptor.resources)
+    throw new CliError(
+      "VALIDATION_ERROR",
+      "this release/backend does not support selected resources; set downloadMode=full or use a newer release",
+    );
+  context.ui.note(
+    deps.selection?.config.downloadMode === "full"
+      ? "Download mode: full (explicitly configured)."
+      : "Release does not advertise selected downloads; auto uses the verified full archive. Set downloadMode=icons to require selected downloads.",
+    context.signal,
+  );
   const downloadOptions = proSignedDownloadOptions(context, deps);
-  const artifactBytes = await downloadSignedArtifact({ url: descriptor.url, expiresAt: descriptor.expiresAt, size: descriptor.size, sha256: descriptor.sha256 }, downloadOptions);
-  const extracted = extractTarGz(artifactBytes, { maxEntries: ICON_ARCHIVE_MAX_ENTRIES, maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES });
-  if (extracted.errors.length > 0) throw new CliError("VALIDATION_ERROR", extracted.errors[0] ?? "invalid pro archive");
-  const catalog = extracted.files[descriptor.catalogFilename] ?? extracted.files[`./${descriptor.catalogFilename}`];
-  if (!catalog || sha256Bytes(catalog) !== descriptor.catalogSha256) throw new CliError("VALIDATION_ERROR", "pro catalog SHA-256 mismatch");
+  const artifactBytes = await downloadSignedArtifact(
+    {
+      url: descriptor.url,
+      expiresAt: descriptor.expiresAt,
+      size: descriptor.size,
+      sha256: descriptor.sha256,
+    },
+    downloadOptions,
+  );
+  const extracted = extractTarGz(artifactBytes, {
+    maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
+    maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
+  });
+  if (extracted.errors.length > 0)
+    throw new CliError("VALIDATION_ERROR", extracted.errors[0] ?? "invalid pro archive");
+  const catalog =
+    extracted.files[descriptor.catalogFilename] ??
+    extracted.files[`./${descriptor.catalogFilename}`];
+  if (!catalog || sha256Bytes(catalog) !== descriptor.catalogSha256)
+    throw new CliError("VALIDATION_ERROR", "pro catalog SHA-256 mismatch");
 
   let metadata: { manifestJson: string; manualMd: string } | undefined;
   let metadataBytes: Uint8Array | undefined;
   if (descriptor.metadata) {
     metadataBytes = await downloadSignedArtifact(descriptor.metadata, downloadOptions);
-    metadata = extractProMetadata(metadataBytes, descriptor.catalogSha256, descriptor.version, expected.allowLocalTest === true);
+    metadata = extractProMetadata(
+      metadataBytes,
+      descriptor.catalogSha256,
+      descriptor.version,
+      expected.allowLocalTest === true,
+    );
   } else {
-    throw new CliError("VALIDATION_ERROR", "pro release descriptor is missing the metadata archive");
+    throw new CliError(
+      "VALIDATION_ERROR",
+      "pro release descriptor is missing the metadata archive",
+    );
   }
   return {
     descriptor,

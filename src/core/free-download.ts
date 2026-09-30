@@ -1,7 +1,26 @@
+import { isCliError } from "../errors/index.js";
+import { openSync, readSync, closeSync } from "node:fs";
+import {
+  parseResourceIndex,
+  planSelectedResources,
+  downloadSelectedResources,
+  type ResourceRefs,
+} from "./selected-resources.js";
+import { parseCatalog } from "../catalog/catalog.js";
+import {
+  validateConfigDocument,
+  type ConfigDocument,
+  type MoeiconsConfigFile,
+} from "../project/config.js";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { downloadArtifact, verifyArtifact, type DownloadLimits } from "../project/install.js";
-import { decodeUtf8, extractTarGz, ICON_ARCHIVE_MAX_ENTRIES, ICON_ARCHIVE_MAX_EXPANDED_BYTES } from "../project/tar-gz.js";
+import {
+  decodeUtf8,
+  extractTarGz,
+  ICON_ARCHIVE_MAX_ENTRIES,
+  ICON_ARCHIVE_MAX_EXPANDED_BYTES,
+} from "../project/tar-gz.js";
 import { catalog as bundledCatalog } from "../catalog/catalog.js";
 import { cacheArtifact, type CacheIo } from "./cache.js";
 import { extractAndVerifyMetadataArchive, type MetadataArchiveFiles } from "../metadata/archive.js";
@@ -37,11 +56,23 @@ export type FreeDownloadFailure =
   | { readonly ok: false; readonly reason: "cancelled"; readonly message: string }
   | { readonly ok: false; readonly reason: "disk-full"; readonly message: string };
 
+export interface SelectedResourceDownload {
+  readonly files: Readonly<Record<string, Uint8Array>>;
+  readonly refs: ResourceRefs;
+  readonly indexBytes: Uint8Array;
+  readonly payloadBytes: number;
+  readonly networkBytes: number;
+  readonly cacheHits: number;
+  readonly fallbacks: readonly string[];
+}
+
 export type FreeDownloadSuccess = {
   readonly ok: true;
   readonly descriptor: ReleaseDescriptor;
   readonly descriptorSha256: string;
   readonly artifactBytes: Uint8Array;
+  readonly selected?: SelectedResourceDownload;
+  readonly downloadNote?: string;
   readonly catalogJson: string;
   readonly cacheHit: boolean;
   readonly tag: string;
@@ -77,7 +108,12 @@ function userAgent(cliVersion: string): string {
   return `moeicons/${cliVersion} (+https://github.com/moewolf-dev/moe-icons-cli)`;
 }
 
-function descriptorLimits(cliVersion: string, onProgress?: DownloadLimits["onProgress"], fixtureBaseUrl?: string, timeoutMs = DOWNLOAD_TIMEOUT_MS): DownloadLimits {
+function descriptorLimits(
+  cliVersion: string,
+  onProgress?: DownloadLimits["onProgress"],
+  fixtureBaseUrl?: string,
+  timeoutMs = DOWNLOAD_TIMEOUT_MS,
+): DownloadLimits {
   return {
     maxBytes: DESCRIPTOR_MAX_BYTES,
     timeoutMs,
@@ -89,7 +125,12 @@ function descriptorLimits(cliVersion: string, onProgress?: DownloadLimits["onPro
   };
 }
 
-function artifactLimits(cliVersion: string, onProgress?: DownloadLimits["onProgress"], fixtureBaseUrl?: string, timeoutMs = DOWNLOAD_TIMEOUT_MS): DownloadLimits {
+function artifactLimits(
+  cliVersion: string,
+  onProgress?: DownloadLimits["onProgress"],
+  fixtureBaseUrl?: string,
+  timeoutMs = DOWNLOAD_TIMEOUT_MS,
+): DownloadLimits {
   return {
     maxBytes: ARTIFACT_MAX_BYTES,
     timeoutMs,
@@ -101,7 +142,12 @@ function artifactLimits(cliVersion: string, onProgress?: DownloadLimits["onProgr
   };
 }
 
-function metadataLimits(cliVersion: string, onProgress?: DownloadLimits["onProgress"], fixtureBaseUrl?: string, timeoutMs = DOWNLOAD_TIMEOUT_MS): DownloadLimits {
+function metadataLimits(
+  cliVersion: string,
+  onProgress?: DownloadLimits["onProgress"],
+  fixtureBaseUrl?: string,
+  timeoutMs = DOWNLOAD_TIMEOUT_MS,
+): DownloadLimits {
   return {
     maxBytes: METADATA_MAX_BYTES,
     timeoutMs,
@@ -136,11 +182,20 @@ function parseLatestDescriptorSha(bytes: Uint8Array, sourceVersion: string): str
     throw new Error("release-latest.json must be an object");
   }
   const latest = parsed as Record<string, unknown>;
-  if (latest.schemaVersion !== 1 || latest.tier !== "free" || latest.fullVersion !== sourceVersion) {
+  if (
+    latest.schemaVersion !== 1 ||
+    latest.tier !== "free" ||
+    latest.fullVersion !== sourceVersion
+  ) {
     throw new Error("release-latest.json identity does not match the requested Free release");
   }
-  if (typeof latest.descriptorSha256 !== "string" || !/^[a-f0-9]{64}$/i.test(latest.descriptorSha256)) {
-    throw new Error("release-latest.json descriptorSha256 must be a 64-character SHA-256 hex digest");
+  if (
+    typeof latest.descriptorSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/i.test(latest.descriptorSha256)
+  ) {
+    throw new Error(
+      "release-latest.json descriptorSha256 must be a 64-character SHA-256 hex digest",
+    );
   }
   return latest.descriptorSha256.toLowerCase();
 }
@@ -158,7 +213,11 @@ function cachePath(io: FreeDownloadIo, fullVersion: string, sha256: string): str
 }
 
 /** Best-effort disk-space preflight; missing statfs support is treated as "enough". */
-export function hasEnoughFreeSpace(io: FreeDownloadIo, dir: string, requiredBytes: number): boolean {
+export function hasEnoughFreeSpace(
+  io: FreeDownloadIo,
+  dir: string,
+  requiredBytes: number,
+): boolean {
   try {
     const state = io.statfs?.(dir);
     if (state) return state.availableBytes >= requiredBytes;
@@ -179,10 +238,19 @@ async function loadBytes(
     try {
       return { ok: true, bytes: readFixture(io, filename) };
     } catch (error) {
-      return { ok: false, reason: "validation", message: error instanceof Error ? error.message : String(error) };
+      return {
+        ok: false,
+        reason: "validation",
+        message: error instanceof Error ? error.message : String(error),
+      };
     }
   }
-  const url = io.fixtureBaseUrl ? new URL(filename, io.fixtureBaseUrl.endsWith("/") ? io.fixtureBaseUrl : `${io.fixtureBaseUrl}/`).toString() : githubReleaseAssetUrl(tag, filename);
+  const url = io.fixtureBaseUrl
+    ? new URL(
+        filename,
+        io.fixtureBaseUrl.endsWith("/") ? io.fixtureBaseUrl : `${io.fixtureBaseUrl}/`,
+      ).toString()
+    : githubReleaseAssetUrl(tag, filename);
   for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt += 1) {
     const result = await downloadArtifact(url, limits, { fetchFn: io.fetchFn, signal: io.signal });
     if (result.ok) return { ok: true, bytes: result.bytes };
@@ -190,13 +258,22 @@ async function loadBytes(
       return mapDownloadError(result.code, result.message);
     }
   }
-  return { ok: false, reason: "network", message: `download failed after ${MAX_DOWNLOAD_ATTEMPTS} attempts` };
+  return {
+    ok: false,
+    reason: "network",
+    message: `download failed after ${MAX_DOWNLOAD_ATTEMPTS} attempts`,
+  };
 }
 
-function catalogFromArchive(artifactBytes: Uint8Array, catalogFilename: string, expectedSha: string):
-  | { ok: true; json: string }
-  | FreeDownloadFailure {
-  const unpacked = extractTarGz(artifactBytes, { maxEntries: ICON_ARCHIVE_MAX_ENTRIES, maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES });
+function catalogFromArchive(
+  artifactBytes: Uint8Array,
+  catalogFilename: string,
+  expectedSha: string,
+): { ok: true; json: string } | FreeDownloadFailure {
+  const unpacked = extractTarGz(artifactBytes, {
+    maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
+    maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
+  });
   if (unpacked.errors.length > 0) {
     return { ok: false, reason: "validation", message: unpacked.errors[0] ?? "extract failed" };
   }
@@ -245,14 +322,27 @@ export async function downloadMetadataArchive(
         allowLocalTest,
       });
       if (extracted.kind === "ok") {
-        return { ok: true, value: { ...extracted.value, metadataSha256: metadataRef.sha256 }, cacheHit: true };
+        return {
+          ok: true,
+          value: { ...extracted.value, metadataSha256: metadataRef.sha256 },
+          cacheHit: true,
+        };
       }
     }
   }
   if (!hasEnoughFreeSpace(io, io.cacheDir, metadataRef.size)) {
-    return { ok: false, reason: "disk-full", message: `not enough free disk space for ${metadataRef.size} bytes of metadata` };
+    return {
+      ok: false,
+      reason: "disk-full",
+      message: `not enough free disk space for ${metadataRef.size} bytes of metadata`,
+    };
   }
-  const downloaded = await loadBytes(io, metadataRef.filename, metadataLimits(io.cliVersion, io.onProgress, io.fixtureBaseUrl, io.timeoutMs), tag);
+  const downloaded = await loadBytes(
+    io,
+    metadataRef.filename,
+    metadataLimits(io.cliVersion, io.onProgress, io.fixtureBaseUrl, io.timeoutMs),
+    tag,
+  );
   if (!downloaded.ok) {
     if (!io.fixtureDir && downloaded.reason === "network") {
       return { ok: false, reason: "offline-no-cache", message: downloaded.message };
@@ -289,7 +379,11 @@ export async function downloadMetadataArchive(
   } catch {
     // Cache is best-effort; the verified bytes are still used for this install.
   }
-  return { ok: true, value: { ...extracted.value, metadataSha256: metadataRef.sha256 }, cacheHit: false };
+  return {
+    ok: true,
+    value: { ...extracted.value, metadataSha256: metadataRef.sha256 },
+    cacheHit: false,
+  };
 }
 
 /**
@@ -297,8 +391,13 @@ export async function downloadMetadataArchive(
  * predate release-latest.json fall back to the descriptor SHA sidecar. Does not
  * download the code artifact; used by metadata-only sync and by the full download.
  */
-export async function fetchFreeDescriptor(io: FreeDownloadIo, sourceVersion: string):
-  Promise<{ ok: true; descriptor: ReleaseDescriptor; descriptorSha256: string; tag: string } | FreeDownloadFailure> {
+export async function fetchFreeDescriptor(
+  io: FreeDownloadIo,
+  sourceVersion: string,
+): Promise<
+  | { ok: true; descriptor: ReleaseDescriptor; descriptorSha256: string; tag: string }
+  | FreeDownloadFailure
+> {
   if (io.signal.aborted) return { ok: false, reason: "cancelled", message: "download cancelled" };
   const tag = `v${sourceVersion}`;
 
@@ -309,7 +408,11 @@ export async function fetchFreeDescriptor(io: FreeDownloadIo, sourceVersion: str
     try {
       expectedDescriptorSha = parseLatestDescriptorSha(latestFile.bytes, sourceVersion);
     } catch (error) {
-      return { ok: false, reason: "validation", message: error instanceof Error ? error.message : String(error) };
+      return {
+        ok: false,
+        reason: "validation",
+        message: error instanceof Error ? error.message : String(error),
+      };
     }
   } else {
     if (latestFile.reason !== "not-found") {
@@ -328,11 +431,20 @@ export async function fetchFreeDescriptor(io: FreeDownloadIo, sourceVersion: str
     try {
       expectedDescriptorSha = parseSha256Sidecar(decodeUtf8(shaFile.bytes));
     } catch (error) {
-      return { ok: false, reason: "validation", message: error instanceof Error ? error.message : String(error) };
+      return {
+        ok: false,
+        reason: "validation",
+        message: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 
-  const descriptorFile = await loadBytes(io, DESCRIPTOR_NAME, descriptorLimits(io.cliVersion, io.onProgress, io.fixtureBaseUrl, io.timeoutMs), tag);
+  const descriptorFile = await loadBytes(
+    io,
+    DESCRIPTOR_NAME,
+    descriptorLimits(io.cliVersion, io.onProgress, io.fixtureBaseUrl, io.timeoutMs),
+    tag,
+  );
   if (!descriptorFile.ok) return descriptorFile;
   const actualDescriptorSha = sha256Hex(descriptorFile.bytes);
   if (actualDescriptorSha !== expectedDescriptorSha) {
@@ -348,7 +460,11 @@ export async function fetchFreeDescriptor(io: FreeDownloadIo, sourceVersion: str
     descriptor = parseReleaseDescriptor(descriptorFile.bytes);
     assertLocalCandidateAllowed(descriptor, Boolean(io.fixtureDir));
   } catch (error) {
-    return { ok: false, reason: "validation", message: error instanceof Error ? error.message : String(error) };
+    return {
+      ok: false,
+      reason: "validation",
+      message: error instanceof Error ? error.message : String(error),
+    };
   }
   if (descriptor.fullVersion !== sourceVersion) {
     return {
@@ -365,7 +481,15 @@ export async function fetchFreeDescriptor(io: FreeDownloadIo, sourceVersion: str
  * the descriptor (never guessed) → verify archive + nested catalog checksums →
  * download/verify/cache the matching metadata archive.
  */
-export async function downloadFreeRelease(io: FreeDownloadIo, sourceVersion: string): Promise<FreeDownloadResult> {
+export async function downloadFreeRelease(
+  io: FreeDownloadIo,
+  sourceVersion: string,
+  selection?: {
+    readonly config: MoeiconsConfigFile;
+    readonly document: ConfigDocument;
+    readonly onPlan?: (message: string) => void;
+  },
+): Promise<FreeDownloadResult> {
   const fetched = await fetchFreeDescriptor(io, sourceVersion);
   if (!fetched.ok) return fetched;
   const { descriptor, descriptorSha256, tag } = fetched;
@@ -379,14 +503,165 @@ export async function downloadFreeRelease(io: FreeDownloadIo, sourceVersion: str
     };
   }
 
+  const mode = selection?.config.downloadMode ?? "auto";
+  if (selection && mode !== "full" && descriptor.free.resources) {
+    try {
+      const metadata = await downloadMetadataArchive(
+        io,
+        metadataRef,
+        descriptor.catalog.sha256,
+        "free",
+        descriptor.fullVersion,
+        tag,
+        descriptor.channel === "local-test",
+      );
+      if (!metadata.ok) return metadata;
+      const catalog = parseCatalog(JSON.parse(metadata.value.catalogJson));
+      const strict = validateConfigDocument(selection.document, catalog);
+      if (strict.kind !== "ok")
+        return {
+          ok: false,
+          reason: "validation",
+          message: strict.kind === "invalid" ? strict.message : `config state: ${strict.kind}`,
+        };
+      const refs = descriptor.free.resources;
+      const indexCache = join(
+        io.cacheDir,
+        "resources",
+        "free",
+        descriptor.fullVersion,
+        refs.index.sha256,
+        "index.json.gz",
+      );
+      let indexBytes: Uint8Array | undefined = io.existsSync(indexCache)
+        ? io.readFileSync(indexCache)
+        : undefined;
+      if (
+        !indexBytes ||
+        indexBytes.length !== refs.index.size ||
+        sha256Hex(indexBytes) !== refs.index.sha256
+      ) {
+        const downloaded = await loadBytes(
+          io,
+          refs.index.filename,
+          {
+            ...metadataLimits(io.cliVersion, undefined, io.fixtureBaseUrl, io.timeoutMs),
+            maxBytes: 8 * 1024 * 1024,
+          },
+          tag,
+        );
+        if (!downloaded.ok) return downloaded;
+        indexBytes = downloaded.bytes;
+      }
+      const index = parseResourceIndex(indexBytes, refs, {
+        version: descriptor.fullVersion,
+        tier: "free",
+        artifactSha256: descriptor.free.sha256,
+      });
+      const plan = planSelectedResources(strict.config, catalog, index);
+      selection.onPlan?.(
+        `Download plan: ${strict.config.target}, ${strict.config.icons.length} registered icons, ${Object.keys(strict.config.themes).length} themes, ${plan.paths.length} resource files, up to ${plan.payloadBytes} compressed bytes (verified cache reduces network traffic).${plan.fallbacks.length ? ` Fallbacks: ${plan.fallbacks.join("; ")}` : ""}`,
+      );
+      cacheArtifact(io, indexCache, indexBytes, refs.index.sha256);
+      const fetched = await downloadSelectedResources(index, refs.index.sha256, plan.paths, {
+        io,
+        cacheDir: io.cacheDir,
+        fetch: io.fetchFn,
+        signal: io.signal,
+        allowedHosts: io.fixtureBaseUrl ? [new URL(io.fixtureBaseUrl).host] : FREE_DOWNLOAD_HOSTS,
+        ...(io.fixtureBaseUrl ? { allowLoopback: true } : {}),
+        getBundleUrl: () =>
+          Promise.resolve(io.fixtureBaseUrl
+            ? new URL(
+                refs.bundle.filename,
+                io.fixtureBaseUrl.endsWith("/") ? io.fixtureBaseUrl : `${io.fixtureBaseUrl}/`,
+              ).toString()
+            : githubReleaseAssetUrl(tag, refs.bundle.filename)),
+        ...(io.fixtureDir
+          ? {
+              readRange: (start: number, size: number) => {
+                const fd = openSync(join(io.fixtureDir!, refs.bundle.filename), "r");
+                try {
+                  const bytes = Buffer.alloc(size);
+                  let read = 0;
+                  while (read < size) {
+                    const count = readSync(fd, bytes, read, size - read, start + read);
+                    if (!count) throw new Error("truncated resource bundle");
+                    read += count;
+                  }
+                  return Promise.resolve(bytes);
+                } finally {
+                  closeSync(fd);
+                }
+              },
+            }
+          : {}),
+      });
+      return {
+        ok: true,
+        descriptor,
+        descriptorSha256,
+        tag,
+        artifactBytes: new Uint8Array(),
+        cacheHit: fetched.cacheHits === plan.paths.length,
+        catalogJson: metadata.value.catalogJson,
+        manifestJson: metadata.value.manifestJson,
+        manualMd: metadata.value.manualMd,
+        metadataSha256: metadata.value.metadataSha256,
+        selected: {
+          ...fetched,
+          refs,
+          indexBytes,
+          payloadBytes: plan.payloadBytes,
+          fallbacks: plan.fallbacks,
+        },
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        reason:
+          io.signal.aborted || (isCliError(error) && error.code === "CANCELLED")
+            ? "cancelled"
+            : isCliError(error) && error.code === "NETWORK_ERROR"
+              ? "network"
+              : "validation",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+  if (mode === "icons")
+    return {
+      ok: false,
+      reason: "validation",
+      message:
+        "this release has no selected-resource index; choose a newer release or explicitly set downloadMode=full",
+    };
+
+  selection?.onPlan?.(
+    mode === "full"
+      ? "Download mode: full (explicitly configured); the complete target archive will be verified before selection."
+      : "This release does not advertise selected downloads; auto uses the verified full archive. Set downloadMode=icons to require selected downloads.",
+  );
   const artifactCache = cachePath(io, descriptor.fullVersion, descriptor.free.sha256);
   if (io.existsSync(artifactCache)) {
     const cached = io.readFileSync(artifactCache);
     const verified = verifyArtifact(cached, descriptor.free.sha256);
     if (verified.ok) {
-      const catalog = catalogFromArchive(cached, descriptor.catalog.filename, descriptor.catalog.sha256);
+      const catalog = catalogFromArchive(
+        cached,
+        descriptor.catalog.filename,
+        descriptor.catalog.sha256,
+      );
       if (!catalog.ok) return catalog;
-      const metadata = await downloadMetadataArchive(io, metadataRef, descriptor.catalog.sha256, "free", descriptor.fullVersion, tag, descriptor.channel === "local-test");
+      const metadata = await downloadMetadataArchive(
+        io,
+        metadataRef,
+        descriptor.catalog.sha256,
+        "free",
+        descriptor.fullVersion,
+        tag,
+        descriptor.channel === "local-test",
+      );
       if (!metadata.ok) return metadata;
       return {
         ok: true,
@@ -404,9 +679,18 @@ export async function downloadFreeRelease(io: FreeDownloadIo, sourceVersion: str
   }
 
   if (!hasEnoughFreeSpace(io, io.cacheDir, ARTIFACT_MAX_BYTES + METADATA_MAX_BYTES)) {
-    return { ok: false, reason: "disk-full", message: "not enough free disk space to cache the icon library" };
+    return {
+      ok: false,
+      reason: "disk-full",
+      message: "not enough free disk space to cache the icon library",
+    };
   }
-  const artifact = await loadBytes(io, descriptor.free.filename, artifactLimits(io.cliVersion, io.onProgress, io.fixtureBaseUrl, io.timeoutMs), tag);
+  const artifact = await loadBytes(
+    io,
+    descriptor.free.filename,
+    artifactLimits(io.cliVersion, io.onProgress, io.fixtureBaseUrl, io.timeoutMs),
+    tag,
+  );
   if (!artifact.ok) {
     if (!io.fixtureDir && artifact.reason === "network") {
       return { ok: false, reason: "offline-no-cache", message: artifact.message };
@@ -421,10 +705,22 @@ export async function downloadFreeRelease(io: FreeDownloadIo, sourceVersion: str
       message: `free artifact SHA-256 mismatch: expected ${descriptor.free.sha256}, got ${verified.actual}`,
     };
   }
-  const catalog = catalogFromArchive(artifact.bytes, descriptor.catalog.filename, descriptor.catalog.sha256);
+  const catalog = catalogFromArchive(
+    artifact.bytes,
+    descriptor.catalog.filename,
+    descriptor.catalog.sha256,
+  );
   if (!catalog.ok) return catalog;
 
-  const metadata = await downloadMetadataArchive(io, metadataRef, descriptor.catalog.sha256, "free", descriptor.fullVersion, tag, descriptor.channel === "local-test");
+  const metadata = await downloadMetadataArchive(
+    io,
+    metadataRef,
+    descriptor.catalog.sha256,
+    "free",
+    descriptor.fullVersion,
+    tag,
+    descriptor.channel === "local-test",
+  );
   if (!metadata.ok) return metadata;
 
   try {

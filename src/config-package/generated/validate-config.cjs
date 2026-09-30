@@ -18,6 +18,7 @@ const ALLOWED_COMMON_KEYS = new Set([
   'themes',
   'icons',
   'missingIconPolicy',
+  'downloadMode',
   'integration',
 ]);
 
@@ -142,6 +143,7 @@ function validateConfig(raw, catalog) {
   if (typeof raw.defaultTheme !== 'string' || raw.defaultTheme.length === 0) {
     return fail('defaultTheme is required');
   }
+  if (raw.downloadMode !== undefined && !['auto', 'icons', 'full'].includes(raw.downloadMode)) return fail('downloadMode must be "auto", "icons" or "full"');
   if (
     raw.missingIconPolicy !== undefined &&
     raw.missingIconPolicy !== 'fallback' &&
@@ -279,6 +281,7 @@ function validateConfig(raw, catalog) {
       defaultTheme: raw.defaultTheme,
       themes,
       icons,
+      ...(raw.downloadMode !== undefined ? { downloadMode: raw.downloadMode } : {}),
       ...(raw.missingIconPolicy !== undefined
         ? { missingIconPolicy: raw.missingIconPolicy }
         : {}),

@@ -10,6 +10,11 @@ const UTC_RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 
 export interface InstallMetadata {
   readonly schemaVersion: 1;
+  readonly delivery?: {
+    readonly mode: "icons";
+    readonly indexSha256: string;
+    readonly bundleSha256: string;
+  };
   readonly artifactVersion: string;
   readonly tier: "free" | "pro";
   readonly target: "react" | "vue" | "vanilla" | "assets";
@@ -60,7 +65,10 @@ function safeManagedPath(path: string): boolean {
   );
 }
 
-export function parseInstallMetadata(raw: string, opts: InstallMetadataParseOptions = {}): InstallMetadata | undefined {
+export function parseInstallMetadata(
+  raw: string,
+  opts: InstallMetadataParseOptions = {},
+): InstallMetadata | undefined {
   try {
     const value = JSON.parse(raw) as Record<string, unknown>;
     const allowLocalTest = opts.allowLocalTest === true;
@@ -80,20 +88,25 @@ export function parseInstallMetadata(raw: string, opts: InstallMetadataParseOpti
       "targetByteCount",
       "bitmapShards",
       "bitmapShardSetSha256",
+      "delivery",
       ...(allowLocalTest ? ["channel", "publishable"] : []),
     ]);
     if (Object.keys(value).some((key) => !allowed.has(key)) || value.schemaVersion !== 1)
       return undefined;
     const localTestMarked = value.channel === "local-test" && value.publishable === false;
-    const strictVersion = typeof value.artifactVersion === "string" && VERSION.test(value.artifactVersion);
+    const strictVersion =
+      typeof value.artifactVersion === "string" && VERSION.test(value.artifactVersion);
     // A formal (stable/alpha/beta) version must never carry the local-test marker.
-    if (strictVersion && (value.channel !== undefined || value.publishable !== undefined)) return undefined;
+    if (strictVersion && (value.channel !== undefined || value.publishable !== undefined))
+      return undefined;
     const versionAllowed =
-      strictVersion || (allowLocalTest && localTestMarked && LOCAL_TEST_VERSION.test(value.artifactVersion as string));
+      strictVersion ||
+      (allowLocalTest &&
+        localTestMarked &&
+        LOCAL_TEST_VERSION.test(value.artifactVersion as string));
     if (!versionAllowed) return undefined;
     if (value.tier !== "free" && value.tier !== "pro") return undefined;
-    if (!["react", "vue", "vanilla", "assets"].includes(value.target as string))
-      return undefined;
+    if (!["react", "vue", "vanilla", "assets"].includes(value.target as string)) return undefined;
     if (typeof value.descriptorSha256 !== "string" || !SHA256.test(value.descriptorSha256))
       return undefined;
     if (typeof value.artifactSha256 !== "string" || !SHA256.test(value.artifactSha256))
@@ -128,9 +141,13 @@ export function parseInstallMetadata(raw: string, opts: InstallMetadataParseOpti
     )
       return undefined;
     const managedFiles = value.managedFiles as Record<string, unknown>;
-    if (value.generatedOutputDir !== undefined &&
-        (typeof value.generatedOutputDir !== "string" || !safeManagedPath(value.generatedOutputDir) ||
-         value.generatedOutputDir.split("/").some((part) => !part || part === "." || part === ".."))) return undefined;
+    if (
+      value.generatedOutputDir !== undefined &&
+      (typeof value.generatedOutputDir !== "string" ||
+        !safeManagedPath(value.generatedOutputDir) ||
+        value.generatedOutputDir.split("/").some((part) => !part || part === "." || part === ".."))
+    )
+      return undefined;
     if (
       Object.keys(managedFiles).length === 0 ||
       Object.entries(managedFiles).some(
@@ -138,6 +155,22 @@ export function parseInstallMetadata(raw: string, opts: InstallMetadataParseOpti
       )
     )
       return undefined;
+    if (value.delivery !== undefined) {
+      const delivery = value.delivery as Record<string, unknown>;
+      if (
+        !delivery ||
+        typeof delivery !== "object" ||
+        Array.isArray(delivery) ||
+        Object.keys(delivery).some((k) => !["mode", "indexSha256", "bundleSha256"].includes(k)) ||
+        delivery.mode !== "icons" ||
+        typeof delivery.indexSha256 !== "string" ||
+        !SHA256.test(delivery.indexSha256) ||
+        typeof delivery.bundleSha256 !== "string" ||
+        !SHA256.test(delivery.bundleSha256) ||
+        managedFiles[".moeicons/resource-index.json.gz"] !== delivery.indexSha256
+      )
+        return undefined;
+    }
     if (value.bitmapShards !== undefined || value.bitmapShardSetSha256 !== undefined) {
       if (!Array.isArray(value.bitmapShards) || value.bitmapShards.length === 0) return undefined;
       const shards = value.bitmapShards.map((entry) => parseBitmapShard(entry));
