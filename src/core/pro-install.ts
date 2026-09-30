@@ -7,7 +7,7 @@ import { runAccessTokenUseCase, type AuthUseCaseDependencies } from "./auth.js";
 import type { CommandContext } from "./context.js";
 import { downloadProArtifact, PRO_DOWNLOAD_HOSTS, resolveProDescriptorEndpoint } from "./pro-download.js";
 import { artifactCachePath, metadataCachePath } from "./free-download.js";
-import { selectTargetSubtree } from "./target-subtree.js";
+import { configuredComponentFiles, selectTargetSubtree } from "./target-subtree.js";
 import { typesReexport } from "./install.js";
 import { CliError } from "../errors/index.js";
 import type { Target } from "../commands/parser.js";
@@ -141,6 +141,7 @@ export async function runProInstallUseCase(
     );
   }
   const config = strict.config;
+  const installedFiles = configuredComponentFiles(subtree.files, target, config, installedCatalog);
   // Only after the snapshot passes strict validation do we persist the
   // content-addressed code/metadata caches. A rejected config writes nothing.
   cacheVerifiedArtifact(deps.fs, cacheDir, downloaded.descriptor.version, downloaded.descriptor.sha256, downloaded.artifactBytes);
@@ -197,7 +198,7 @@ export async function runProInstallUseCase(
     [`${config.outputDir.replace(/\\/g, "/").replace(/\/$/, "")}/types.ts`]: typesReexport("pro", target, config.outputDir),
     [`${config.outputDir.replace(/\\/g, "/").replace(/\/$/, "")}/.moeicons-pro.marker`]: "pro\n",
   };
-  for (const [rel, bytes] of Object.entries(subtree.files)) {
+  for (const [rel, bytes] of Object.entries(installedFiles)) {
     files[`.moeicons/artifact/${target}/${rel}`] = bytes;
   }
   const managedFiles = Object.fromEntries(

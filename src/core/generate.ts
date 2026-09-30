@@ -6,7 +6,8 @@ import {
 } from "../project/install.js";
 import { detectProject } from "../project/detect.js";
 import { readMoeiconsConfig, type MoeiconsConfigFile } from "../project/config.js";
-import { parseCatalog, type IconCatalog } from "../catalog/catalog.js";
+import { findCatalogIcon, parseCatalog, type IconCatalog } from "../catalog/catalog.js";
+import { toProxyName } from "./icon-names.js";
 import { planGeneratedFiles } from "../generator/generate.js";
 import { ensureClassMergeDependencies, planTailwindIntegration } from "../project/tailwind.js";
 import { isCliError } from "../errors/index.js";
@@ -489,6 +490,28 @@ export async function runGenerateUseCase(
           ok: false,
           reason: "managed catalog hash is inconsistent; run 'moeicons install' to repair or reinstall",
         };
+
+      const hasInstalledComponents = Object.keys(metadata.managedFiles).some((path) =>
+        path.startsWith(`.moeicons/artifact/${effectiveConfig.target}/`) && path.endsWith(".js"));
+      if (hasInstalledComponents && (effectiveConfig.target === "react" || effectiveConfig.target === "vue")) {
+        const resolved = resolveThemes(effectiveConfig, sourceCatalog);
+        if (!resolved.ok) return { ok: false, reason: resolved.errors.join("; ") };
+        const defaultGroup = effectiveConfig.themes[effectiveConfig.defaultTheme]?.styleGroup;
+        if (!defaultGroup) return { ok: false, reason: "default theme is missing" };
+        for (const iconId of effectiveConfig.icons) {
+          const available = findCatalogIcon(iconId, sourceCatalog)?.availableIn ?? [];
+          for (const theme of resolved.themes) {
+            const group = available.includes(theme.entry.styleGroup) ? theme.entry.styleGroup : defaultGroup;
+            const kind = resolved.themes.find((candidate) => candidate.entry.styleGroup === group)?.kind;
+            if (kind === "bitmap") continue;
+            const suffix = effectiveConfig.target === "vue" ? ".vue.js" : ".js";
+            const rel = `.moeicons/artifact/${effectiveConfig.target}/${group}/${toProxyName(iconId)}${suffix}`;
+            if (!fs_.existsSync(join(project.root, rel))) {
+              return { ok: false, reason: `icon "${iconId}" is configured but its ${group} component is not installed (${rel}); run 'moeicons install' before generate` };
+            }
+          }
+        }
+      }
 
       const outputPrefix = loaded.config.outputDir.replace(/\\/g, "/").replace(/\/$/, "") + "/";
       const previousPrefix = (metadata.generatedOutputDir ?? loaded.config.outputDir).replace(/\\/g, "/").replace(/\/$/, "") + "/";

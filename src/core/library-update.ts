@@ -25,7 +25,7 @@ import { resolveBitmapTuples, resolveConfiguredBitmapShards } from "./bitmap-sha
 import { mergeBitmapShardCacheManifest, readBitmapShardCacheManifest, writeBitmapShardCacheManifest } from "./bitmap-shard-cache.js";
 import type { BitmapShard } from "./bitmap-shards.js";
 import type { CacheIo } from "./cache.js";
-import { selectTargetSubtree, type TargetSubtreeSource } from "./target-subtree.js";
+import { configuredComponentFiles, selectTargetSubtree, type TargetSubtreeSource } from "./target-subtree.js";
 
 export interface LibraryUpdateDeps {
   readonly fs: TransactionalFsWithCopy;
@@ -207,6 +207,7 @@ export async function runLibraryUpdateUseCase(
     catalog: candidateCatalog,
   });
   if (!generated.ok) throw new CliError("VALIDATION_ERROR", generated.errors.join("; "));
+  const installedFiles = configuredComponentFiles(subtree.files, target, loaded.config, candidateCatalog);
 
   const writes: Record<string, string | Uint8Array> = {
     ".moeicons/catalog.json": catalogJson,
@@ -216,7 +217,7 @@ export async function runLibraryUpdateUseCase(
     [`${loaded.config.outputDir.replace(/\\/g, "/").replace(/\/$/, "")}/.moeicons-${expected.tier}.marker`]: `${expected.tier}\n`,
   };
   for (const file of generated.files) writes[file.path.replace(/\\/g, "/")] = file.content;
-  for (const [rel, bytes] of Object.entries(subtree.files)) {
+  for (const [rel, bytes] of Object.entries(installedFiles)) {
     writes[`.moeicons/artifact/${target}/${rel}`] = bytes;
   }
   const tailwindPlan = planTailwindIntegration(project.root, loaded.config.outputDir, {

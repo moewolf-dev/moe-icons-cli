@@ -65,6 +65,12 @@ npx moeicons generate
 Edit `moeicons.config.jsonc` before generating to select the icon IDs and
 themes you need. When changing React/Vue/Vanilla/assets target, edit the config
 first, then run `moeicons install free --target <target>` and `moeicons generate`.
+For React/Vue, installation now keeps only the configured SVG component modules
+and their required files in `.moeicons/artifact`. After adding icon IDs to the
+config, run `moeicons install` again before `moeicons generate`; generate reports
+the missing installed component if this step is skipped. The verified release
+archive is still downloaded as a whole, so this reduces project files, not
+network transfer.
 The installer rejects a target that disagrees with the config. Import generated
 PascalCase components from your configured `outputDir` (default `src/moeicons`):
 

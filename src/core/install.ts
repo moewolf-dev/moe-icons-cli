@@ -7,7 +7,8 @@ import { bundledSourceVersion, downloadFreeRelease, type FreeDownloadIo } from "
 import { serializeInstallMetadata, sha256Bytes } from "../project/install-metadata.js";
 import { withProjectLock } from "../project/project-lock.js";
 import type { Target } from "../commands/parser.js";
-import { selectTargetSubtree } from "./target-subtree.js";
+import { configuredComponentFiles, selectTargetSubtree } from "./target-subtree.js";
+import { parseCatalog } from "../catalog/catalog.js";
 import { posix } from "node:path";
 
 export type InstallResult =
@@ -47,7 +48,7 @@ export interface InstallUseCaseDeps {
  */
 export function typesReexport(tier: "free" | "pro", target: Target, outputDir = "src/moeicons"): string {
   void tier;
-  const from = posix.relative(outputDir.replace(/\\/g, "/"), `.moeicons/artifact/${target}/index.js`);
+  const from = posix.relative(outputDir.replace(/\\/g, "/"), `.moeicons/artifact/${target}/types`);
   const specifier = from.startsWith(".") ? from : `./${from}`;
   if (target === "react") return `export type { ReactIconProps } from "${specifier}";\n`;
   if (target === "vue") return `export type { VueIconProps } from "${specifier}";\n`;
@@ -144,6 +145,15 @@ export async function runInstallUseCase(
       ? { ok: false, reason: "checksum-mismatch", message: subtree.message }
       : { ok: false, reason: "validation", message: subtree.message };
   }
+  let installedFiles: Readonly<Record<string, Uint8Array>>;
+  try {
+    installedFiles = configuredComponentFiles(
+      subtree.files, target, config.kind === "ok" ? config.config : undefined,
+      parseCatalog(JSON.parse(downloaded.catalogJson)),
+    );
+  } catch (error) {
+    return { ok: false, reason: "validation", message: error instanceof Error ? error.message : String(error) };
+  }
 
   const catalogJson = downloaded.catalogJson;
   const outputDir = config.kind === "ok" ? config.config.outputDir.replace(/\\/g, "/").replace(/\/$/, "") : "src/moeicons";
@@ -155,7 +165,7 @@ export async function runInstallUseCase(
     [`${outputDir}/types.ts`]: typesReexport("free", target, outputDir),
     [`${outputDir}/.moeicons-free.marker`]: "free\n",
   };
-  for (const [rel, bytes] of Object.entries(subtree.files)) {
+  for (const [rel, bytes] of Object.entries(installedFiles)) {
     files[`.moeicons/artifact/${target}/${rel}`] = bytes;
   }
   const managedFiles = Object.fromEntries(

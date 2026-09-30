@@ -55,12 +55,20 @@ export function targetSubtreeFiles(): Readonly<Record<ReleaseTarget, Readonly<Re
   return {
     react: {
       "index.js": "export const reactTarget = true;\n",
-      "types.d.ts": "export interface IconProps {}\n",
+      "types.d.ts": "export interface ReactIconProps {}\n",
       "moe-outline/index.js": "export const arrowBoldRight = () => {};\n",
+      "moe-outline/UiSearch.js": "export default function UiSearch() {}\n",
+      "moe-outline/UiSearch.d.ts": "import type { ReactIconProps } from '../types'; export default function UiSearch(props: ReactIconProps): unknown;\n",
+      "moe-outline/ArrowBoldRight.js": "export default function ArrowBoldRight() {}\n",
+      "moe-outline/ArrowBoldRight.d.ts": "import type { ReactIconProps } from '../types'; export default function ArrowBoldRight(props: ReactIconProps): unknown;\n",
     },
     vue: {
       "index.js": "export const vueTarget = true;\n",
-      "types.d.ts": "export interface IconProps {}\n",
+      "types.d.ts": "export interface VueIconProps {}\n",
+      "moe-outline/UiSearch.vue.js": "export default {};\n",
+      "moe-outline/UiSearch.vue.d.ts": "import type { VueIconProps } from '../types'; declare const icon: VueIconProps; export default icon;\n",
+      "moe-outline/ArrowBoldRight.vue.js": "export default {};\n",
+      "moe-outline/ArrowBoldRight.vue.d.ts": "import type { VueIconProps } from '../types'; declare const icon: VueIconProps; export default icon;\n",
     },
     vanilla: {
       "index.js": "export function createIcon() { return document.createElementNS('http://www.w3.org/2000/svg', 'svg'); }\n",

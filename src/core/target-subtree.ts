@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { extractTarGz, ICON_ARCHIVE_MAX_ENTRIES, ICON_ARCHIVE_MAX_EXPANDED_BYTES } from "../project/tar-gz.js";
 import type { ReleaseTarget, ReleaseTargetMetadata } from "./release-descriptor.js";
 import type { Target } from "../commands/parser.js";
+import { posix } from "node:path";
+import { toProxyName } from "./icon-names.js";
+import type { MoeiconsConfigFile } from "../project/config.js";
+import { findCatalogIcon, findCatalogStyleGroup, type IconCatalog } from "../catalog/catalog.js";
 
 /**
  * Select the target subtree the CLI must install. Mirrors the archive layout
@@ -34,6 +38,52 @@ export type TargetSubtreeFailure = {
 };
 
 export type TargetSubtreeResult = TargetSubtreeSelection | TargetSubtreeFailure;
+
+/** Keep only the component modules reachable from configured icon proxies.
+ * The full target subtree must be verified against its release descriptor
+ * before this projection is called; this is a local installation filter, not
+ * a replacement for the immutable archive digest.
+ */
+export function configuredComponentFiles(
+  files: Readonly<Record<string, Uint8Array>>,
+  target: Target,
+  config: MoeiconsConfigFile | undefined,
+  catalog: IconCatalog,
+): Readonly<Record<string, Uint8Array>> {
+  if (!config || (target !== "react" && target !== "vue")) return files;
+  const selected = new Set<string>();
+  const visit = (file: string): void => {
+    if (selected.has(file)) return;
+    const bytes = files[file];
+    if (!bytes) throw new Error(`verified ${target} archive is missing configured module: ${file}`);
+    selected.add(file);
+    const source = Buffer.from(bytes).toString("utf8");
+    const imports = /(?:\b(?:import|export)\s+(?:[^'";]*?\s+from\s*)?|\bimport\s*\()\s*["'](\.[^"']+)["']/g;
+    for (const match of source.matchAll(imports)) {
+      const specifier = match[1];
+      if (!specifier) continue;
+      const resolved = posix.normalize(posix.join(posix.dirname(file), specifier));
+      if (resolved.startsWith("../") || resolved === "..") throw new Error(`component import escapes target: ${file} → ${specifier}`);
+      const dependency = files[resolved] ? resolved : files[`${resolved}.d.ts`] ? `${resolved}.d.ts` : undefined;
+      if (!dependency) throw new Error(`verified ${target} archive is missing dependency: ${file} → ${specifier}`);
+      visit(dependency);
+    }
+  };
+  visit("types.d.ts");
+  const defaultGroup = config.themes[config.defaultTheme]?.styleGroup;
+  if (!defaultGroup) throw new Error(`default theme ${config.defaultTheme} is missing`);
+  for (const iconId of config.icons) {
+    const available = findCatalogIcon(iconId, catalog)?.availableIn ?? [];
+    for (const entry of Object.values(config.themes)) {
+      const group = available.includes(entry.styleGroup) ? entry.styleGroup : defaultGroup;
+      if (findCatalogStyleGroup(group, catalog)?.type === "bitmap") continue;
+      const basename = `${group}/${toProxyName(iconId)}${target === "vue" ? ".vue" : ""}`;
+      visit(`${basename}.js`);
+      visit(`${basename}.d.ts`);
+    }
+  }
+  return Object.fromEntries([...selected].sort().map((file) => [file, files[file]!]));
+}
 
 /**
  * Deterministic subtree hash over subtree-relative files. Files and directories

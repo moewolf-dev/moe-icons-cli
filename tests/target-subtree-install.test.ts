@@ -133,6 +133,20 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
     }
   });
 
+  it("requires install again when config adds a component absent from the verified local projection", async () => {
+    writeFreeReleaseFixture(fixture, { useBundledCatalog: true });
+    const base = { schemaVersion: 2, tier: "free", target: "react", outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } } };
+    writeConfig({ ...base, icons: ["ui-search"] });
+    const installed = await runInstallUseCase(context(project), freeDeps(), { group: "free", target: "react" });
+    expect(installed.ok).toBe(true);
+    expect(existsSync(join(project, ".moeicons", "artifact", "react", "moe-outline", "UiSearch.js"))).toBe(true);
+    expect(existsSync(join(project, ".moeicons", "artifact", "react", "moe-outline", "ArrowBoldRight.js"))).toBe(false);
+    writeConfig({ ...base, icons: ["arrow-bold-right"] });
+    const generated = await runGenerateUseCase(context(project), realFsWithCopy, { noTailwind: true });
+    expect(generated.ok).toBe(false);
+    if (!generated.ok) expect(generated.reason).toMatch(/run 'moeicons install' before generate/);
+  });
+
   it("routes pro installs for all four targets through the authenticated flow with a local mock", async () => {
     for (const target of TARGETS) {
       writeConfig({ schemaVersion: 2, tier: "pro", target, outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"] });
@@ -168,9 +182,14 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
         { version: meta.version, descriptorSha256: meta.descriptorSha, target },
       );
       expect(result.artifactVersion).toBe(meta.version);
-      const expected = targetSubtreeFiles()[target];
-      for (const [rel] of Object.entries(expected)) {
-        expect(existsSync(join(project, ".moeicons", "artifact", target, rel)), `${target}/${rel}`).toBe(true);
+      if (target === "react" || target === "vue") {
+        const suffix = target === "vue" ? ".vue" : "";
+        expect(existsSync(join(project, ".moeicons", "artifact", target, "moe-outline", `UiSearch${suffix}.js`))).toBe(true);
+        expect(existsSync(join(project, ".moeicons", "artifact", target, "moe-outline", `ArrowBoldRight${suffix}.js`))).toBe(false);
+      } else {
+        for (const [rel] of Object.entries(targetSubtreeFiles()[target])) {
+          expect(existsSync(join(project, ".moeicons", "artifact", target, rel)), `${target}/${rel}`).toBe(true);
+        }
       }
       for (const other of TARGETS) {
         if (other !== target) {
@@ -384,6 +403,24 @@ describe("B7: v1->v2 migration, update preservation and dependency isolation", (
       expect(existsSync(join(project, ".moeicons", "artifact", "assets", rel)), rel).toBe(true);
     }
     expect(existsSync(join(project, ".moeicons", "artifact", "react"))).toBe(false);
+  });
+
+  it("update removes previously managed unselected React modules", async () => {
+    const old = writeFreeReleaseFixture(fixture, { useBundledCatalog: true });
+    const first = await runInstallUseCase(context(project), { fs: realFs, download: download(fixture) }, { group: "free", target: "react", sourceVersion: old.version });
+    expect(first.ok).toBe(true);
+    const extra = join(project, ".moeicons", "artifact", "react", "moe-outline", "ArrowBoldRight.js");
+    expect(existsSync(extra)).toBe(true);
+    writeFileSync(join(project, "moeicons.config.json"), JSON.stringify({
+      schemaVersion: 2, tier: "free", target: "react", outputDir: "src/moeicons",
+      defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"],
+    }));
+    const next = writeFreeReleaseFixture(nextFixture, { version: "0.0.18", useBundledCatalog: true });
+    await runLibraryUpdateUseCase(context(project), { fs: realFsWithCopy, free: download(nextFixture), auth: {} }, {
+      tier: "free", version: next.version, descriptorSha256: next.descriptorSha,
+    });
+    expect(existsSync(extra)).toBe(false);
+    expect(existsSync(join(project, ".moeicons", "artifact", "react", "moe-outline", "UiSearch.js"))).toBe(true);
   });
 
   it("install then generate works for vanilla/assets without injected archiveFiles", async () => {
