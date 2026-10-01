@@ -216,7 +216,7 @@ export function useMoeiconsTheme(): MoeiconsThemeState {
         : svgInternalImportName(theme.theme, actual.entry.styleGroup, iconId);
       const refType = actual.kind === "bitmap" ? "HTMLImageElement" : "SVGSVGElement";
       return `    case ${JSON.stringify(theme.theme)}:
-      return <${symbol} ref={ref as React.Ref<${refType}>} width={resolvedSize} height={resolvedSize} strokeWidth={strokeWidth ?? themeStrokeWidth[${JSON.stringify(theme.theme)}]} {...rest} className={cn("moe-icon", themeClassName[${JSON.stringify(theme.theme)}], className)} />;`;
+      return <${symbol} ref={ref as React.Ref<${refType}>} width={resolvedSize} height={resolvedSize} strokeWidth={strokeWidth ?? themeStrokeWidth[${JSON.stringify(theme.theme)}]} aria-label={rest["aria-label"] ?? alt} {...rest} className={cn("moe-icon", themeClassName[${JSON.stringify(theme.theme)}], className)} />;`;
     }).join("\n");
     const defaultTheme = themes.find((theme) => theme.theme === config.defaultTheme)!;
     const defaultActual = effectiveThemeForIcon(iconId, defaultTheme, themes, config, sourceCatalog);
@@ -238,14 +238,14 @@ ${ownImports}
 ${singleTheme ? "" : themeClassExpr(themes)}
 ${singleTheme ? "" : themeDefaultsExpr(themes)}
 export const ${pascal} = /* @__PURE__ */ React.forwardRef<SVGSVGElement | HTMLImageElement, IconProps>((props, ref) => {
-  const { className, size, strokeWidth, ...rest } = props;
-${singleTheme ? `  return <${defaultSymbol} ref={ref as React.Ref<${defaultRefType}>} width={size ?? ${defaultTheme.entry.defaultSize ?? 24}} height={size ?? ${defaultTheme.entry.defaultSize ?? 24}} strokeWidth={strokeWidth ?? ${defaultTheme.entry.strokeWidth === undefined ? "undefined" : defaultTheme.entry.strokeWidth}} {...rest} className={cn("moe-icon", ${JSON.stringify(defaultTheme.entry.className ?? "")}, className)} />;` : `
+  const { className, size, strokeWidth, alt, ...rest } = props;
+${singleTheme ? `  return <${defaultSymbol} ref={ref as React.Ref<${defaultRefType}>} width={size ?? ${defaultTheme.entry.defaultSize ?? 24}} height={size ?? ${defaultTheme.entry.defaultSize ?? 24}} strokeWidth={strokeWidth ?? ${defaultTheme.entry.strokeWidth === undefined ? "undefined" : defaultTheme.entry.strokeWidth}} aria-label={rest["aria-label"] ?? alt} {...rest} className={cn("moe-icon", ${JSON.stringify(defaultTheme.entry.className ?? "")}, className)} />;` : `
   const { theme } = useMoeiconsTheme();
   const resolvedSize = size ?? themeDefaultSize[theme] ?? 24;
   switch (theme) {
 ${renderBranches}
     default:
-      return <${defaultSymbol} ref={ref as React.Ref<${defaultRefType}>} width={resolvedSize} height={resolvedSize} strokeWidth={strokeWidth ?? themeStrokeWidth[${JSON.stringify(config.defaultTheme)}]} {...rest} className={cn("moe-icon", themeClassName[${JSON.stringify(config.defaultTheme)}], className)} />;
+      return <${defaultSymbol} ref={ref as React.Ref<${defaultRefType}>} width={resolvedSize} height={resolvedSize} strokeWidth={strokeWidth ?? themeStrokeWidth[${JSON.stringify(config.defaultTheme)}]} aria-label={rest["aria-label"] ?? alt} {...rest} className={cn("moe-icon", themeClassName[${JSON.stringify(config.defaultTheme)}], className)} />;
   }`}
 });
 `,
@@ -369,7 +369,7 @@ import type { MoeiconsThemeState } from "./theme";
 import type { Theme } from "./types";
 
 export function useMoeiconsTheme(): MoeiconsThemeState {
-  const state = inject(MOEICONS_THEME_KEY);
+  const state = inject(MOEICONS_THEME_KEY, undefined);
   return state ?? { theme: ref<Theme>(${JSON.stringify(config.defaultTheme)}), setTheme: () => {} };
 }
 `,
@@ -443,6 +443,7 @@ ${singleTheme ? `
       const resolvedSize = size ?? ${onlyTheme.entry.defaultSize ?? 24};
       return h(${onlySymbol}, {
         ...attrs,
+        ...(attrs["aria-label"] === undefined && props.alt === undefined ? {} : { "aria-label": attrs["aria-label"] ?? props.alt }),
         width: props.width ?? resolvedSize,
         height: props.height ?? resolvedSize,
         strokeWidth: props.strokeWidth ?? ${onlyTheme.entry.strokeWidth === undefined ? "undefined" : onlyTheme.entry.strokeWidth},
@@ -459,6 +460,7 @@ ${singleTheme ? `
       const resolvedSize = size ?? themeDefaultSize[theme] ?? 24;
       return h(component.value, {
         ...attrs,
+        ...(attrs["aria-label"] === undefined && props.alt === undefined ? {} : { "aria-label": attrs["aria-label"] ?? props.alt }),
         width: props.width ?? resolvedSize,
         height: props.height ?? resolvedSize,
         strokeWidth: props.strokeWidth ?? themeStrokeWidth[theme],
