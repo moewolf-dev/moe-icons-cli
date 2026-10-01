@@ -85,7 +85,7 @@ describe("CLI-14 Vue DOM switch (rendered)", () => {
     expect(html).toContain("data-theme=\"outline\"");
   });
 
-  it("theme changes propagate to the icon DOM (reactive switch, no remount)", async () => {
+  it("SSR renders each supplied initial theme", async () => {
     const { createSSRApp, h, defineComponent } = require_("vue");
     const { renderToString } = require_("@vue/server-renderer");
     const { MoeiconsProvider, ArrowBoldRight, useMoeiconsTheme } = await import(
@@ -129,7 +129,7 @@ describe("CLI-14 Vue DOM switch (rendered)", () => {
     expect(html).toContain("data-moeicon=\"arrow-bold-right\"");
   });
 
-  it("preserves class and aria-label across theme switches", async () => {
+  it("SSR preserves class and aria-label for both initial themes", async () => {
     const { createSSRApp, h } = require_("vue");
     const { renderToString } = require_("@vue/server-renderer");
     const { MoeiconsProvider, ArrowBoldRight } = await import(

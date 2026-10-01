@@ -101,7 +101,8 @@ import assetUrl from "${assetImport}";
 
 export const ${wrapperName} = /* @__PURE__ */ React.forwardRef<HTMLImageElement, IconProps>((props, ref) => {
   const { className, size, alt, "aria-label": ariaLabel, strokeWidth: _strokeWidth, ...rest } = props;
-  const label = ariaLabel ?? alt;
+  const label = ariaLabel ?? alt ?? (typeof rest.title === "string" ? rest.title : undefined);
+  const named = Boolean(label || rest["aria-labelledby"]);
   const imageSource = typeof assetUrl === "string" ? assetUrl : (assetUrl as { src: string }).src;
   return (
     <img
@@ -110,7 +111,7 @@ export const ${wrapperName} = /* @__PURE__ */ React.forwardRef<HTMLImageElement,
       width={size ?? 24}
       height={size ?? 24}
       alt={label ?? ""}
-      aria-hidden={label ? undefined : true}
+      aria-hidden={named ? undefined : true}
       draggable={false}
       className={cn("moe-icon", ${defaultClass}, className)}
       {...rest}
@@ -140,7 +141,8 @@ export const ${wrapperName} = /* @__PURE__ */ defineComponent({
       const size = typeof attrs.size === "number" ? attrs.size : undefined;
       const ariaLabel = typeof attrs["aria-label"] === "string" ? attrs["aria-label"] : undefined;
       const alt = typeof attrs.alt === "string" ? attrs.alt : undefined;
-      const label = ariaLabel ?? alt;
+      const label = ariaLabel ?? alt ?? (typeof attrs.title === "string" ? attrs.title : undefined);
+      const named = Boolean(label || attrs["aria-labelledby"]);
       const { size: _size, ...imageAttrs } = attrs;
       return h("img", {
         ...imageAttrs,
@@ -148,7 +150,7 @@ export const ${wrapperName} = /* @__PURE__ */ defineComponent({
         width: attrs.width ?? size ?? 24,
         height: attrs.height ?? size ?? 24,
         alt: label ?? "",
-        "aria-hidden": attrs["aria-hidden"] ?? (label ? undefined : true),
+        "aria-hidden": attrs["aria-hidden"] ?? (named ? undefined : true),
         draggable: attrs.draggable ?? false,
         class: cn("moe-icon", ${defaultClass}, attrs.class as Parameters<typeof cn>[number]),
       });

@@ -10,6 +10,7 @@ import { selectBitmapVariantAssets } from "../core/bitmap-assets.js";
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import { decodeUtf8 } from "../project/tar-gz.js";
+import { prepareSvg, rootPaintAttributes, type SvgNode } from "./svg-model.js";
 import { CN_HELPER_SOURCE } from "./cn.js";
 import { resolveIconTheme, themeHasIcon } from "../core/icon-selection.js";
 import {
@@ -215,7 +216,7 @@ export function useMoeiconsTheme(): MoeiconsThemeState {
         : svgInternalImportName(theme.theme, actual.entry.styleGroup, iconId);
       const refType = actual.kind === "bitmap" ? "HTMLImageElement" : "SVGSVGElement";
       return `    case ${JSON.stringify(theme.theme)}:
-      return <${symbol} ref={ref as React.Ref<${refType}>} width={resolvedSize} height={resolvedSize} strokeWidth={strokeWidth ?? themeStrokeWidth[${JSON.stringify(theme.theme)}]} {...rest} className={cn("moe-icon", themeClassName[${JSON.stringify(theme.theme)}], className)} />;`;
+      return <${symbol} ref={ref as React.Ref<${refType}>} width={resolvedSize} height={resolvedSize} strokeWidth={strokeWidth ?? themeStrokeWidth[${JSON.stringify(theme.theme)}]} aria-label={rest["aria-label"] ?? alt} {...rest} className={cn("moe-icon", themeClassName[${JSON.stringify(theme.theme)}], className)} />;`;
     }).join("\n");
     const defaultTheme = themes.find((theme) => theme.theme === config.defaultTheme)!;
     const defaultActual = effectiveThemeForIcon(iconId, defaultTheme, themes, config, sourceCatalog);
@@ -237,14 +238,14 @@ ${ownImports}
 ${singleTheme ? "" : themeClassExpr(themes)}
 ${singleTheme ? "" : themeDefaultsExpr(themes)}
 export const ${pascal} = /* @__PURE__ */ React.forwardRef<SVGSVGElement | HTMLImageElement, IconProps>((props, ref) => {
-  const { className, size, strokeWidth, ...rest } = props;
-${singleTheme ? `  return <${defaultSymbol} ref={ref as React.Ref<${defaultRefType}>} width={size ?? ${defaultTheme.entry.defaultSize ?? 24}} height={size ?? ${defaultTheme.entry.defaultSize ?? 24}} strokeWidth={strokeWidth ?? ${defaultTheme.entry.strokeWidth === undefined ? "undefined" : defaultTheme.entry.strokeWidth}} {...rest} className={cn("moe-icon", ${JSON.stringify(defaultTheme.entry.className ?? "")}, className)} />;` : `
+  const { className, size, strokeWidth, alt, ...rest } = props;
+${singleTheme ? `  return <${defaultSymbol} ref={ref as React.Ref<${defaultRefType}>} width={size ?? ${defaultTheme.entry.defaultSize ?? 24}} height={size ?? ${defaultTheme.entry.defaultSize ?? 24}} strokeWidth={strokeWidth ?? ${defaultTheme.entry.strokeWidth === undefined ? "undefined" : defaultTheme.entry.strokeWidth}} aria-label={rest["aria-label"] ?? alt} {...rest} className={cn("moe-icon", ${JSON.stringify(defaultTheme.entry.className ?? "")}, className)} />;` : `
   const { theme } = useMoeiconsTheme();
   const resolvedSize = size ?? themeDefaultSize[theme] ?? 24;
   switch (theme) {
 ${renderBranches}
     default:
-      return <${defaultSymbol} ref={ref as React.Ref<${defaultRefType}>} width={resolvedSize} height={resolvedSize} strokeWidth={strokeWidth ?? themeStrokeWidth[${JSON.stringify(config.defaultTheme)}]} {...rest} className={cn("moe-icon", themeClassName[${JSON.stringify(config.defaultTheme)}], className)} />;
+      return <${defaultSymbol} ref={ref as React.Ref<${defaultRefType}>} width={resolvedSize} height={resolvedSize} strokeWidth={strokeWidth ?? themeStrokeWidth[${JSON.stringify(config.defaultTheme)}]} aria-label={rest["aria-label"] ?? alt} {...rest} className={cn("moe-icon", themeClassName[${JSON.stringify(config.defaultTheme)}], className)} />;
   }`}
 });
 `,
@@ -277,7 +278,8 @@ function appendVueFiles(
   files.push({
     path: rel("types.ts"),
     content: `${OWNER_HEADER}
-export interface IconProps {
+import type { SVGAttributes } from "vue";
+export interface IconProps extends Omit<SVGAttributes, "class" | "focusable" | "draggable"> {
   class?: import("clsx").ClassValue;
   size?: number;
   width?: number | string;
@@ -367,7 +369,7 @@ import type { MoeiconsThemeState } from "./theme";
 import type { Theme } from "./types";
 
 export function useMoeiconsTheme(): MoeiconsThemeState {
-  const state = inject(MOEICONS_THEME_KEY);
+  const state = inject(MOEICONS_THEME_KEY, undefined);
   return state ?? { theme: ref<Theme>(${JSON.stringify(config.defaultTheme)}), setTheme: () => {} };
 }
 `,
@@ -441,32 +443,34 @@ ${singleTheme ? `
       const resolvedSize = size ?? ${onlyTheme.entry.defaultSize ?? 24};
       return h(${onlySymbol}, {
         ...attrs,
+        ...(attrs["aria-label"] === undefined && props.alt === undefined ? {} : { "aria-label": attrs["aria-label"] ?? props.alt }),
         width: props.width ?? resolvedSize,
         height: props.height ?? resolvedSize,
         strokeWidth: props.strokeWidth ?? ${onlyTheme.entry.strokeWidth === undefined ? "undefined" : onlyTheme.entry.strokeWidth},
-        color: props.color,
-        fill: props.fill,
-        stroke: props.stroke,
-        focusable: props.focusable,
-        alt: props.alt,
-        title: props.title,
-        draggable: props.draggable,
+        ...(props.color === undefined ? {} : { color: props.color }),
+        ...(props.fill === undefined ? {} : { fill: props.fill }),
+        ...(props.stroke === undefined ? {} : { stroke: props.stroke }),
+        ...(props.focusable === undefined ? {} : { focusable: props.focusable }),
+        ...(props.alt === undefined ? {} : { alt: props.alt }),
+        ...(props.title === undefined ? {} : { title: props.title }),
+        ...(props.draggable === undefined ? {} : { draggable: props.draggable }),
         class: cn("moe-icon", ${JSON.stringify(onlyTheme.entry.className ?? "")}, className),
       });` : `
       const theme = (state?.theme.value ?? ${JSON.stringify(config.defaultTheme)}) as Theme;
       const resolvedSize = size ?? themeDefaultSize[theme] ?? 24;
       return h(component.value, {
         ...attrs,
+        ...(attrs["aria-label"] === undefined && props.alt === undefined ? {} : { "aria-label": attrs["aria-label"] ?? props.alt }),
         width: props.width ?? resolvedSize,
         height: props.height ?? resolvedSize,
         strokeWidth: props.strokeWidth ?? themeStrokeWidth[theme],
-        color: props.color,
-        fill: props.fill,
-        stroke: props.stroke,
-        focusable: props.focusable,
-        alt: props.alt,
-        title: props.title,
-        draggable: props.draggable,
+        ...(props.color === undefined ? {} : { color: props.color }),
+        ...(props.fill === undefined ? {} : { fill: props.fill }),
+        ...(props.stroke === undefined ? {} : { stroke: props.stroke }),
+        ...(props.focusable === undefined ? {} : { focusable: props.focusable }),
+        ...(props.alt === undefined ? {} : { alt: props.alt }),
+        ...(props.title === undefined ? {} : { title: props.title }),
+        ...(props.draggable === undefined ? {} : { draggable: props.draggable }),
         class: cn("moe-icon", themeClassName[theme], className),
       });`}
     };
@@ -491,63 +495,9 @@ ${config.icons
   });
 }
 
-type SvgNode = { readonly name: string; readonly attrs: readonly [string, string][]; readonly children: readonly SvgNode[]; readonly text?: never } | { readonly text: string };
-
-function parseSvgNodes(source: string): { viewBox: string; rootAttrs: readonly [string, string][]; children: SvgNode[] } {
-  const root: { children: SvgNode[] } = { children: [] };
-  const stack: Array<{ children: SvgNode[] }> = [root];
-  const svg = source.match(/<svg\b[^>]*>/i);
-  if (!svg) throw new Error("SVG root element is missing");
-  const viewBox = svg[0].match(/\bviewBox\s*=\s*["']([^"']+)["']/i)?.[1] ?? "0 0 24 24";
-  const rootAttrs: [string, string][] = [];
-  const allowedRoot = new Set(["fill", "stroke", "stroke-width", "opacity", "transform", "color", "filter", "mask", "clip-path", "fill-opacity", "stroke-opacity", "stroke-linecap", "stroke-linejoin", "stroke-dasharray", "stroke-dashoffset", "fill-rule", "clip-rule", "role", "aria-hidden", "preserveAspectRatio"]);
-  const rootMetadata = new Set(["viewBox", "width", "height", "xmlns", "xmlns:xlink", "version"]);
-  svg[0].replace(/([A-Za-z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g, (_full, name: string, doubleValue?: string, singleValue?: string) => {
-    if (allowedRoot.has(name)) rootAttrs.push([name, doubleValue ?? singleValue ?? ""]);
-    else if (!rootMetadata.has(name)) throw new Error(`unsupported SVG root attribute "${name}" in Vanilla raw fallback`);
-    return "";
-  });
-  const inner = source.slice((svg.index ?? 0) + svg[0].length).replace(/<\/svg>\s*$/i, "")
-    .replace(/^\s*<rect\s+width="24"\s+height="24"\s+fill="#1E1E1E"\s*\/>\s*<rect\s+width="\d+"\s+height="\d+"\s+transform="translate\(-?\d+(?:\.\d+)? -?\d+(?:\.\d+)?\)"\s+fill="white"\s*\/>\s*/i, "");
-  const tokenRe = /<!--[\s\S]*?-->|<[^>]+>|[^<]+/g;
-  const supportedTags = new Set(["g", "defs", "clipPath", "mask", "filter", "path", "circle", "ellipse", "line", "polyline", "polygon", "rect", "text", "tspan", "use", "image", "linearGradient", "radialGradient", "stop"]);
-  for (const match of inner.matchAll(tokenRe)) {
-    const token = match[0];
-    if (token.startsWith("<!--") || !token.trim()) continue;
-    if (token.startsWith("</")) {
-      if (stack.length > 1) stack.pop();
-      continue;
-    }
-    if (!token.startsWith("<")) {
-      stack[stack.length - 1]?.children.push({ text: token });
-      continue;
-    }
-    const selfClosing = /\/\s*>$/.test(token);
-    const body = token.slice(1, token.length - (selfClosing ? 2 : 1)).trim();
-    const name = body.match(/^[A-Za-z][\w:.-]*/)?.[0];
-    if (!name || !supportedTags.has(name)) throw new Error(`unsupported SVG element "${name ?? token}" in Vanilla raw fallback`);
-    const attrs: [string, string][] = [];
-    body.slice(name.length).replace(/([A-Za-z_:][\w:.-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g, (_full, attr: string, doubleValue?: string, singleValue?: string, bareValue?: string) => {
-      if (/^on/i.test(attr)) throw new Error(`unsupported SVG event attribute "${attr}" in Vanilla raw fallback`);
-      attrs.push([attr, doubleValue ?? singleValue ?? bareValue ?? ""]);
-      return "";
-    });
-    const node: { name: string; attrs: [string, string][]; children: SvgNode[] } = { name, attrs, children: [] };
-    stack[stack.length - 1]?.children.push(node);
-    if (!selfClosing) stack.push(node);
-  }
-  return { viewBox, rootAttrs, children: root.children };
-}
-
 function vanillaFactorySource(name: string, source: string, strategy: "outline" | "solid" | "mixed"): string {
-  const parsed = parseSvgNodes(source);
-  const paint = new Map(parsed.rootAttrs);
-  if (strategy === "solid" && !paint.has("fill")) paint.set("fill", "currentColor");
-  if (strategy === "outline") {
-    if (!paint.has("stroke")) paint.set("stroke", "currentColor");
-    if (!paint.has("fill")) paint.set("fill", "none");
-  }
-  const graphic = new Set(["path", "circle", "ellipse", "line", "polyline", "polygon", "rect", "text", "use", "image"]);
+  const parsed = prepareSvg(source, strategy);
+  const paint = rootPaintAttributes(parsed.rootAttrs, strategy);
   const lines = [
     "const SVG_NS = 'http://www.w3.org/2000/svg';", "",
     "export interface VanillaIconOptions extends Record<string, string | number | undefined> { className?: string; strokeWidth?: number; }", "",
@@ -568,10 +518,8 @@ function vanillaFactorySource(name: string, source: string, strategy: "outline" 
       const variable = `node${counter++}`;
       lines.push(`  const ${variable} = document.createElementNS(SVG_NS, ${JSON.stringify(node.name)});`);
       for (const [attr, value] of node.attrs) {
-        if (graphic.has(node.name.toLowerCase()) && strategy === "outline" && attr === "stroke-width" && value === "2") continue;
-        const tint = /^(?:black|#000(?:000)?)$/i.test(value);
-        const next = graphic.has(node.name.toLowerCase()) && tint && ((strategy === "outline" && attr === "stroke") || (strategy === "solid" && attr === "fill")) ? "currentColor" : value;
-        lines.push(`  ${variable}.setAttribute(${JSON.stringify(attr)}, ${JSON.stringify(next)});`);
+        const namespace = attr.startsWith("xlink:") ? "http://www.w3.org/1999/xlink" : attr.startsWith("xml:") ? "http://www.w3.org/XML/1998/namespace" : undefined;
+        lines.push(namespace ? `  ${variable}.setAttributeNS(${JSON.stringify(namespace)}, ${JSON.stringify(attr)}, ${JSON.stringify(value)});` : `  ${variable}.setAttribute(${JSON.stringify(attr)}, ${JSON.stringify(value)});`);
       }
       emit(node.children, variable);
       lines.push(`  ${parent}.appendChild(${variable});`);

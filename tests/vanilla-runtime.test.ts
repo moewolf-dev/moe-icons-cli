@@ -227,10 +227,10 @@ describe("E2E-C4 vanilla project runtime", () => {
     expect(factory).toContain('svg.setAttribute("preserveAspectRatio", "xMidYMid meet")');
     expect(factory).toContain("svg.setAttribute('width', '24')");
     expect(factory).toContain('node0.setAttribute("stroke", "currentColor")');
-    expect(factory).not.toContain('node0.setAttribute("stroke-width", "2")');
+    expect(factory).toContain('node0.setAttribute("stroke-width", "2")');
   });
 
-  it("fails explicitly when a legacy raw SVG uses unsupported root syntax", () => {
+  it("preserves root vector-effect through the canonical parser", () => {
     const files = archiveFiles();
     const source = new TextEncoder().encode('<svg viewBox="0 0 24 24" vector-effect="non-scaling-stroke"><path d="M0 0"/></svg>');
     files["assets/moe-outline/ui-search.svg"] = source;
@@ -239,6 +239,10 @@ describe("E2E-C4 vanilla project runtime", () => {
     entry.size = source.byteLength;
     entry.sha256 = createHash("sha256").update(source).digest("hex");
     files["assets/manifest.json"] = new TextEncoder().encode(JSON.stringify({ schemaVersion: 1, assets: manifest.assets }));
-    expect(() => planGeneratedFiles(config, "src/moeicons", { archiveFiles: files })).toThrow(/unsupported SVG root attribute "vector-effect"/);
+    const plan = planGeneratedFiles(config, "src/moeicons", { archiveFiles: files });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    const factory = String(plan.files.find((file) => file.path === "src/moeicons/moe-outline/UiSearch.ts")?.content);
+    expect(factory).toContain('svg.setAttribute("vector-effect", "non-scaling-stroke")');
   });
 });
