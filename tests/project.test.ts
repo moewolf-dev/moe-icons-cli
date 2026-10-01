@@ -9,7 +9,11 @@ import {
   detectProject,
   assertWritableProject,
 } from "../src/project/detect.js";
-import { readMoeiconsConfig, mergeMoeiconsConfig, renderMoeiconsConfigJsonc } from "../src/project/config.js";
+import {
+  readMoeiconsConfig,
+  mergeMoeiconsConfig,
+  renderMoeiconsConfigJsonc,
+} from "../src/project/config.js";
 
 let dir: string;
 
@@ -81,7 +85,9 @@ describe("detectProject", () => {
 
 describe("assertWritableProject", () => {
   it("rejects node_modules targets", () => {
-    expect(assertWritableProject(dir, join(dir, "node_modules", "x"), []).length).toBeGreaterThan(0);
+    expect(assertWritableProject(dir, join(dir, "node_modules", "x"), []).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it("rejects targets outside the workspace", () => {
@@ -245,7 +251,12 @@ describe("readMoeiconsConfig / mergeMoeiconsConfig", () => {
 
   it("rejects unsafe integration path segments and Windows drive paths", () => {
     for (const entry of ["src/../main.tsx", "src//main.tsx", "C:/main.tsx"]) {
-      writeConfig(dir, { schemaVersion: 3, framework: undefined, target: "react", integration: { adapter: "vite-react", entry } });
+      writeConfig(dir, {
+        schemaVersion: 3,
+        framework: undefined,
+        target: "react",
+        integration: { adapter: "vite-react", entry },
+      });
       const result = readMoeiconsConfig(dir);
       expect(result.kind).toBe("invalid");
       if (result.kind === "invalid") expect(result.message).toContain("integration.entry");
@@ -259,9 +270,11 @@ describe("readMoeiconsConfig / mergeMoeiconsConfig", () => {
     const result = readMoeiconsConfig(dir);
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
-      expect(result.warnings.some((w) => w.includes("styles") && w.includes("deprecated"))).toBe(true);
+      expect(result.warnings.some((w) => w.includes("styles") && w.includes("deprecated"))).toBe(
+        true,
+      );
       // styles[] must not appear in the parsed config (it is stripped)
-      expect(("styles" in result.config.themes["outline"]!)).toBe(false);
+      expect("styles" in result.config.themes["outline"]!).toBe(false);
     }
   });
 
@@ -291,6 +304,20 @@ describe("readMoeiconsConfig / mergeMoeiconsConfig", () => {
     expect(merged.target).toBe("react");
     expect("framework" in merged).toBe(false);
     expect(merged.icons).toEqual(["ui-search"]);
+    const fixed = {
+      ...base,
+      schemaVersion: 3 as const,
+      target: "react" as const,
+      downloadMode: "full" as const,
+    };
+    expect(mergeMoeiconsConfig(fixed, { outputDir: "lib/icons" })).toMatchObject({
+      schemaVersion: 3,
+      downloadMode: "full",
+    });
+    expect(mergeMoeiconsConfig(fixed, { downloadMode: "icons" })).toMatchObject({
+      schemaVersion: 3,
+      downloadMode: "icons",
+    });
   });
 });
 

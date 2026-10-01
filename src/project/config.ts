@@ -617,13 +617,18 @@ export function mergeMoeiconsConfig(
   const integration =
     patch.integration ?? ("integration" in current ? current.integration : undefined);
   return {
-    schemaVersion: integration ? 3 : 2,
+    schemaVersion: integration || current.schemaVersion === 3 ? 3 : 2,
     tier: patch.tier ?? current.tier,
     target: patch.target ?? targetFromInput(current),
     outputDir: patch.outputDir ?? current.outputDir,
     defaultTheme: patch.defaultTheme ?? current.defaultTheme,
     themes: patch.themes ?? current.themes,
     icons: patch.icons ?? current.icons,
+    ...(patch.downloadMode !== undefined
+      ? { downloadMode: patch.downloadMode }
+      : current.downloadMode !== undefined
+        ? { downloadMode: current.downloadMode }
+        : {}),
     ...(integration ? { integration } : {}),
     ...(patch.missingIconPolicy !== undefined
       ? { missingIconPolicy: patch.missingIconPolicy }
