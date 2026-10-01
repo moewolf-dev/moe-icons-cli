@@ -17,7 +17,10 @@ import { runProInstallUseCase } from "../src/core/pro-install.js";
 import { runLibraryUpdateUseCase } from "../src/core/library-update.js";
 import { runGenerateUseCase } from "../src/core/generate.js";
 import { readMoeiconsConfig } from "../src/project/config.js";
-import { parseInstallMetadata, readInstalledResourceState } from "../src/project/install-metadata.js";
+import {
+  parseInstallMetadata,
+  readInstalledResourceState,
+} from "../src/project/install-metadata.js";
 import { downloadProArtifact } from "../src/core/pro-download.js";
 import type { CommandContext, CommandUi } from "../src/core/context.js";
 import type { StoredSession, TokenStore } from "../src/auth/token-store.js";
@@ -36,7 +39,11 @@ function fakeUi(): CommandUi {
       return undefined;
     },
     progress() {
-      return { stop() { return undefined; } };
+      return {
+        stop() {
+          return undefined;
+        },
+      };
     },
   };
 }
@@ -64,7 +71,19 @@ function session(): StoredSession {
 
 function tokenStore(initial: StoredSession): TokenStore {
   let value: StoredSession | undefined = initial;
-  return { get: () => value, getActive: () => value, set: (next) => { value = next; }, delete: () => { value = undefined; }, clear: () => { value = undefined; } };
+  return {
+    get: () => value,
+    getActive: () => value,
+    set: (next) => {
+      value = next;
+    },
+    delete: () => {
+      value = undefined;
+    },
+    clear: () => {
+      value = undefined;
+    },
+  };
 }
 
 const realFs = { mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync };
@@ -115,15 +134,24 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
   it("routes free installs for all four targets and lands only the selected subtree", async () => {
     writeFreeReleaseFixture(fixture);
     for (const target of TARGETS) {
-      const result = await runInstallUseCase(context(project), freeDeps(), { group: "free", target });
+      const result = await runInstallUseCase(context(project), freeDeps(), {
+        group: "free",
+        target,
+      });
       expect(result).toMatchObject({ ok: true, group: "free", target });
       const expected = targetSubtreeFiles()[target];
       for (const [rel] of Object.entries(expected)) {
-        expect(existsSync(join(project, ".moeicons", "artifact", target, rel)), `${target}/${rel}`).toBe(true);
+        expect(
+          existsSync(join(project, ".moeicons", "artifact", target, rel)),
+          `${target}/${rel}`,
+        ).toBe(true);
       }
       for (const other of TARGETS) {
         if (other !== target) {
-          expect(existsSync(join(project, ".moeicons", "artifact", other)), `${target} must not install ${other}`).toBe(false);
+          expect(
+            existsSync(join(project, ".moeicons", "artifact", other)),
+            `${target} must not install ${other}`,
+          ).toBe(false);
         }
       }
       expect(readInstalledResourceState(project, "free").kind).toBe("ok");
@@ -135,68 +163,129 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
 
   it("requires install again when config adds a component absent from the verified local projection", async () => {
     writeFreeReleaseFixture(fixture, { useBundledCatalog: true });
-    const base = { schemaVersion: 2, tier: "free", target: "react", outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } } };
+    const base = {
+      schemaVersion: 2,
+      tier: "free",
+      target: "react",
+      outputDir: "src/moeicons",
+      defaultTheme: "outline",
+      themes: { outline: { styleGroup: "moe-outline" } },
+    };
     writeConfig({ ...base, icons: ["ui-search"] });
-    const installed = await runInstallUseCase(context(project), freeDeps(), { group: "free", target: "react" });
+    const installed = await runInstallUseCase(context(project), freeDeps(), {
+      group: "free",
+      target: "react",
+    });
     expect(installed.ok).toBe(true);
-    expect(existsSync(join(project, ".moeicons", "artifact", "react", "moe-outline", "UiSearch.js"))).toBe(true);
-    expect(existsSync(join(project, ".moeicons", "artifact", "react", "moe-outline", "ArrowBoldRight.js"))).toBe(false);
+    expect(
+      existsSync(join(project, ".moeicons", "artifact", "react", "moe-outline", "UiSearch.js")),
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(project, ".moeicons", "artifact", "react", "moe-outline", "ArrowBoldRight.js"),
+      ),
+    ).toBe(false);
     writeConfig({ ...base, icons: ["arrow-bold-right"] });
-    const generated = await runGenerateUseCase(context(project), realFsWithCopy, { noTailwind: true });
+    const generated = await runGenerateUseCase(context(project), realFsWithCopy, {
+      noTailwind: true,
+    });
     expect(generated.ok).toBe(false);
     if (!generated.ok) expect(generated.reason).toMatch(/run 'moeicons install' before generate/);
   });
 
   it("routes pro installs for all four targets through the authenticated flow with a local mock", async () => {
     for (const target of TARGETS) {
-      writeConfig({ schemaVersion: 2, tier: "pro", target, outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"] });
+      writeConfig({
+        schemaVersion: 2,
+        tier: "pro",
+        target,
+        outputDir: "src/moeicons",
+        defaultTheme: "outline",
+        themes: { outline: { styleGroup: "moe-outline" } },
+        icons: ["ui-search"],
+      });
       const meta = writeFreeReleaseFixture(fixture, { tier: "pro", useBundledCatalog: true });
       const archive = new Uint8Array(readFileSync(join(fixture, meta.freeName)));
       const metadataArchive = new Uint8Array(readFileSync(join(fixture, meta.metadataName)));
       const descriptor = JSON.parse(readFileSync(join(fixture, DESCRIPTOR_NAME), "utf8")) as {
         free: { targetMetadata: Record<string, unknown> };
       };
-      const fetch = vi.fn(async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
-        const url = String(input);
-        if (url.includes("artifact-descriptor")) {
-          return Response.json({
-            ok: true,
-            tier: "pro",
-            version: meta.version,
-            descriptorSha256: meta.descriptorSha,
-            catalogFilename: "catalog.json",
-            catalogSha256: meta.catalogSha,
-            url: "https://06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com/pro.tgz",
-            expiresAt: "2099-01-01T00:00:00Z",
-            size: archive.byteLength,
-            sha256: meta.freeSha,
-            targetMetadata: descriptor.free.targetMetadata,
-            metadata: { url: "https://06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com/pro-meta.tgz", expiresAt: "2099-01-01T00:00:00Z", size: metadataArchive.byteLength, sha256: meta.metadataSha },
-          });
-        }
-        return new Response(url.includes("pro-meta") ? metadataArchive : archive);
-      });
+      const fetch = vi.fn(
+        async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+          const url = String(input);
+          if (url.includes("artifact-descriptor")) {
+            return Response.json({
+              ok: true,
+              tier: "pro",
+              version: meta.version,
+              descriptorSha256: meta.descriptorSha,
+              catalogFilename: "catalog.json",
+              catalogSha256: meta.catalogSha,
+              url: "https://06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com/pro.tgz",
+              expiresAt: "2099-01-01T00:00:00Z",
+              size: archive.byteLength,
+              sha256: meta.freeSha,
+              targetMetadata: descriptor.free.targetMetadata,
+              metadata: {
+                url: "https://06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com/pro-meta.tgz",
+                expiresAt: "2099-01-01T00:00:00Z",
+                size: metadataArchive.byteLength,
+                sha256: meta.metadataSha,
+              },
+            });
+          }
+          return new Response(url.includes("pro-meta") ? metadataArchive : archive);
+        },
+      );
       const result = await runProInstallUseCase(
         context(project),
-        { fs: realFs, auth: { tokenStore: tokenStore(session()) }, fetch: fetch as typeof fetch, allowedHosts: ["06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com"] },
+        {
+          fs: realFs,
+          auth: { tokenStore: tokenStore(session()) },
+          fetch: fetch as typeof fetch,
+          allowedHosts: ["06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com"],
+        },
         { version: meta.version, descriptorSha256: meta.descriptorSha, target },
       );
       expect(result.artifactVersion).toBe(meta.version);
       if (target === "react" || target === "vue") {
         const suffix = target === "vue" ? ".vue" : "";
-        expect(existsSync(join(project, ".moeicons", "artifact", target, "moe-outline", `UiSearch${suffix}.js`))).toBe(true);
-        expect(existsSync(join(project, ".moeicons", "artifact", target, "moe-outline", `ArrowBoldRight${suffix}.js`))).toBe(false);
+        expect(
+          existsSync(
+            join(project, ".moeicons", "artifact", target, "moe-outline", `UiSearch${suffix}.js`),
+          ),
+        ).toBe(true);
+        expect(
+          existsSync(
+            join(
+              project,
+              ".moeicons",
+              "artifact",
+              target,
+              "moe-outline",
+              `ArrowBoldRight${suffix}.js`,
+            ),
+          ),
+        ).toBe(false);
       } else {
         for (const [rel] of Object.entries(targetSubtreeFiles()[target])) {
-          expect(existsSync(join(project, ".moeicons", "artifact", target, rel)), `${target}/${rel}`).toBe(true);
+          expect(
+            existsSync(join(project, ".moeicons", "artifact", target, rel)),
+            `${target}/${rel}`,
+          ).toBe(true);
         }
       }
       for (const other of TARGETS) {
         if (other !== target) {
-          expect(existsSync(join(project, ".moeicons", "artifact", other)), `${target} must not install ${other}`).toBe(false);
+          expect(
+            existsSync(join(project, ".moeicons", "artifact", other)),
+            `${target} must not install ${other}`,
+          ).toBe(false);
         }
       }
-      const metadata = parseInstallMetadata(readFileSync(join(project, ".moeicons", "install-metadata.json"), "utf8"));
+      const metadata = parseInstallMetadata(
+        readFileSync(join(project, ".moeicons", "install-metadata.json"), "utf8"),
+      );
       expect(metadata?.tier).toBe("pro");
       expect(metadata?.target).toBe(target);
       expect(readInstalledResourceState(project, "pro").kind).toBe("ok");
@@ -206,7 +295,15 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
   });
 
   it("never forwards API credentials to the signed pro host while landing the subtree", async () => {
-    writeConfig({ schemaVersion: 2, tier: "pro", target: "assets", outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"] });
+    writeConfig({
+      schemaVersion: 2,
+      tier: "pro",
+      target: "assets",
+      outputDir: "src/moeicons",
+      defaultTheme: "outline",
+      themes: { outline: { styleGroup: "moe-outline" } },
+      icons: ["ui-search"],
+    });
     const meta = writeFreeReleaseFixture(fixture, { tier: "pro", useBundledCatalog: true });
     const archive = new Uint8Array(readFileSync(join(fixture, meta.freeName)));
     const metadataArchive = new Uint8Array(readFileSync(join(fixture, meta.metadataName)));
@@ -214,26 +311,47 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
       free: { targetMetadata: Record<string, unknown> };
     };
     const calls: Array<{ url: string; authorization: string | null }> = [];
-    const fetch = vi.fn(async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
-      const url = String(input);
-      calls.push({ url, authorization: new Headers(init?.headers).get("authorization") });
-      if (url.includes("artifact-descriptor")) {
-        return Response.json({
-          ok: true, tier: "pro", version: meta.version, descriptorSha256: meta.descriptorSha,
-          catalogFilename: "catalog.json", catalogSha256: meta.catalogSha,
-          url: "https://signed.example/pro.tgz", expiresAt: "2099-01-01T00:00:00Z",
-          size: archive.byteLength, sha256: meta.freeSha, targetMetadata: descriptor.free.targetMetadata,
-          metadata: { url: "https://signed.example/pro-meta.tgz", expiresAt: "2099-01-01T00:00:00Z", size: metadataArchive.byteLength, sha256: meta.metadataSha },
-        });
-      }
-      return new Response(url.includes("pro-meta") ? metadataArchive : archive);
-    });
+    const fetch = vi.fn(
+      async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+        const url = String(input);
+        calls.push({ url, authorization: new Headers(init?.headers).get("authorization") });
+        if (url.includes("artifact-descriptor")) {
+          return Response.json({
+            ok: true,
+            tier: "pro",
+            version: meta.version,
+            descriptorSha256: meta.descriptorSha,
+            catalogFilename: "catalog.json",
+            catalogSha256: meta.catalogSha,
+            url: "https://signed.example/pro.tgz",
+            expiresAt: "2099-01-01T00:00:00Z",
+            size: archive.byteLength,
+            sha256: meta.freeSha,
+            targetMetadata: descriptor.free.targetMetadata,
+            metadata: {
+              url: "https://signed.example/pro-meta.tgz",
+              expiresAt: "2099-01-01T00:00:00Z",
+              size: metadataArchive.byteLength,
+              sha256: meta.metadataSha,
+            },
+          });
+        }
+        return new Response(url.includes("pro-meta") ? metadataArchive : archive);
+      },
+    );
     await runProInstallUseCase(
       context(project),
-      { fs: realFs, auth: { tokenStore: tokenStore(session()) }, fetch: fetch as typeof fetch, allowedHosts: ["signed.example"] },
+      {
+        fs: realFs,
+        auth: { tokenStore: tokenStore(session()) },
+        fetch: fetch as typeof fetch,
+        allowedHosts: ["signed.example"],
+      },
       { version: meta.version, descriptorSha256: meta.descriptorSha, target: "assets" },
     );
-    expect(calls.find((call) => call.url.includes("artifact-descriptor"))?.authorization).toBe("Bearer access-token");
+    expect(calls.find((call) => call.url.includes("artifact-descriptor"))?.authorization).toBe(
+      "Bearer access-token",
+    );
     expect(calls.find((call) => call.url.includes("signed.example"))?.authorization).toBeNull();
     expect(JSON.stringify(calls)).not.toContain("refresh-token");
   });
@@ -281,7 +399,15 @@ describe("B7: failure and rollback contracts", () => {
   it("rejects an unknown target in v2 config with a validation error and zero writes", async () => {
     writeFileSync(
       join(project, "moeicons.config.json"),
-      JSON.stringify({ schemaVersion: 2, tier: "free", target: "solid", outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"] }),
+      JSON.stringify({
+        schemaVersion: 2,
+        tier: "free",
+        target: "solid",
+        outputDir: "src/moeicons",
+        defaultTheme: "outline",
+        themes: { outline: { styleGroup: "moe-outline" } },
+        icons: ["ui-search"],
+      }),
     );
     expect(readMoeiconsConfig(project).kind).toBe("invalid");
     const result = await runInstallUseCase(context(project), freeDeps(), { group: "free" });
@@ -296,7 +422,10 @@ describe("B7: failure and rollback contracts", () => {
     rmSync(fixture, { recursive: true, force: true });
     fixture = mkdtempSync(join(tmpdir(), "b7-fail-tamper-"));
     writeFreeReleaseFixture(fixture, { tamperTarget: "vanilla" });
-    const result = await runInstallUseCase(context(project), freeDeps(), { group: "free", target: "vanilla" });
+    const result = await runInstallUseCase(context(project), freeDeps(), {
+      group: "free",
+      target: "vanilla",
+    });
     expect(result).toMatchObject({ ok: false, reason: "checksum-mismatch" });
     if (result.ok === false && result.reason === "checksum-mismatch") {
       expect(result.message).toContain("vanilla");
@@ -321,7 +450,9 @@ describe("B7: failure and rollback contracts", () => {
     if (!result.ok) expect(result.reason).toBe("write-failed");
     expect(existsSync(join(project, ".moeicons", "install-metadata.json"))).toBe(false);
     expect(existsSync(join(project, "src", "moeicons", ".moeicons-free.marker"))).toBe(false);
-    expect(existsSync(join(project, ".moeicons", "artifact", "assets", "manifest.json"))).toBe(false);
+    expect(existsSync(join(project, ".moeicons", "artifact", "assets", "manifest.json"))).toBe(
+      false,
+    );
   });
 });
 
@@ -336,10 +467,14 @@ describe("B7: v1->v2 migration, update preservation and dependency isolation", (
     fixture = mkdtempSync(join(tmpdir(), "b7-migrate-old-"));
     nextFixture = mkdtempSync(join(tmpdir(), "b7-migrate-next-"));
     cache = mkdtempSync(join(tmpdir(), "b7-migrate-cache-"));
-    writeFileSync(join(project, "package.json"), JSON.stringify({ name: "b7", version: "1.0.0", dependencies: {} }));
+    writeFileSync(
+      join(project, "package.json"),
+      JSON.stringify({ name: "b7", version: "1.0.0", dependencies: {} }),
+    );
   });
   afterEach(() => {
-    for (const path of [project, fixture, nextFixture, cache]) rmSync(path, { recursive: true, force: true });
+    for (const path of [project, fixture, nextFixture, cache])
+      rmSync(path, { recursive: true, force: true });
   });
 
   function download(fixtureDir: string) {
@@ -364,38 +499,69 @@ describe("B7: v1->v2 migration, update preservation and dependency isolation", (
     const meta = writeFreeReleaseFixture(fixture, { useBundledCatalog: true });
     writeFileSync(
       join(project, "moeicons.config.json"),
-      JSON.stringify({ schemaVersion: 1, tier: "free", framework: "vue", outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"] }),
+      JSON.stringify({
+        schemaVersion: 1,
+        tier: "free",
+        framework: "vue",
+        outputDir: "src/moeicons",
+        defaultTheme: "outline",
+        themes: { outline: { styleGroup: "moe-outline" } },
+        icons: ["ui-search"],
+      }),
     );
     const loaded = readMoeiconsConfig(project);
     expect(loaded.kind).toBe("ok");
     if (loaded.kind === "ok") {
       expect(loaded.config.schemaVersion).toBe(2);
       expect(loaded.config.target).toBe("vue");
-      expect(("framework" in loaded.config)).toBe(false);
+      expect("framework" in loaded.config).toBe(false);
       expect(loaded.warnings).toContain('config schema v1 migrated "framework" to "target"');
     }
-    const result = await runInstallUseCase(context(project), { fs: realFs, download: download(fixture) }, { group: "free", sourceVersion: meta.version });
+    const result = await runInstallUseCase(
+      context(project),
+      { fs: realFs, download: download(fixture) },
+      { group: "free", sourceVersion: meta.version },
+    );
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true, target: "vue" });
-    const metadata = parseInstallMetadata(readFileSync(join(project, ".moeicons", "install-metadata.json"), "utf8"));
+    const metadata = parseInstallMetadata(
+      readFileSync(join(project, ".moeicons", "install-metadata.json"), "utf8"),
+    );
     expect(metadata?.target).toBe("vue");
   });
 
   it("library update preserves the installed target and its verified subtree", async () => {
-    const old = writeFreeReleaseFixture(fixture);
+    const old = writeFreeReleaseFixture(fixture, { useBundledCatalog: true });
     writeFileSync(
       join(project, "moeicons.config.json"),
-      JSON.stringify({ schemaVersion: 2, tier: "free", target: "assets", outputDir: "src/moeicons", defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["arrow-bold-right"] }),
+      JSON.stringify({
+        schemaVersion: 2,
+        tier: "free",
+        target: "assets",
+        outputDir: "src/moeicons",
+        defaultTheme: "outline",
+        themes: { outline: { styleGroup: "moe-outline" } },
+        icons: ["arrow-bold-right"],
+      }),
     );
-    const first = await runInstallUseCase(context(project), { fs: realFs, download: download(fixture) }, { group: "free", sourceVersion: old.version });
+    const first = await runInstallUseCase(
+      context(project),
+      { fs: realFs, download: download(fixture) },
+      { group: "free", sourceVersion: old.version },
+    );
     expect(first).toMatchObject({ ok: true, target: "assets" });
-    const next = writeFreeReleaseFixture(nextFixture, { version: "0.0.18", useBundledCatalog: true });
+    const next = writeFreeReleaseFixture(nextFixture, {
+      version: "0.0.18",
+      useBundledCatalog: true,
+    });
     const updated = await runLibraryUpdateUseCase(
       context(project),
       { fs: realFsWithCopy, free: download(nextFixture), auth: {} },
       { tier: "free", version: next.version, descriptorSha256: next.descriptorSha },
     );
     expect(updated.artifactVersion).toBe("0.0.18");
-    const metadata = parseInstallMetadata(readFileSync(join(project, ".moeicons", "install-metadata.json"), "utf8"));
+    const metadata = parseInstallMetadata(
+      readFileSync(join(project, ".moeicons", "install-metadata.json"), "utf8"),
+    );
     expect(metadata?.target).toBe("assets");
     expect(metadata?.targetSha256).toMatch(/^[0-9a-f]{64}$/);
     const expected = targetSubtreeFiles().assets;
@@ -407,20 +573,50 @@ describe("B7: v1->v2 migration, update preservation and dependency isolation", (
 
   it("update removes previously managed unselected React modules", async () => {
     const old = writeFreeReleaseFixture(fixture, { useBundledCatalog: true });
-    const first = await runInstallUseCase(context(project), { fs: realFs, download: download(fixture) }, { group: "free", target: "react", sourceVersion: old.version });
+    const first = await runInstallUseCase(
+      context(project),
+      { fs: realFs, download: download(fixture) },
+      { group: "free", target: "react", sourceVersion: old.version },
+    );
     expect(first.ok).toBe(true);
-    const extra = join(project, ".moeicons", "artifact", "react", "moe-outline", "ArrowBoldRight.js");
+    const extra = join(
+      project,
+      ".moeicons",
+      "artifact",
+      "react",
+      "moe-outline",
+      "ArrowBoldRight.js",
+    );
     expect(existsSync(extra)).toBe(true);
-    writeFileSync(join(project, "moeicons.config.json"), JSON.stringify({
-      schemaVersion: 2, tier: "free", target: "react", outputDir: "src/moeicons",
-      defaultTheme: "outline", themes: { outline: { styleGroup: "moe-outline" } }, icons: ["ui-search"],
-    }));
-    const next = writeFreeReleaseFixture(nextFixture, { version: "0.0.18", useBundledCatalog: true });
-    await runLibraryUpdateUseCase(context(project), { fs: realFsWithCopy, free: download(nextFixture), auth: {} }, {
-      tier: "free", version: next.version, descriptorSha256: next.descriptorSha,
+    writeFileSync(
+      join(project, "moeicons.config.json"),
+      JSON.stringify({
+        schemaVersion: 2,
+        tier: "free",
+        target: "react",
+        outputDir: "src/moeicons",
+        defaultTheme: "outline",
+        themes: { outline: { styleGroup: "moe-outline" } },
+        icons: ["ui-search"],
+      }),
+    );
+    const next = writeFreeReleaseFixture(nextFixture, {
+      version: "0.0.18",
+      useBundledCatalog: true,
     });
+    await runLibraryUpdateUseCase(
+      context(project),
+      { fs: realFsWithCopy, free: download(nextFixture), auth: {} },
+      {
+        tier: "free",
+        version: next.version,
+        descriptorSha256: next.descriptorSha,
+      },
+    );
     expect(existsSync(extra)).toBe(false);
-    expect(existsSync(join(project, ".moeicons", "artifact", "react", "moe-outline", "UiSearch.js"))).toBe(true);
+    expect(
+      existsSync(join(project, ".moeicons", "artifact", "react", "moe-outline", "UiSearch.js")),
+    ).toBe(true);
   });
 
   it("install then generate works for vanilla/assets without injected archiveFiles", async () => {
@@ -451,9 +647,15 @@ describe("B7: v1->v2 migration, update preservation and dependency isolation", (
       );
       expect(generated.ok, `${target} generate: ${JSON.stringify(generated)}`).toBe(true);
       if (target === "assets") {
-        expect(existsSync(join(project, "src", "moeicons", "assets", "moe-outline", "arrow-bold-right.svg"))).toBe(true);
+        expect(
+          existsSync(
+            join(project, "src", "moeicons", "assets", "moe-outline", "arrow-bold-right.svg"),
+          ),
+        ).toBe(true);
       } else {
-        expect(existsSync(join(project, "src", "moeicons", "moe-outline", "ArrowBoldRight.ts"))).toBe(true);
+        expect(
+          existsSync(join(project, "src", "moeicons", "moe-outline", "ArrowBoldRight.ts")),
+        ).toBe(true);
       }
       rmSync(join(project, ".moeicons"), { recursive: true, force: true });
       rmSync(join(project, "src"), { recursive: true, force: true });

@@ -358,3 +358,54 @@ it("Pro selected install renews an expired resource URL, never downloads full co
     fs.rmSync(s.root, { recursive: true, force: true });
   }
 });
+
+for (const mode of ["full", "auto"] as const) {
+  it(`validates the fixed catalog before reading a full archive (${mode})`, async () => {
+    const s = setup("react");
+    try {
+      fs.writeFileSync(
+        join(s.project, "moeicons.config.json"),
+        JSON.stringify({
+          ...s.config,
+          downloadMode: mode,
+          icons: ["not-real"],
+          themes: { outline: { styleGroup: "moe-outline" } },
+        }),
+      );
+      if (mode === "auto") {
+        const descriptorPath = join(s.fixture, "release-descriptor.json"),
+          descriptor = JSON.parse(fs.readFileSync(descriptorPath, "utf8"));
+        delete descriptor.free.resources;
+        const bytes = Buffer.from(JSON.stringify(descriptor));
+        fs.writeFileSync(descriptorPath, bytes);
+        fs.writeFileSync(
+          join(s.fixture, "release-descriptor.json.sha256"),
+          `${sha256Bytes(bytes)}  release-descriptor.json\n`,
+        );
+        const latestPath = join(s.fixture, "release-latest.json"),
+          latest = JSON.parse(fs.readFileSync(latestPath, "utf8"));
+        latest.descriptorSha256 = sha256Bytes(bytes);
+        fs.writeFileSync(latestPath, JSON.stringify(latest));
+      }
+      let archiveReads = 0;
+      const io = {
+        ...s.io,
+        readFileSync: (path: string) => {
+          if (path.endsWith(s.base.freeName)) archiveReads++;
+          return s.io.readFileSync(path);
+        },
+      };
+      const result = await runInstallUseCase(
+        s.context,
+        { fs, download: io },
+        { group: "free", sourceVersion: s.base.version },
+      );
+      expect(result).toMatchObject({ ok: false, reason: "validation" });
+      expect("message" in result ? result.message : "").toContain("not-real");
+      expect(archiveReads).toBe(0);
+      expect(fs.existsSync(join(s.project, ".moeicons/install-metadata.json"))).toBe(false);
+    } finally {
+      fs.rmSync(s.root, { recursive: true, force: true });
+    }
+  });
+}

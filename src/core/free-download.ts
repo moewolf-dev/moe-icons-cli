@@ -504,7 +504,8 @@ export async function downloadFreeRelease(
   }
 
   const mode = selection?.config.downloadMode ?? "auto";
-  if (selection && mode !== "full" && descriptor.free.resources) {
+  let preflightMetadata: ExtractedMetadata | undefined;
+  if (selection && (mode !== "icons" || descriptor.free.resources)) {
     try {
       const metadata = await downloadMetadataArchive(
         io,
@@ -515,6 +516,39 @@ export async function downloadFreeRelease(
         tag,
         descriptor.channel === "local-test",
       );
+      if (!metadata.ok) return metadata;
+      const strict = validateConfigDocument(
+        selection.document,
+        parseCatalog(JSON.parse(metadata.value.catalogJson)),
+      );
+      if (strict.kind !== "ok")
+        return {
+          ok: false,
+          reason: "validation",
+          message: strict.kind === "invalid" ? strict.message : `config state: ${strict.kind}`,
+        };
+      preflightMetadata = metadata.value;
+    } catch (error) {
+      return {
+        ok: false,
+        reason: io.signal.aborted ? "cancelled" : "validation",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+  if (selection && mode !== "full" && descriptor.free.resources) {
+    try {
+      const metadata = preflightMetadata
+        ? { ok: true as const, value: preflightMetadata, cacheHit: true }
+        : await downloadMetadataArchive(
+            io,
+            metadataRef,
+            descriptor.catalog.sha256,
+            "free",
+            descriptor.fullVersion,
+            tag,
+            descriptor.channel === "local-test",
+          );
       if (!metadata.ok) return metadata;
       const catalog = parseCatalog(JSON.parse(metadata.value.catalogJson));
       const strict = validateConfigDocument(selection.document, catalog);
@@ -657,15 +691,17 @@ export async function downloadFreeRelease(
         descriptor.catalog.sha256,
       );
       if (!catalog.ok) return catalog;
-      const metadata = await downloadMetadataArchive(
-        io,
-        metadataRef,
-        descriptor.catalog.sha256,
-        "free",
-        descriptor.fullVersion,
-        tag,
-        descriptor.channel === "local-test",
-      );
+      const metadata = preflightMetadata
+        ? { ok: true as const, value: preflightMetadata, cacheHit: true }
+        : await downloadMetadataArchive(
+            io,
+            metadataRef,
+            descriptor.catalog.sha256,
+            "free",
+            descriptor.fullVersion,
+            tag,
+            descriptor.channel === "local-test",
+          );
       if (!metadata.ok) return metadata;
       return {
         ok: true,
@@ -716,15 +752,17 @@ export async function downloadFreeRelease(
   );
   if (!catalog.ok) return catalog;
 
-  const metadata = await downloadMetadataArchive(
-    io,
-    metadataRef,
-    descriptor.catalog.sha256,
-    "free",
-    descriptor.fullVersion,
-    tag,
-    descriptor.channel === "local-test",
-  );
+  const metadata = preflightMetadata
+    ? { ok: true as const, value: preflightMetadata, cacheHit: true }
+    : await downloadMetadataArchive(
+        io,
+        metadataRef,
+        descriptor.catalog.sha256,
+        "free",
+        descriptor.fullVersion,
+        tag,
+        descriptor.channel === "local-test",
+      );
   if (!metadata.ok) return metadata;
 
   try {

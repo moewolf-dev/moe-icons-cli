@@ -1,6 +1,11 @@
 import { parseResourceRefs, type ResourceRefs } from "./selected-resources.js";
 import { downloadProSelected } from "./pro-selected-download.js";
-import type { ConfigDocument, MoeiconsConfigFile } from "../project/config.js";
+import {
+  validateConfigDocument,
+  type ConfigDocument,
+  type MoeiconsConfigFile,
+} from "../project/config.js";
+import { parseCatalog } from "../catalog/catalog.js";
 import type { SelectedResourceDownload } from "./free-download.js";
 import { CliError } from "../errors/index.js";
 import {
@@ -222,7 +227,8 @@ async function requestDescriptor(
       await response.body?.cancel();
       return { status: response.status };
     }
-    const reader = response.body?.getReader() as ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const reader = response.body?.getReader() as
+      ReadableStreamDefaultReader<Uint8Array> | undefined;
     if (!reader) throw new CliError("NETWORK_ERROR", "empty pro descriptor response");
     const chunks: Uint8Array[] = [];
     let size = 0;
@@ -381,7 +387,7 @@ export async function downloadProArtifact(
         metadataSha256: descriptor.metadata!.sha256,
       };
   }
-  if (deps.selection?.config.downloadMode === "icons" && !descriptor.resources)
+  if (deps.selection?.config.downloadMode === "icons")
     throw new CliError(
       "VALIDATION_ERROR",
       "this release/backend does not support selected resources; set downloadMode=full or use a newer release",
@@ -393,6 +399,41 @@ export async function downloadProArtifact(
     context.signal,
   );
   const downloadOptions = proSignedDownloadOptions(context, deps);
+  let metadata: { manifestJson: string; manualMd: string; catalogJson: string } | undefined;
+  let metadataBytes: Uint8Array | undefined;
+  if (descriptor.metadata) {
+    metadataBytes = await downloadSignedArtifact(descriptor.metadata, downloadOptions);
+    metadata = extractProMetadata(
+      metadataBytes,
+      descriptor.catalogSha256,
+      descriptor.version,
+      expected.allowLocalTest === true,
+    );
+  } else {
+    throw new CliError(
+      "VALIDATION_ERROR",
+      "pro release descriptor is missing the metadata archive",
+    );
+  }
+  if (deps.selection) {
+    try {
+      const strict = validateConfigDocument(
+        deps.selection.document,
+        parseCatalog(JSON.parse(metadata.catalogJson)),
+      );
+      if (strict.kind !== "ok")
+        throw new CliError(
+          "VALIDATION_ERROR",
+          strict.kind === "invalid" ? strict.message : `config state: ${strict.kind}`,
+        );
+    } catch (error) {
+      if (error instanceof CliError) throw error;
+      throw new CliError(
+        "VALIDATION_ERROR",
+        `invalid fixed release catalog: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   const artifactBytes = await downloadSignedArtifact(
     {
       url: descriptor.url,
@@ -414,22 +455,6 @@ export async function downloadProArtifact(
   if (!catalog || sha256Bytes(catalog) !== descriptor.catalogSha256)
     throw new CliError("VALIDATION_ERROR", "pro catalog SHA-256 mismatch");
 
-  let metadata: { manifestJson: string; manualMd: string } | undefined;
-  let metadataBytes: Uint8Array | undefined;
-  if (descriptor.metadata) {
-    metadataBytes = await downloadSignedArtifact(descriptor.metadata, downloadOptions);
-    metadata = extractProMetadata(
-      metadataBytes,
-      descriptor.catalogSha256,
-      descriptor.version,
-      expected.allowLocalTest === true,
-    );
-  } else {
-    throw new CliError(
-      "VALIDATION_ERROR",
-      "pro release descriptor is missing the metadata archive",
-    );
-  }
   return {
     descriptor,
     artifactBytes,
