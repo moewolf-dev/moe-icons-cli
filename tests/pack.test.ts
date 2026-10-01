@@ -39,6 +39,8 @@ describe("npm pack inspection", () => {
       expect(files.some((f) => f.includes("package/bin/moeicons.js"))).toBe(true);
       expect(files.some((f) => f.includes("package/bin/check-node.cjs"))).toBe(true);
       expect(files.some((f) => f.includes("package/dist/cli.js"))).toBe(true);
+      expect(files).toContain("package/dist/generator/shared/svg-model.cjs");
+      expect(files).toContain("package/dist/generator/shared/SOURCE.json");
       // no source, test, or secret files
       expect(files.some((f) => f.includes("tests/"))).toBe(false);
       expect(files.some((f) => f.includes("node_modules"))).toBe(false);
