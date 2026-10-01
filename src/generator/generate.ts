@@ -279,7 +279,7 @@ function appendVueFiles(
     path: rel("types.ts"),
     content: `${OWNER_HEADER}
 import type { SVGAttributes } from "vue";
-export interface IconProps extends SVGAttributes {
+export interface IconProps extends Omit<SVGAttributes, "class" | "focusable" | "draggable"> {
   class?: import("clsx").ClassValue;
   size?: number;
   width?: number | string;
