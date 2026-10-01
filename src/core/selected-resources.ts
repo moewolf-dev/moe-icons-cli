@@ -156,6 +156,13 @@ export function parseResourceIndex(
     return fail("resource ranges overlap or leave unindexed bytes");
   return raw as unknown as ResourceIndex;
 }
+export const EMPTY_DOWNLOAD_SELECTION_MESSAGE =
+  "config.icons must contain at least one icon ID before install/update; edit icons in moeicons.config.json or run moeicons init";
+export function assertDownloadSelection(config: MoeiconsConfigFile): void {
+  if (config.icons.length === 0)
+    throw new CliError("VALIDATION_ERROR", EMPTY_DOWNLOAD_SELECTION_MESSAGE);
+}
+
 export function planSelectedResources(
   config: MoeiconsConfigFile,
   catalog: IconCatalog,
@@ -166,6 +173,7 @@ export function planSelectedResources(
   expandedBytes: number;
   fallbacks: readonly string[];
 } {
+  assertDownloadSelection(config);
   if (config.tier !== index.tier)
     return fail(`config.tier=${config.tier} does not match resource tier=${index.tier}`);
   const chosen = new Set<string>();
@@ -189,7 +197,7 @@ export function planSelectedResources(
     }
   };
   if (config.target !== "assets") visit(`${config.target}/types.d.ts`);
-  let assets = false;
+  let assets = config.target === "assets" || config.target === "vanilla";
   for (const id of config.icons)
     for (const requested of Object.keys(config.themes)) {
       const actual = resolveIconTheme(config, catalog, requested, id);
@@ -378,7 +386,8 @@ export async function downloadSelectedResources(
                     await response.body?.cancel();
                     return fail(`resource response length mismatch: ${name}`);
                   }
-                  const reader = response.body?.getReader() as ReadableStreamDefaultReader<Uint8Array> | undefined;
+                  const reader = response.body?.getReader() as
+                    ReadableStreamDefaultReader<Uint8Array> | undefined;
                   if (!reader) return fail("resource response has no body");
                   const chunks: Uint8Array[] = [];
                   let lengthRead = 0;
@@ -410,7 +419,29 @@ export async function downloadSelectedResources(
             files[name] = verifyResource(bytes, entry, name);
             cacheArtifact(deps.io, cached, bytes, entry.compressedSha256);
           } catch (error) {
-            failure ??= error;
+            const code =
+              typeof error === "object" && error !== null && "code" in error
+                ? (error as { code?: unknown }).code
+                : undefined;
+            failure ??=
+              error instanceof CliError
+                ? error
+                : code === "ENOSPC" || code === "EDQUOT"
+                  ? new CliError(
+                      "DISK_FULL",
+                      `not enough disk space for verified resource cache: ${name}; free space and retry; project files were not changed`,
+                    )
+                  : controller.signal.aborted
+                    ? new CliError("CANCELLED", "selected resource download cancelled")
+                    : code === "EACCES" || code === "EROFS" || code === "EISDIR"
+                      ? new CliError(
+                          "UNEXPECTED",
+                          `resource cache is not writable: ${name}; check MOEICONS_CACHE_DIR permissions`,
+                        )
+                      : new CliError(
+                          "NETWORK_ERROR",
+                          `resource request failed after retries: ${name}; retry the same release; no full archive was downloaded`,
+                        );
             controller.abort();
           }
         }

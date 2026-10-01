@@ -1,3 +1,4 @@
+import { EMPTY_DOWNLOAD_SELECTION_MESSAGE } from "./selected-resources.js";
 import { createInstallPlan, executeInstallPlan, type TransactionalFs } from "../project/install.js";
 import { detectProject } from "../project/detect.js";
 import { readMoeiconsConfig, loadConfigDocument } from "../project/config.js";
@@ -135,6 +136,8 @@ export async function runInstallUseCase(
       message:
         'config.tier is pro; run "moeicons install pro" or change tier to free before downloading',
     };
+  if (config.kind === "ok" && config.config.icons.length === 0)
+    return { ok: false, reason: "validation", message: EMPTY_DOWNLOAD_SELECTION_MESSAGE };
   const target = options.target ?? (config.kind === "ok" ? config.config.target : "react");
   if (config.kind === "ok" && config.config.target !== target) {
     return {

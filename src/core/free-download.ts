@@ -571,12 +571,14 @@ export async function downloadFreeRelease(
         allowedHosts: io.fixtureBaseUrl ? [new URL(io.fixtureBaseUrl).host] : FREE_DOWNLOAD_HOSTS,
         ...(io.fixtureBaseUrl ? { allowLoopback: true } : {}),
         getBundleUrl: () =>
-          Promise.resolve(io.fixtureBaseUrl
-            ? new URL(
-                refs.bundle.filename,
-                io.fixtureBaseUrl.endsWith("/") ? io.fixtureBaseUrl : `${io.fixtureBaseUrl}/`,
-              ).toString()
-            : githubReleaseAssetUrl(tag, refs.bundle.filename)),
+          Promise.resolve(
+            io.fixtureBaseUrl
+              ? new URL(
+                  refs.bundle.filename,
+                  io.fixtureBaseUrl.endsWith("/") ? io.fixtureBaseUrl : `${io.fixtureBaseUrl}/`,
+                ).toString()
+              : githubReleaseAssetUrl(tag, refs.bundle.filename),
+          ),
         ...(io.fixtureDir
           ? {
               readRange: (start: number, size: number) => {
@@ -622,9 +624,11 @@ export async function downloadFreeRelease(
         reason:
           io.signal.aborted || (isCliError(error) && error.code === "CANCELLED")
             ? "cancelled"
-            : isCliError(error) && error.code === "NETWORK_ERROR"
-              ? "network"
-              : "validation",
+            : isCliError(error) && error.code === "DISK_FULL"
+              ? "disk-full"
+              : isCliError(error) && error.code === "NETWORK_ERROR"
+                ? "network"
+                : "validation",
         message: error instanceof Error ? error.message : String(error),
       };
     }

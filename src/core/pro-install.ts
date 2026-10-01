@@ -1,3 +1,4 @@
+import { assertDownloadSelection } from "./selected-resources.js";
 import { detectProject } from "../project/detect.js";
 import { loadConfigDocument, validateConfigDocument } from "../project/config.js";
 import {
@@ -129,6 +130,7 @@ export async function runProInstallUseCase(
   const bootstrap = validateConfigDocument(document, bundledCatalog, { lenientCatalog: true });
   if (bootstrap.kind !== "ok" || bootstrap.config.tier !== "pro")
     throw new CliError("VALIDATION_ERROR", "pro install requires a valid tier=pro config");
+  assertDownloadSelection(bootstrap.config);
   const target = expected.target ?? bootstrap.config.target;
   if (target !== bootstrap.config.target) {
     throw new CliError(

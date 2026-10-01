@@ -1,3 +1,4 @@
+import { assertDownloadSelection } from "./selected-resources.js";
 import { join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import { parseCatalog } from "../catalog/catalog.js";
@@ -95,6 +96,7 @@ export async function runLibraryUpdateUseCase(
         ? bootstrap.message
         : `config.tier must match ${expected.tier}; edit config before updating`,
     );
+  assertDownloadSelection(bootstrap.config);
   let selected: SelectedResourceDownload | undefined;
   let catalogJson: string;
   let archiveBytes: Uint8Array;

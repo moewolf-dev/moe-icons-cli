@@ -1,3 +1,4 @@
+import { assertDownloadSelection } from "./core/selected-resources.js";
 import { parseArgs, HELP_TEXT, type Command } from "./commands/parser.js";
 import { CliError, isCliError, jsonErrorBody, type CliErrorCode } from "./errors/index.js";
 import { detectProject } from "./project/detect.js";
@@ -886,6 +887,7 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
       if (!project) throw new CliError("VALIDATION_ERROR", "no project found");
       const config = readMoeiconsConfig(project.root);
       if (config.kind !== "ok") throw new CliError("VALIDATION_ERROR", `config ${config.kind}`);
+      assertDownloadSelection(config.config);
       const status = await getLibraryVersionStatus(project.root, config.config.tier);
       runtime.stdout(`${formatLibraryVersionStatus(status)}\n`);
       if (status.kind === "update") {
@@ -1055,7 +1057,21 @@ async function runUpdate(
       "VALIDATION_ERROR",
       config.kind === "invalid" ? config.message : `config ${config.kind}; run moeicons init`,
     );
-  const status = await getLibraryVersionStatus(project.root, config.config.tier);
+  assertDownloadSelection(config.config);
+  const { allowLocalTest } = resolveLocalTestContext(runtime.env);
+  const status = await getLibraryVersionStatus(project.root, config.config.tier, {
+    fetchVersions: () =>
+      fetchLibraryVersions({
+        signal: context.signal,
+        env: runtime.env,
+        allowLocalTest,
+        ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
+      }),
+  });
+  if (context.signal?.aborted) throw new CliError("CANCELLED", "update cancelled");
+  if (status.kind === "check-failed") throw new CliError("NETWORK_ERROR", status.message);
+  if (status.kind === "installation-invalid")
+    throw new CliError("VALIDATION_ERROR", status.message);
   if (
     status.kind === "current" &&
     status.latestDescriptorSha256 !== status.metadata.descriptorSha256
@@ -1099,6 +1115,7 @@ async function runInstall(
     lenientCatalog: true,
   });
   if (bootstrap.kind === "invalid") throw new CliError("VALIDATION_ERROR", bootstrap.message);
+  if (bootstrap.kind === "ok") assertDownloadSelection(bootstrap.config);
   const requestedTier = group === "pro" || group === "ent" ? "pro" : "free";
   if (bootstrap.kind === "ok" && bootstrap.config.tier !== requestedTier)
     throw new CliError(

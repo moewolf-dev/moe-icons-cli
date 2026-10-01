@@ -137,6 +137,24 @@ describe("config driven selected install, offline generation and same version re
         );
         expect(updated.downloadMode).toBe("icons");
         expect(updated.networkBytes).toBe(0);
+        const before = fs.readFileSync(join(s.project, ".moeicons/install-metadata.json"), "utf8");
+        fs.writeFileSync(
+          join(s.project, "moeicons.config.json"),
+          JSON.stringify({ ...s.config, icons: [] }),
+        );
+        await expect(
+          runLibraryUpdateUseCase(
+            s.context,
+            { fs, free: s.io, auth: {} },
+            { tier: "free", version: s.base.version, descriptorSha256: s.descriptorSha },
+          ),
+        ).rejects.toThrow("config.icons must contain at least one icon ID");
+        expect(fs.readFileSync(join(s.project, ".moeicons/install-metadata.json"), "utf8")).toBe(
+          before,
+        );
+        expect(
+          await runInstallUseCase(s.context, { fs, download: s.io }, { group: "free" }),
+        ).toMatchObject({ ok: false, reason: "validation" });
         expect(
           fs.readFileSync(join(s.project, ".moeicons/install-metadata.json"), "utf8"),
         ).toContain('"mode": "icons"');
