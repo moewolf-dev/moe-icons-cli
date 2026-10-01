@@ -2,15 +2,25 @@ import { join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import {
   executeManagedReconcile,
+  safeManagedPath,
   type TransactionalFsWithCopy,
 } from "../project/install.js";
 import { detectProject } from "../project/detect.js";
-import { readMoeiconsConfig, type MoeiconsConfigFile } from "../project/config.js";
-import { parseCatalog, type IconCatalog } from "../catalog/catalog.js";
+import {
+  readMoeiconsConfig,
+  loadConfigDocument,
+  type MoeiconsConfigFile,
+} from "../project/config.js";
+import { catalog as defaultCatalog, parseCatalog, type IconCatalog } from "../catalog/catalog.js";
+import { toProxyName } from "./icon-names.js";
 import { planGeneratedFiles } from "../generator/generate.js";
 import { ensureClassMergeDependencies, planTailwindIntegration } from "../project/tailwind.js";
 import { isCliError } from "../errors/index.js";
-import { extractTarGz, ICON_ARCHIVE_MAX_ENTRIES, ICON_ARCHIVE_MAX_EXPANDED_BYTES } from "../project/tar-gz.js";
+import {
+  extractTarGz,
+  ICON_ARCHIVE_MAX_ENTRIES,
+  ICON_ARCHIVE_MAX_EXPANDED_BYTES,
+} from "../project/tar-gz.js";
 import { artifactCachePath } from "./free-download.js";
 import { resolveThemes } from "../generator/theme-resolve.js";
 import type { ResourceVariant } from "./resource-variant.js";
@@ -26,6 +36,7 @@ import {
 import { withProjectLockSync } from "../project/project-lock.js";
 import type { Target } from "../commands/parser.js";
 import { allowLocalTestFromEnv } from "./local-test-env.js";
+import { resolveIconTheme, themeHasIcon } from "./icon-selection.js";
 
 export type GenerateResult =
   | {
@@ -80,7 +91,11 @@ export function loadInstalledCatalogState(
   // the bundled contract.
   if (!catalogExists) {
     if (metadataExists) {
-      return { status: "invalid", message: "install metadata exists but the catalog is missing; run 'moeicons install' to repair or reinstall" };
+      return {
+        status: "invalid",
+        message:
+          "install metadata exists but the catalog is missing; run 'moeicons install' to repair or reinstall",
+      };
     }
     return { status: "absent" };
   }
@@ -89,14 +104,22 @@ export function loadInstalledCatalogState(
   let catalogBytes: string;
   try {
     catalogBytes = fs_.readFileSync(catalogPath, "utf8");
-    if (typeof catalogBytes !== "string") return { status: "invalid", message: "installed catalog is not text" };
+    if (typeof catalogBytes !== "string")
+      return { status: "invalid", message: "installed catalog is not text" };
     catalog = parseCatalog(JSON.parse(catalogBytes));
   } catch (error) {
-    return { status: "invalid", message: `installed catalog cannot be parsed: ${error instanceof Error ? error.message : String(error)}; run 'moeicons install' to repair or reinstall` };
+    return {
+      status: "invalid",
+      message: `installed catalog cannot be parsed: ${error instanceof Error ? error.message : String(error)}; run 'moeicons install' to repair or reinstall`,
+    };
   }
 
   if (!metadataExists) {
-    return { status: "invalid", message: "installed catalog is present without install metadata; run 'moeicons install' to repair or reinstall" };
+    return {
+      status: "invalid",
+      message:
+        "installed catalog is present without install metadata; run 'moeicons install' to repair or reinstall",
+    };
   }
   let metadata;
   try {
@@ -104,21 +127,40 @@ export function loadInstalledCatalogState(
     if (typeof rawMetadata !== "string") throw new Error("metadata is not text");
     metadata = parseInstallMetadata(rawMetadata, opts);
   } catch (error) {
-    return { status: "invalid", message: `install metadata is invalid: ${error instanceof Error ? error.message : String(error)}; run 'moeicons install' to repair or reinstall` };
+    return {
+      status: "invalid",
+      message: `install metadata is invalid: ${error instanceof Error ? error.message : String(error)}; run 'moeicons install' to repair or reinstall`,
+    };
   }
   if (!metadata) {
-    return { status: "invalid", message: "install metadata could not be parsed; run 'moeicons install' to repair or reinstall" };
+    return {
+      status: "invalid",
+      message:
+        "install metadata could not be parsed; run 'moeicons install' to repair or reinstall",
+    };
   }
   const actual = sha256Bytes(catalogBytes);
   const managed = metadata.managedFiles?.[".moeicons/catalog.json"];
   if (typeof metadata.catalogSha256 !== "string" || typeof managed !== "string") {
-    return { status: "invalid", message: "install metadata is missing the catalog digest; run 'moeicons install' to repair or reinstall" };
+    return {
+      status: "invalid",
+      message:
+        "install metadata is missing the catalog digest; run 'moeicons install' to repair or reinstall",
+    };
   }
   if (metadata.catalogSha256 !== managed) {
-    return { status: "invalid", message: "install metadata catalog digest is inconsistent; run 'moeicons install' to repair or reinstall" };
+    return {
+      status: "invalid",
+      message:
+        "install metadata catalog digest is inconsistent; run 'moeicons install' to repair or reinstall",
+    };
   }
   if (actual !== metadata.catalogSha256) {
-    return { status: "invalid", message: "installed catalog hash does not match install metadata; run 'moeicons install' to repair or reinstall" };
+    return {
+      status: "invalid",
+      message:
+        "installed catalog hash does not match install metadata; run 'moeicons install' to repair or reinstall",
+    };
   }
   return { status: "ok", catalog };
 }
@@ -206,7 +248,8 @@ function archiveHasVariantAssets(
   icons: readonly string[],
 ): boolean {
   return icons.every(
-    (iconId) => archiveFiles[`assets/${variant.resourceVariantId}/${iconId}.${variant.format}`] !== undefined,
+    (iconId) =>
+      archiveFiles[`assets/${variant.resourceVariantId}/${iconId}.${variant.format}`] !== undefined,
   );
 }
 
@@ -226,24 +269,62 @@ function mergePinnedBitmapShardAssets(
 ): { readonly ok: true } | { readonly ok: false; readonly errors: readonly string[] } {
   const variants = requiredBitmapVariants(effectiveConfig, sourceCatalog);
   const missing = variants.filter(
-    (variant) => !archiveHasVariantAssets(archiveFiles, variant, effectiveConfig.icons),
+    (variant) =>
+      !archiveHasVariantAssets(
+        archiveFiles,
+        variant,
+        effectiveConfig.icons.filter((iconId) =>
+          Object.entries(effectiveConfig.themes).some(
+            ([name, theme]) =>
+              theme.styleGroup === variant.styleGroupId &&
+              themeHasIcon(effectiveConfig, sourceCatalog ?? defaultCatalog, name, iconId) &&
+              (() => {
+                const resolved = resolveThemes(effectiveConfig, sourceCatalog);
+                return (
+                  resolved.ok &&
+                  resolved.themes.some(
+                    (item) =>
+                      item.theme === name &&
+                      item.variant?.resourceVariantId === variant.resourceVariantId,
+                  )
+                );
+              })(),
+          ),
+        ),
+      ),
   );
   if (missing.length === 0) return { ok: true };
 
   const metadataPath = join(projectRoot, ".moeicons", "install-metadata.json");
   if (!fs_.existsSync(metadataPath)) {
-    return { ok: false, errors: ["bitmap shards require an installed pro artifact; run `moeicons install` first"] };
+    return {
+      ok: false,
+      errors: ["bitmap shards require an installed pro artifact; run `moeicons install` first"],
+    };
   }
   const metadata = parseInstallMetadata(fs_.readFileSync(metadataPath, "utf8"), {
     allowLocalTest: allowLocalTestFromEnv(env),
   });
   if (!metadata) {
-    return { ok: false, errors: ["install metadata is invalid; run 'moeicons install' to repair or reinstall"] };
+    return {
+      ok: false,
+      errors: ["install metadata is invalid; run 'moeicons install' to repair or reinstall"],
+    };
+  }
+  if (metadata.delivery?.mode === "icons") {
+    return {
+      ok: false,
+      errors: [
+        "selected bitmap resources are missing for this configuration; run `moeicons install` to download the configured icons, format and imageSize",
+      ],
+    };
   }
   if (!metadata.bitmapShards || metadata.bitmapShards.length === 0) {
     return {
       ok: false,
-      errors: ["bitmap shards are not pinned in install metadata; run 'moeicons install' to repair or reinstall"],
+      errors: [
+        "bitmap shards are not pinned in install metadata; run 'moeicons install' to repair or reinstall",
+      ],
     };
   }
   const missingTuples = missing.map((variant) => ({
@@ -295,6 +376,29 @@ export function loadArchiveFiles(
       return { ok: false, reason: unpacked.errors[0] ?? "invalid bitmap archive fixture" };
     return { ok: true, files: unpacked.files };
   }
+  const selectionMetadataPath = join(projectRoot, ".moeicons", "install-metadata.json");
+  if (fs_.existsSync(selectionMetadataPath)) {
+    const pinned = parseInstallMetadata(fs_.readFileSync(selectionMetadataPath, "utf8"), {
+      allowLocalTest: allowLocalTestFromEnv(env),
+    });
+    if (pinned?.delivery?.mode === "icons") {
+      const files: Record<string, Uint8Array> = {};
+      for (const [name, hash] of Object.entries(pinned.managedFiles)) {
+        if (!name.startsWith(".moeicons/artifact/")) continue;
+        const target = safeManagedPath(projectRoot, name).target;
+        if (!fs_.existsSync(target))
+          return { ok: false, reason: `selected resource missing: ${name}; run moeicons install` };
+        const bytes = readBinaryFile(fs_, target);
+        if (sha256Bytes(bytes) !== hash)
+          return {
+            ok: false,
+            reason: `selected resource modified: ${name}; preserve your edit before reinstalling`,
+          };
+        files[name.slice(".moeicons/artifact/".length)] = bytes;
+      }
+      return { ok: true, files };
+    }
+  }
   const meta = readInstallMetadata(projectRoot, fs_.readFileSync, fs_.existsSync);
   if (meta?.target) {
     const subtreeRoot = join(projectRoot, ".moeicons", "artifact", meta.target);
@@ -322,7 +426,10 @@ export function loadArchiveFiles(
       walk(subtreeRoot, "");
       // assets install lands the raw tree; reuse it. Package subtrees (react/vue/
       // vanilla) do not contain assets/manifest.json — fall through to the cache.
-      if (Object.keys(files).length > 0 && (meta.target === "assets" || archiveHasAssetsManifest(files))) {
+      if (
+        Object.keys(files).length > 0 &&
+        (meta.target === "assets" || archiveHasAssetsManifest(files))
+      ) {
         return { ok: true, files };
       }
     }
@@ -364,18 +471,25 @@ export async function runGenerateUseCase(
     return { ok: false, reason: "validation", errors: [catalogState.message] };
   }
   const sourceCatalog = catalogState.status === "ok" ? catalogState.catalog : undefined;
+  const plannedConfigDocument = JSON.stringify(loadConfigDocument(project.root));
   const loaded = readMoeiconsConfig(project.root, sourceCatalog);
-  if (loaded.kind === "invalid") return { ok: false, reason: "validation", errors: [loaded.message] };
+  if (loaded.kind === "invalid")
+    return { ok: false, reason: "validation", errors: [loaded.message] };
   if (loaded.kind !== "ok") return { ok: false, reason: `config state: ${loaded.kind}` };
 
   const effectiveConfig = options.target
     ? { ...loaded.config, target: options.target }
     : loaded.config;
+  const plannedMetadataPath = join(project.root, ".moeicons", "install-metadata.json");
+  const plannedMetadataText = fs_.existsSync(plannedMetadataPath)
+    ? fs_.readFileSync(plannedMetadataPath, "utf8")
+    : undefined;
   const installedMeta = readInstallMetadata(project.root, fs_.readFileSync, fs_.existsSync);
   if (!installedMeta) {
     return {
       ok: false,
-      reason: "generate requires an installed, version-pinned icon artifact; run 'moeicons install' first",
+      reason:
+        "generate requires an installed, version-pinned icon artifact; run 'moeicons install' first",
     };
   }
   if (installedMeta?.target && installedMeta.target !== effectiveConfig.target) {
@@ -410,18 +524,15 @@ export async function runGenerateUseCase(
     archiveFiles = merged;
   }
 
-  const plan = planGeneratedFiles(
-    effectiveConfig,
-    effectiveConfig.outputDir,
-    {
-      ...(archiveFiles ? { archiveFiles } : {}),
-      ...(sourceCatalog ? { catalog: sourceCatalog } : {}),
-    },
-  );
+  const plan = planGeneratedFiles(effectiveConfig, effectiveConfig.outputDir, {
+    ...(archiveFiles ? { archiveFiles } : {}),
+    ...(sourceCatalog ? { catalog: sourceCatalog } : {}),
+  });
   if (!plan.ok) return { ok: false, reason: "validation", errors: plan.errors };
 
   const notes: string[] = [];
   const sideFiles: { path: string; content: string }[] = [];
+  const expectedSideFiles: Record<string, string | undefined> = {};
 
   try {
     const tw = planTailwindIntegration(project.root, loaded.config.outputDir, {
@@ -430,6 +541,12 @@ export async function runGenerateUseCase(
     });
     notes.push(...tw.notes);
     sideFiles.push(...tw.files);
+    for (const file of tw.files)
+      expectedSideFiles[relative(project.root, file.path).replace(/\\/g, "/")] = fs_.existsSync(
+        file.path,
+      )
+        ? sha256Bytes(fs_.readFileSync(file.path))
+        : undefined;
   } catch (error) {
     if (isCliError(error) && error.code === "TAILWIND_VERSION_UNSUPPORTED") {
       return { ok: false, reason: error.message, code: error.code };
@@ -440,6 +557,7 @@ export async function runGenerateUseCase(
   const pkgPath = join(project.root, "package.json");
   if (fs_.existsSync(pkgPath)) {
     const pkgSource = fs_.readFileSync(pkgPath, "utf8");
+    expectedSideFiles["package.json"] = sha256Bytes(pkgSource);
     const target = effectiveConfig.target;
     const deps =
       target === "react" || target === "vue"
@@ -452,23 +570,36 @@ export async function runGenerateUseCase(
     notes.push(...deps.notes);
     if (deps.changed) {
       sideFiles.push({ path: pkgPath, content: deps.nextSource });
-      const installCommand = project.packageManager === "pnpm" ? "pnpm install"
-        : project.packageManager === "yarn" ? "yarn install"
-        : project.packageManager === "npm" ? "npm install"
-        : "your package manager's install command";
-      notes.push(`package.json changed; run ${installCommand} to update the lockfile and install dependencies`);
+      const installCommand =
+        project.packageManager === "pnpm"
+          ? "pnpm install"
+          : project.packageManager === "yarn"
+            ? "yarn install"
+            : project.packageManager === "npm"
+              ? "npm install"
+              : "your package manager's install command";
+      notes.push(
+        `package.json changed; run ${installCommand} to update the lockfile and install dependencies`,
+      );
     }
   }
 
   try {
     return withProjectLockSync(project.root, "reload", () => {
+      if (JSON.stringify(loadConfigDocument(project.root)) !== plannedConfigDocument)
+        return { ok: false, reason: "config changed while preparing generate; retry" };
       const metadataPath = join(project.root, ".moeicons", "install-metadata.json");
       if (!fs_.existsSync(metadataPath))
         return {
           ok: false,
-          reason: "managed install metadata is missing; run 'moeicons install' to repair or reinstall",
+          reason:
+            "managed install metadata is missing; run 'moeicons install' to repair or reinstall",
         };
-      const metadata = parseInstallMetadata(fs_.readFileSync(metadataPath, "utf8"), { allowLocalTest });
+      const metadata = parseInstallMetadata(fs_.readFileSync(metadataPath, "utf8"), {
+        allowLocalTest,
+      });
+      if (fs_.readFileSync(metadataPath, "utf8") !== plannedMetadataText)
+        return { ok: false, reason: "installation changed while preparing generate; retry" };
       if (!metadata || metadata.tier !== loaded.config.tier)
         return {
           ok: false,
@@ -487,25 +618,75 @@ export async function runGenerateUseCase(
       if (metadata.managedFiles[".moeicons/catalog.json"] !== metadata.catalogSha256)
         return {
           ok: false,
-          reason: "managed catalog hash is inconsistent; run 'moeicons install' to repair or reinstall",
+          reason:
+            "managed catalog hash is inconsistent; run 'moeicons install' to repair or reinstall",
         };
 
+      const hasInstalledComponents = Object.keys(metadata.managedFiles).some(
+        (path) =>
+          path.startsWith(`.moeicons/artifact/${effectiveConfig.target}/`) && path.endsWith(".js"),
+      );
+      if (
+        hasInstalledComponents &&
+        (effectiveConfig.target === "react" || effectiveConfig.target === "vue")
+      ) {
+        const resolved = resolveThemes(effectiveConfig, sourceCatalog);
+        if (!resolved.ok) return { ok: false, reason: resolved.errors.join("; ") };
+        for (const iconId of effectiveConfig.icons) {
+          for (const theme of resolved.themes) {
+            const selected = resolveIconTheme(effectiveConfig, sourceCatalog!, theme.theme, iconId);
+            if (!selected)
+              return {
+                ok: false,
+                reason: `icon "${iconId}" has no selected variant for theme "${theme.theme}"`,
+              };
+            const group = effectiveConfig.themes[selected]!.styleGroup;
+            const kind = resolved.themes.find(
+              (candidate) => candidate.entry.styleGroup === group,
+            )?.kind;
+            if (kind === "bitmap") continue;
+            const suffix = effectiveConfig.target === "vue" ? ".vue.js" : ".js";
+            const rel = `.moeicons/artifact/${effectiveConfig.target}/${group}/${toProxyName(iconId)}${suffix}`;
+            if (!fs_.existsSync(join(project.root, rel))) {
+              return {
+                ok: false,
+                reason: `icon "${iconId}" is configured but its ${group} component is not installed (${rel}); run 'moeicons install' before generate`,
+              };
+            }
+          }
+        }
+      }
+
       const outputPrefix = loaded.config.outputDir.replace(/\\/g, "/").replace(/\/$/, "") + "/";
-      const previousPrefix = (metadata.generatedOutputDir ?? loaded.config.outputDir).replace(/\\/g, "/").replace(/\/$/, "") + "/";
+      const previousPrefix =
+        (metadata.generatedOutputDir ?? loaded.config.outputDir)
+          .replace(/\\/g, "/")
+          .replace(/\/$/, "") + "/";
       const generated = Object.fromEntries(
         plan.files.map((file) => [file.path.replace(/\\/g, "/"), file.content]),
       );
       for (const generatedPath of Object.keys(generated)) {
-        if (fs_.existsSync(join(project.root, generatedPath)) && !(generatedPath in metadata.managedFiles)) {
-          return { ok: false, reason: `generated path collides with an unowned user file: ${generatedPath}` };
+        if (
+          fs_.existsSync(join(project.root, generatedPath)) &&
+          !(generatedPath in metadata.managedFiles)
+        ) {
+          return {
+            ok: false,
+            reason: `generated path collides with an unowned user file: ${generatedPath}`,
+          };
         }
       }
       const nextManaged: Record<string, string> = {};
       for (const [managedPath, hash] of Object.entries(metadata.managedFiles))
-        if (!managedPath.startsWith(outputPrefix) && !managedPath.startsWith(previousPrefix)) nextManaged[managedPath] = hash;
+        if (!managedPath.startsWith(outputPrefix) && !managedPath.startsWith(previousPrefix))
+          nextManaged[managedPath] = hash;
       for (const [path, content] of Object.entries(generated))
         nextManaged[path] = sha256Bytes(content);
-      const nextMetadata: InstallMetadata = { ...metadata, managedFiles: nextManaged, generatedOutputDir: loaded.config.outputDir };
+      const nextMetadata: InstallMetadata = {
+        ...metadata,
+        managedFiles: nextManaged,
+        generatedOutputDir: loaded.config.outputDir,
+      };
       const writes: Record<string, string | Uint8Array> = { ...generated };
       for (const file of sideFiles) {
         const absolute = resolve(file.path);
@@ -516,9 +697,18 @@ export async function runGenerateUseCase(
       }
       writes[".moeicons/install-metadata.json"] = serializeInstallMetadata(nextMetadata);
       const stale = Object.keys(metadata.managedFiles).filter(
-        (path) => (path.startsWith(outputPrefix) || path.startsWith(previousPrefix)) && !(path in generated),
+        (path) =>
+          (path.startsWith(outputPrefix) || path.startsWith(previousPrefix)) &&
+          !(path in generated),
       );
-      executeManagedReconcile(project.root, writes, stale, fs_);
+      const expectedSha256: Record<string, string | undefined> = {
+        ...metadata.managedFiles,
+        ...expectedSideFiles,
+        ".moeicons/install-metadata.json": sha256Bytes(fs_.readFileSync(metadataPath)),
+      };
+      for (const path of Object.keys(generated))
+        if (!(path in expectedSha256)) expectedSha256[path] = undefined;
+      executeManagedReconcile(project.root, writes, stale, fs_, { expectedSha256 });
       return {
         ok: true,
         files: plan.files.map((file) => file.path),

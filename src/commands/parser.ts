@@ -8,6 +8,7 @@ export type Command =
   | { readonly name: "account" }
   | { readonly name: "groups" }
   | { readonly name: "generate" }
+  | { readonly name: "recover" }
   | { readonly name: "init"; readonly dryRun?: boolean }
   | { readonly name: "doctor"; readonly check?: boolean; readonly dryRun?: boolean }
   | { readonly name: "mcp" }
@@ -34,6 +35,7 @@ const SIMPLE_COMMANDS = [
   "account",
   "groups",
   "generate",
+  "recover",
   "mcp",
   "help",
 ] as const;
@@ -255,6 +257,7 @@ Usage:
   moeicons init                 create moeicons.config.jsonc
   moeicons init --dry-run       print the full config/entry/style plan without writing
   moeicons doctor               diagnose project anchors (read-only)
+  moeicons recover              recover interrupted writes (run at project root)
   moeicons doctor --check       exit non-zero when any required anchor is not OK
   moeicons update metadata      sync MANUAL.md/catalog.json/manifest.json only
   moeicons update               full code + metadata update

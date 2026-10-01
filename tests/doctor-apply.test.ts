@@ -129,6 +129,18 @@ describe("apply: transactional plan with rollback + idempotency", () => {
     } finally { rmSync(external, { recursive: true, force: true }); }
   });
 
+  it("rejects a symlinked transaction directory before any external write", () => {
+    const external = mkdtempSync(join(tmpdir(), "cli-external-staging-"));
+    try {
+      symlinkSync(external, join(dir, ".moeicons"));
+      writeFileSync(join(dir, "entry.ts"), "old");
+      const result = applyPlannedChanges(dir, [{ kind: "replace", path: "entry.ts", before: "old", after: "new" }], makeFs());
+      expect(result.ok).toBe(false);
+      expect(readdirSync(external)).toEqual([]);
+      expect(readFileSync(join(dir, "entry.ts"), "utf8")).toBe("old");
+    } finally { rmSync(external, { recursive: true, force: true }); }
+  });
+
   it("rejects case-insensitive and parent-file collisions before writing", () => {
     const fs_ = makeFs();
     for (const paths of [["src/Icon.tsx", "src/icon.tsx"], ["src/main", "src/main/index.ts"]]) {
@@ -175,7 +187,7 @@ describe("apply: transactional plan with rollback + idempotency", () => {
     if (!result.ok) expect(result.message).toContain("recovery incomplete");
     const backup = readdirSync(join(dir, ".moeicons")).find((name) => name.startsWith(".reconcile-backup-"));
     expect(backup).toBeDefined();
-    expect(readFileSync(join(dir, ".moeicons", backup!, "entry.ts"), "utf8")).toBe("old");
+    expect(readFileSync(join(dir, ".moeicons", backup!, "files", "entry.ts"), "utf8")).toBe("old");
   });
 
   it("reports a committed change when only backup cleanup fails", () => {
@@ -193,6 +205,6 @@ describe("apply: transactional plan with rollback + idempotency", () => {
     expect(readFileSync(join(dir, "entry.ts"), "utf8")).toBe("new");
     const backup = readdirSync(join(dir, ".moeicons")).find((name) => name.startsWith(".reconcile-backup-"));
     expect(backup).toBeDefined();
-    expect(readFileSync(join(dir, ".moeicons", backup!, "entry.ts"), "utf8")).toBe("old");
+    expect(readFileSync(join(dir, ".moeicons", backup!, "files", "entry.ts"), "utf8")).toBe("old");
   });
 });

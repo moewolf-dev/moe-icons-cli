@@ -38,6 +38,7 @@ import {
 import type { CacheIo } from "./cache.js";
 import { BITMAP_SHARD_BUDGET } from "./bitmap-shard-budget.js";
 import { CliError } from "../errors/index.js";
+import { themeHasIcon } from "./icon-selection.js";
 
 export interface BitmapShardTuple {
   readonly styleGroupId: string;
@@ -73,6 +74,7 @@ export function resolveBitmapTuples(
     // Non-bitmap and unknown groups are out of scope here; install/generate
     // validate theme/catalog consistency separately.
     if (!group || group.type !== "bitmap") continue;
+    if (!config.icons.some((iconId) => themeHasIcon(config, sourceCatalog, theme, iconId))) continue;
     try {
       let variant;
       if (entry.format === undefined && entry.imageSize === undefined) {
@@ -388,4 +390,3 @@ export function loadPinnedBitmapShardAssets(
   }
   return { files, pins: loaded, bitmapShardSetSha256: bitmapShardSetSha256(loaded) };
 }
-

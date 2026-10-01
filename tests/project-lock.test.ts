@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withProjectLock, type ProjectLockIo } from "../src/project/project-lock.js";
+import { withProjectLock, withProjectLockSync, type ProjectLockIo } from "../src/project/project-lock.js";
 
 function memoryIo(initial?: string, alive = true) {
   let value = initial;
@@ -16,6 +16,14 @@ function memoryIo(initial?: string, alive = true) {
 }
 
 describe("shared project operation lock", () => {
+  it("explicit recovery reclaims a recent dead lock but refuses a live owner", () => {
+    const value = JSON.stringify({ pid: 9, createdAt: 1_999_999 });
+    const dead = memoryIo(value, false);
+    expect(withProjectLockSync("/project", "recover", () => "recovered", dead.io)).toBe("recovered");
+    const live = memoryIo(value, true);
+    expect(() => withProjectLockSync("/project", "recover", () => undefined, live.io)).toThrow("already running");
+    expect(live.value()).toBe(value);
+  });
   it("holds one lock across work and clears it on success or failure", async () => {
     const success = memoryIo();
     await expect(withProjectLock("/project", "install", async () => {

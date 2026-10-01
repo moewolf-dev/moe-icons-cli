@@ -118,6 +118,11 @@ function renderMoeiconsConfigJsonc(options) {
     `  "tier": ${JSON.stringify(tier)},`,
     `  "target": ${JSON.stringify(target)},`,
     `  "outputDir": "src/moeicons",`,
+    ...(!fullCatalog ? [
+      '  // auto: indexed resources when available; icons: require them; full: whole archive.',
+      '  "downloadMode": "auto",',
+      '  // Global icons registers IDs; per-theme icons selects a subset (empty means none).',
+    ] : []),
     `  "defaultTheme": ${JSON.stringify(defaultThemeName)},`,
     '  "themes": {',
     ...themeLines,

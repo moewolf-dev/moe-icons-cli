@@ -186,7 +186,7 @@ describe("DEV-G10-R1 two-phase Pro bitmap install", () => {
     expect(JSON.parse(readFileSync(join(dir, ".moeicons", "artifact", "package.json"), "utf8")).type).toBe("module");
   });
 
-  it("DEV-G10-R2: target and tuples come from a single config snapshot", async () => {
+  it("DEV-G10-R2: a changed config aborts the captured install before project writes", async () => {
     const meta = writeFreeReleaseFixture(release, { tier: "pro", version: VERSION, catalogOverride: CATALOG });
     const archive = new Uint8Array(readFileSync(join(release, meta.freeName)));
     const metadataArchive = new Uint8Array(readFileSync(join(release, meta.metadataName)));
@@ -214,7 +214,7 @@ describe("DEV-G10-R1 two-phase Pro bitmap install", () => {
       }
       if (url.includes("pro-meta.tgz")) return new Response(metadataArchive);
       if (url.includes("pro.tgz")) {
-        // The on-disk config changes mid-download: the snapshot must still win.
+        // An in-flight download cannot commit the old plan after configuration changes.
         if (!rewrote) { rewrote = true; writeConfig("moe-3d-metal", "vue"); }
         return new Response(archive);
       }
@@ -223,7 +223,7 @@ describe("DEV-G10-R1 two-phase Pro bitmap install", () => {
     }) as typeof fetch;
 
     writeConfig("moe-3d-metal", "react");
-    const result = await runProInstallUseCase(
+    await expect(runProInstallUseCase(
       context(dir, {
         MOEICONS_CACHE_DIR: join(dir, ".cache"),
         MOEICONS_PRO_DESCRIPTOR_URL: "http://127.0.0.1:1/v1/icon-library/pro/artifact-descriptor",
@@ -231,12 +231,10 @@ describe("DEV-G10-R1 two-phase Pro bitmap install", () => {
       }),
       { fs: fs_, auth: { tokenStore: store() }, fetch: fetchMock, allowedHosts: ["127.0.0.1:1"] },
       { version: VERSION, descriptorSha256: meta.descriptorSha },
-    );
+    )).rejects.toThrow("config changed while preparing install");
     expect(rewrote).toBe(true);
-    expect(result.artifactVersion).toBe(VERSION);
-    const metadata = parseInstallMetadata(readFileSync(join(dir, ".moeicons", "install-metadata.json"), "utf8"), {});
-    expect(metadata?.target).toBe("react");
-    expect(metadata?.bitmapShards).toHaveLength(1);
+    expect(existsSync(join(dir, ".moeicons", "install-metadata.json"))).toBe(false);
+    expect(JSON.parse(readFileSync(join(dir, "moeicons.config.jsonc"), "utf8")).target).toBe("vue");
   });
 
   it("fails closed when the release catalog does not ship the configured group", async () => {

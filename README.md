@@ -65,6 +65,43 @@ npx moeicons generate
 Edit `moeicons.config.jsonc` before generating to select the icon IDs and
 themes you need. When changing React/Vue/Vanilla/assets target, edit the config
 first, then run `moeicons install free --target <target>` and `moeicons generate`.
+For React/Vue, installation now keeps only the configured SVG component modules
+and their required files in `.moeicons/artifact`. After adding icon IDs to the
+config, run `moeicons install` again before `moeicons generate`; generate reports
+the missing installed component if this step is skipped. New releases support
+selected-resource downloads as well as full archives; `downloadMode` controls
+this choice. Legacy releases without resource indexes still use a full archive
+in `auto` mode. See Download modes and resource selection below.
+Each theme may select a subset of the registered project icons:
+
+```json
+{
+  "icons": ["ui-search", "arrow-bold-right"],
+  "defaultTheme": "outline",
+  "missingIconPolicy": "fallback",
+  "themes": {
+    "outline": { "styleGroup": "moe-outline", "icons": ["ui-search"] },
+    "solid": { "styleGroup": "moe-solid", "icons": ["arrow-bold-right"] }
+  }
+}
+```
+
+Omitting a theme's `icons` selects all registered icons; `[]` selects none.
+Fallback searches the requested theme, then the default theme, then configured
+themes in ASCII name order. An unregistered icon or an icon unavailable in every
+selected theme fails validation/generation. `error` requires each theme to have
+every registered icon. Adding a selected variant requires installing again.
+
+Transactions preserve a recovery journal with original bytes in
+`.moeicons/.reconcile-backup-<id>/files`. After a process interruption, run `moeicons recover` at the project root
+before rerunning the original command. It reclaims a lock only when its owner
+process is dead, restores the previous state, and requires a fresh plan. If a file changed after the interruption, recovery stops and retains both
+the user's file and the backups; compare them before restoring manually. A
+completed transaction is identified by its commit marker and is never rolled
+back because backup cleanup failed. Do not delete these directories to bypass
+a recovery conflict. Recovery covers process termination, not power loss or a
+hostile filesystem replacing directories during filesystem operations.
+
 The installer rejects a target that disagrees with the config. Import generated
 PascalCase components from your configured `outputDir` (default `src/moeicons`):
 
@@ -137,3 +174,38 @@ out keeps cached archives but blocks new unauthenticated installs/updates.
 Metadata distribution (`MANUAL-DIST`) implemented: builder-generated manual,
 catalog and manifest, per-tier archives and descriptors, Free bootstrap,
 metadata-only sync, and authenticated Pro pre-download/update.
+
+### Download modes and resource selection
+
+Set `downloadMode` in `moeicons.config.json` (schemaVersion 3):
+
+```json
+{
+  "schemaVersion": 3,
+  "tier": "free",
+  "target": "react",
+  "outputDir": "src/icons",
+  "downloadMode": "auto",
+  "icons": ["ui-search", "arrow-bold-right"],
+  "defaultTheme": "outline",
+  "themes": {
+    "outline": { "styleGroup": "moe-outline", "icons": ["ui-search"] },
+    "solid": { "styleGroup": "moe-solid", "icons": ["arrow-bold-right"] }
+  },
+  "missingIconPolicy": "fallback"
+}
+```
+
+- `auto` (default): selected resources when the fixed release advertises them. A legacy release without this capability uses the full archive and explains why.
+- `icons`: require selected resources. Unsupported releases, authorization failures, bad ranges and invalid digests stop the operation; they never trigger a full archive download.
+- `full`: download and verify the complete archive, then install the configured target/resources.
+
+`icons` registers the allowed icon IDs. Install/update requires at least one global icon ID; an empty global list stops before version queries or downloads and preserves the existing installation. An individual theme may still use `icons: []`. A theme's `icons` restricts that theme to a subset; omitting it selects every registered ID available in the style group, and `[]` selects none. Fallback chooses the requested theme, then the default theme, then theme names in ASCII order. An icon with no selected variant fails validation. Bitmap themes also select `format` and `imageSize`; changing these fields may require new resources.
+
+The CLI reads the release metadata before planning resources, so validation uses that release's catalog. It shows the target, registered icon/theme counts, required file count and compressed payload budget before reading the data object. Verified cache entries reduce traffic. `--json` reports `downloadMode`, `downloadNotes`, `selectedFiles` and `networkBytes` (resource payload only; descriptor/metadata/index traffic is separate).
+
+Run `moeicons install free` or `moeicons install pro` after changing the selected icons, themes, bitmap format or size, then `moeicons generate`. `moeicons update` also reconciles the configuration when the release version is unchanged. Missing resources name the affected path and ask for reinstall; stale resources are removed only if still owned and unmodified. A configuration change during download stops before project writes; retry with the final configuration.
+
+Generation works offline from the project's verified installed resources; `moeicons recover` also needs no network. Install/update still consult the fixed descriptor and metadata, and Pro checks current entitlement. A resource cache hit does not bypass authorization, and there is no offline install flag. Corrupt cache entries are rejected and fetched again online. Interrupted downloads retain only verified cache members; project files change in one recoverable transaction after all required resources have verified.
+
+Version queries have a deadline covering both response headers and body, with bounded JSON sizes. Invalid or unavailable version responses make update fail explicitly. Cache cleanup preserves staging files owned by a live process; disk-full and permission failures report actionable errors.

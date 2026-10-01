@@ -1,6 +1,6 @@
 import { join, relative, resolve, dirname, isAbsolute, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { lstatSync, realpathSync, readFileSync as realReadFileSync } from "node:fs";
+import { lstatSync, realpathSync, readFileSync as realReadFileSync, readdirSync as realReaddirSync, copyFileSync as realCopyFileSync } from "node:fs";
 import { parseInstallMetadata, sha256Bytes } from "./install-metadata.js";
 import { strToU8, zipSync, unzipSync } from "fflate";
 import type {
@@ -52,6 +52,8 @@ export interface TransactionalFsWithCopy extends TransactionalFs {
 export function safeManagedPath(projectRoot: string, relative: string): { normalized: string; target: string } {
   const normalized = relative.replace(/\\/g, "/");
   if (!normalized || relative.includes("\\") || normalized.startsWith("/") || normalized.split("/").some((part) => !part || part === "." || part === "..") || /^[A-Za-z]:/.test(normalized)) throw new Error(`unsafe managed path: ${relative}`);
+  if ([".git", "node_modules"].includes(normalized.split("/")[0]!.toLowerCase())) throw new Error(`managed path uses a protected directory: ${relative}`);
+  if (lstatSync(projectRoot).isSymbolicLink()) throw new Error(`project root contains symbolic link: ${projectRoot}`);
   const project = realpathSync(projectRoot);
   const target = resolve(project, normalized);
   if (!target.startsWith(`${project}${sep}`)) throw new Error(`managed path escapes project: ${relative}`);
@@ -72,13 +74,30 @@ export function executeManagedReconcile(
   writes: Readonly<Record<string, string | Uint8Array>>,
   removePaths: readonly string[],
   fs_: TransactionalFsWithCopy,
-  options: { readonly expectedText?: Readonly<Record<string, string | undefined>> } = {},
+  options: {
+    readonly expectedText?: Readonly<Record<string, string | undefined>>;
+    readonly expectedSha256?: Readonly<Record<string, string | undefined>>;
+  } = {},
 ): void {
+  // A previous process may have terminated between two renames. Restore only
+  // journal-owned bytes before accepting another plan; callers must replan.
+  if (recoverManagedReconcile(projectRoot, fs_) > 0) {
+    throw new Error("interrupted transaction recovered; rerun the command to create a fresh plan");
+  }
   const operationId = randomUUID();
-  const stagingRoot = join(projectRoot, ".moeicons", `.reconcile-staging-${operationId}`);
-  const backupRoot = join(projectRoot, ".moeicons", `.reconcile-backup-${operationId}`);
   const safe = (relative: string) => safeManagedPath(projectRoot, relative);
+  // Validate transaction paths too: .moeicons may be a symlink even when
+  // every application entry is safe.
+  const stagingRelative = `.moeicons/.reconcile-staging-${operationId}`;
+  const backupRelative = `.moeicons/.reconcile-backup-${operationId}`;
+  const stagingRoot = safe(stagingRelative).target;
+  const backupRoot = safe(backupRelative).target;
   const checkExpected = (relative: string, target: string) => {
+    if (Object.hasOwn(options.expectedSha256 ?? {}, relative)) {
+      const expected = options.expectedSha256?.[relative];
+      const current = fs_.existsSync(target) ? sha256Bytes(fs_.readFileSync(target)) : undefined;
+      if (current !== expected) throw new Error(`file changed since planning: ${relative}`);
+    }
     if (!Object.hasOwn(options.expectedText ?? {}, relative)) return;
     const expected = options.expectedText?.[relative];
     const current = fs_.existsSync(target) ? fs_.readFileSync(target, "utf8") : undefined;
@@ -86,8 +105,20 @@ export function executeManagedReconcile(
   };
   const entries = Object.entries(writes).map(([relative, content]) => ({ ...safe(relative), content }));
   const removals = [...new Set(removePaths)].map(safe).filter((item) => !Object.hasOwn(writes, item.normalized));
+  for (const item of [...entries, ...removals]) {
+    if (item.normalized.toLowerCase().startsWith(".moeicons/.reconcile-")) throw new Error(`managed path overlaps transaction control: ${item.normalized}`);
+  }
   const allPaths = [...entries, ...removals].map((item) => item.normalized.toLowerCase()).sort();
   for (const entry of entries) checkExpected(entry.normalized, entry.target);
+  for (const removal of removals) checkExpected(removal.normalized, removal.target);
+  const pathSet = new Set(allPaths);
+  for (const path of allPaths) {
+    const parts = path.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      const parent = parts.slice(0, i).join("/");
+      if (pathSet.has(parent)) throw new Error(`managed file and directory paths collide: ${parent}`);
+    }
+  }
   for (let i = 1; i < allPaths.length; i++) {
     const previous = allPaths[i - 1]!;
     const current = allPaths[i]!;
@@ -96,23 +127,47 @@ export function executeManagedReconcile(
       throw new Error(`managed file and directory paths collide: ${previous}`);
     }
   }
-  const backedUp: Array<{ target: string; backup: string }> = [];
-  const installed: Array<{ target: string; hash: string }> = [];
+  const backedUp: Array<{ target: string; backup: string; relative: string }> = [];
+  const installed: Array<{ target: string; hash: string; relative: string }> = [];
   let preserveBackup = false;
+  const journal = {
+    version: 1, operationId, committed: false,
+    entries: [...removals, ...entries].map((item) => ({
+      path: item.normalized,
+      before: fs_.existsSync(item.target) ? sha256Bytes(fs_.readFileSync(item.target)) : null,
+      after: Object.hasOwn(writes, item.normalized) ? sha256Bytes(writes[item.normalized]!) : null,
+    })),
+  };
+  const journalPath = join(backupRoot, "recovery.json");
+  const plannedHashes = new Map(journal.entries.map((entry) => [entry.path, entry.before]));
   try {
+    safe(".moeicons");
+    fs_.mkdirSync(join(projectRoot, ".moeicons"), { recursive: true });
+    safe(stagingRelative);
+    fs_.mkdirSync(stagingRoot, { recursive: false });
+    safe(backupRelative);
+    fs_.mkdirSync(backupRoot, { recursive: false });
     for (const entry of entries) {
+      safe(stagingRelative);
       const staged = join(stagingRoot, entry.normalized);
       fs_.mkdirSync(join(staged, ".."), { recursive: true });
+      safe(`${stagingRelative}/${entry.normalized}`);
       fs_.writeFileSync(staged, entry.content);
     }
+    // Persist the entire intent before the first destructive rename. Recovery
+    // infers completed renames from hashes, so no per-rename journal gap exists.
+    fs_.writeFileSync(journalPath, JSON.stringify(journal));
     for (const item of [...removals, ...entries]) {
       safe(item.normalized);
       checkExpected(item.normalized, item.target);
+      const currentHash = fs_.existsSync(item.target) ? sha256Bytes(fs_.readFileSync(item.target)) : null;
+      if (currentHash !== plannedHashes.get(item.normalized)) throw new Error(`file changed since planning: ${item.normalized}`);
       if (!fs_.existsSync(item.target)) continue;
-      const backup = join(backupRoot, item.normalized);
+      const backup = join(backupRoot, "files", item.normalized);
+      safe(backupRelative);
       fs_.mkdirSync(join(backup, ".."), { recursive: true });
       fs_.renameSync(item.target, backup);
-      backedUp.push({ target: item.target, backup });
+      backedUp.push({ target: item.target, backup, relative: item.normalized });
     }
     for (const entry of entries) {
       safe(entry.normalized);
@@ -121,14 +176,19 @@ export function executeManagedReconcile(
       // concurrent user write; never replace it with staged bytes.
       if (fs_.existsSync(entry.target)) throw new Error(`file changed since planning: ${entry.normalized}`);
       fs_.mkdirSync(join(entry.target, ".."), { recursive: true });
+      safe(entry.normalized);
       fs_.renameSync(staged, entry.target);
-      installed.push({ target: entry.target, hash: sha256Bytes(entry.content) });
+      installed.push({ target: entry.target, hash: sha256Bytes(entry.content), relative: entry.normalized });
     }
+    journal.committed = true;
+    safe(backupRelative);
+    fs_.writeFileSync(join(backupRoot, "committed"), operationId);
   } catch (error) {
     const recoveryErrors: unknown[] = [];
-    for (const { target, hash } of installed.reverse()) {
+    for (const { target, hash, relative } of installed.reverse()) {
       if (existsOnDisk(target)) {
         try {
+          safe(relative);
           if (lstatSync(target).isSymbolicLink() || sha256Bytes(realReadFileSync(target)) !== hash) {
             preserveBackup = true;
             recoveryErrors.push(new Error(`concurrent file retained at ${target}`));
@@ -141,12 +201,15 @@ export function executeManagedReconcile(
     for (const item of backedUp.reverse()) {
       if (fs_.existsSync(item.backup)) {
         try {
+          safe(item.relative);
+          safe(`${backupRelative}/files/${item.relative}`);
           if (fs_.existsSync(item.target)) {
             preserveBackup = true;
             recoveryErrors.push(new Error(`concurrent file retained at ${item.target}`));
             continue;
           }
           fs_.mkdirSync(join(item.target, ".."), { recursive: true });
+          safe(item.relative);
           fs_.renameSync(item.backup, item.target);
         } catch (recoveryError) {
           preserveBackup = true;
@@ -164,16 +227,70 @@ export function executeManagedReconcile(
     }
     throw error;
   } finally {
-    if (fs_.existsSync(stagingRoot)) fs_.rmSync(stagingRoot, { recursive: true, force: true });
+    if (fs_.existsSync(stagingRoot)) { safe(stagingRelative); fs_.rmSync(stagingRoot, { recursive: true, force: true }); }
   }
   // The new state is committed. A cleanup failure must not trigger rollback
   // after any backup bytes have already been removed.
   if (fs_.existsSync(backupRoot)) {
-    try { fs_.rmSync(backupRoot, { recursive: true, force: true }); }
+    try { safe(backupRelative); fs_.rmSync(backupRoot, { recursive: true, force: true }); }
     catch (error) {
       throw new Error(`changes committed, backup cleanup failed at ${backupRoot}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+}
+
+/** Recover an interrupted process while preserving any independently edited file.
+ * Must run under the same project lock as reconcile. Invalid journals fail closed.
+ * This covers process termination, not power loss or a hostile filesystem.
+ */
+export function recoverManagedReconcile(projectRoot: string, fs_: TransactionalFsWithCopy): number {
+  const control = safeManagedPath(projectRoot, ".moeicons").target;
+  if (!fs_.existsSync(control)) return 0;
+  let recovered = 0;
+  for (const name of fs_.readdirSync(control)) {
+    if (!/^\.reconcile-backup-[0-9a-f-]{36}$/.test(name)) continue;
+    const backupRoot = safeManagedPath(projectRoot, `.moeicons/${name}`).target;
+    const journalPath = safeManagedPath(projectRoot, `.moeicons/${name}/recovery.json`).target;
+    if (!fs_.existsSync(journalPath)) continue; // staging never reached mutation
+    const journal = JSON.parse(fs_.readFileSync(journalPath, "utf8")) as {
+      version: number; operationId: string; entries: Array<{ path: string; before: string | null; after: string | null }>;
+    };
+    const hashOrNull = (value: unknown) => value === null || (typeof value === "string" && /^[0-9a-f]{64}$/.test(value));
+    if (journal.version !== 1 || name !== `.reconcile-backup-${journal.operationId}` || !Array.isArray(journal.entries) || journal.entries.some((entry) => !entry || typeof entry.path !== "string" || !hashOrNull(entry.before) || !hashOrNull(entry.after))) {
+      throw new Error(`invalid recovery journal; originals retained at ${backupRoot}`);
+    }
+    if (journal.entries.some((entry) => entry.path.toLowerCase().startsWith(".moeicons/.reconcile-")) || new Set(journal.entries.map((entry) => entry.path.toLowerCase())).size !== journal.entries.length) throw new Error(`unsafe recovery journal at ${backupRoot}`);
+    const entries = journal.entries.map((entry) => ({ ...entry, target: safeManagedPath(projectRoot, entry.path).target, backup: safeManagedPath(projectRoot, `.moeicons/${name}/files/${entry.path}`).target }));
+    const committed = safeManagedPath(projectRoot, `.moeicons/${name}/committed`).target;
+    if (fs_.existsSync(committed)) {
+      if (fs_.readFileSync(committed, "utf8") !== journal.operationId) throw new Error(`invalid commit marker at ${backupRoot}`);
+    } else {
+      // Validate the complete recovery before deleting or restoring any file.
+      for (const entry of entries) {
+        const current = fs_.existsSync(entry.target) ? sha256Bytes(fs_.readFileSync(entry.target)) : null;
+        const backup = fs_.existsSync(entry.backup) ? sha256Bytes(fs_.readFileSync(entry.backup)) : null;
+        if ((backup !== null && backup !== entry.before) || (current !== null && current !== entry.after && current !== entry.before) || (entry.before !== null && backup === null && current !== entry.before)) {
+          throw new Error(`recovery conflict at ${entry.path}; originals retained at ${backupRoot}`);
+        }
+      }
+      for (const entry of entries.reverse()) {
+        safeManagedPath(projectRoot, entry.path);
+        if (fs_.existsSync(entry.backup)) {
+          if (fs_.existsSync(entry.target)) fs_.rmSync(entry.target, { force: true });
+          fs_.mkdirSync(dirname(entry.target), { recursive: true });
+          safeManagedPath(projectRoot, entry.path);
+          fs_.renameSync(entry.backup, entry.target);
+        } else if (entry.before === null && fs_.existsSync(entry.target)) {
+          fs_.rmSync(entry.target, { force: true });
+        }
+      }
+    }
+    const staging = safeManagedPath(projectRoot, `.moeicons/.reconcile-staging-${journal.operationId}`).target;
+    if (fs_.existsSync(staging)) fs_.rmSync(staging, { recursive: true, force: true });
+    fs_.rmSync(backupRoot, { recursive: true, force: true });
+    recovered++;
+  }
+  return recovered;
 }
 
 
@@ -301,9 +418,6 @@ export function executeInstallPlan(
   while (!existsOnDisk(existingAncestor)) existingAncestor = dirname(existingAncestor);
   if (lstatSync(existingAncestor).isSymbolicLink()) throw new Error(`install root contains symbolic link: ${requestedRoot}`);
   const project = resolve(realpathSync(existingAncestor), relative(existingAncestor, requestedRoot));
-  const operationId = randomUUID();
-  const stagingRoot = join(project, `.moeicons-install-staging-${operationId}`);
-  const backupRoot = join(project, `.moeicons-install-backup-${operationId}`);
   const validated = writes.map((item) => {
     const rel = item.rel;
     if (!rel || rel.includes("\\") || isAbsolute(rel) || /^[A-Za-z]:/.test(rel) ||
@@ -326,6 +440,9 @@ export function executeInstallPlan(
   });
   const folded = validated.map((item) => item.rel.toLowerCase());
   if (new Set(folded).size !== folded.length) throw new Error("duplicate install paths");
+  const reconcileFs = { ...fs_, readFileSync: realReadFileSync, readdirSync: realReaddirSync, copyFileSync: realCopyFileSync };
+  fs_.mkdirSync(project, { recursive: true });
+  if (recoverManagedReconcile(project, reconcileFs) > 0) throw new Error("interrupted transaction recovered; rerun the command to create a fresh plan");
   const metadataPath = join(project, ".moeicons", "install-metadata.json");
   const priorMetadataText = existsOnDisk(metadataPath) ? realReadFileSync(metadataPath, "utf8") : undefined;
   const prior = priorMetadataText !== undefined
@@ -353,122 +470,14 @@ export function executeInstallPlan(
     ? Object.keys(prior.managedFiles).filter((rel) => !nextPaths.has(rel)).map((rel) => ({ rel, target: resolve(project, rel) }))
     : [];
 
-  const backups: { original: string; backup: string }[] = [];
-  const installed: { path: string; hash: string }[] = [];
-  let preserveBackup = false;
-  const assertSafeTarget = (target: string) => {
-    if (lstatSync(project).isSymbolicLink()) throw new Error(`install root became a symbolic link: ${project}`);
-    for (let current = target; current !== project; current = dirname(current)) {
-      if (existsOnDisk(current) && lstatSync(current).isSymbolicLink()) {
-        throw new Error(`install path contains symbolic link: ${target}`);
-      }
-    }
-  };
-  const assertOwned = (rel: string, target: string) => {
-    assertSafeTarget(target);
-    if (!existsOnDisk(target)) {
-      if (prior?.managedFiles[rel] !== undefined) throw new Error(`managed file was removed during install: ${rel}`);
-      return;
-    }
-    const expected = prior?.managedFiles[rel];
-    if (expected === undefined) throw new Error(`install path collides with an unowned user file: ${rel}`);
-    if (sha256Bytes(realReadFileSync(target)) !== expected) throw new Error(`managed file was modified during install: ${rel}`);
-  };
-  try {
-    fs_.mkdirSync(project, { recursive: true });
-    fs_.mkdirSync(stagingRoot, { recursive: false });
-    for (const { item, rel } of validated) {
-      const staged = join(stagingRoot, rel);
-      fs_.mkdirSync(join(staged, ".."), { recursive: true });
-      fs_.writeFileSync(staged, item.bytes ?? item.content ?? "");
-    }
-
-    // move staged files into place, backing up existing managed output
-    for (const { rel, target } of staleOwned) {
-      assertOwned(rel, target);
-      const backup = join(backupRoot, rel);
-      fs_.mkdirSync(dirname(backup), { recursive: true });
-      fs_.renameSync(target, backup);
-      backups.push({ original: target, backup });
-    }
-    for (const { item, rel, target } of validated) {
-      const staged = join(stagingRoot, rel);
-      if (rel !== ".moeicons/install-metadata.json") assertOwned(rel, target);
-      else {
-        assertSafeTarget(target);
-        const current = existsOnDisk(target) ? realReadFileSync(target, "utf8") : undefined;
-        if (current !== priorMetadataText) throw new Error("install metadata changed during install");
-      }
-      if (fs_.existsSync(target)) {
-        const backup = join(backupRoot, rel);
-        fs_.mkdirSync(dirname(backup), { recursive: true });
-        fs_.renameSync(target, backup);
-        backups.push({ original: target, backup });
-      }
-      assertSafeTarget(target);
-      if (fs_.existsSync(target)) throw new Error(`file appeared during install: ${rel}`);
-      fs_.mkdirSync(dirname(target), { recursive: true });
-      fs_.renameSync(staged, target);
-      installed.push({ path: target, hash: sha256Bytes(item.bytes ?? item.content ?? "") });
-    }
-  } catch (error) {
-    const recoveryErrors: unknown[] = [];
-    for (const { path, hash } of installed.reverse()) {
-      if (existsOnDisk(path)) {
-        try {
-          if (lstatSync(path).isSymbolicLink() || sha256Bytes(realReadFileSync(path)) !== hash) {
-            preserveBackup = true;
-            recoveryErrors.push(new Error(`concurrent file retained at ${path}`));
-            continue;
-          }
-          fs_.rmSync(path, { force: true });
-        } catch (recoveryError) { recoveryErrors.push(recoveryError); }
-      }
-    }
-    // restore any backups made before the failure
-    for (const b of backups.reverse()) {
-      try {
-        if (fs_.existsSync(b.backup)) {
-          if (fs_.existsSync(b.original)) {
-            preserveBackup = true;
-            recoveryErrors.push(new Error(`concurrent file retained at ${b.original}`));
-            continue;
-          }
-          fs_.renameSync(b.backup, b.original);
-        }
-      } catch (recoveryError) {
-        preserveBackup = true;
-        recoveryErrors.push(recoveryError);
-      }
-    }
-    if (fs_.existsSync(stagingRoot)) {
-      try { fs_.rmSync(stagingRoot, { recursive: true, force: true }); }
-      catch (cleanupError) { recoveryErrors.push(cleanupError); }
-    }
-    if (!preserveBackup && fs_.existsSync(backupRoot)) {
-      try { fs_.rmSync(backupRoot, { recursive: true, force: true }); }
-      catch (cleanupError) { recoveryErrors.push(cleanupError); }
-    }
-    if (recoveryErrors.length > 0) {
-      throw new AggregateError(
-        [error, ...recoveryErrors],
-        preserveBackup
-          ? `install failed; original files retained at ${backupRoot}`
-          : "install failed; original files were restored with recovery errors",
-      );
-    }
-    throw error;
-  }
-  // All files are committed. Cleanup failures must never roll back a state
-  // whose previous backups may already have been partly removed.
-  if (fs_.existsSync(stagingRoot)) {
-    try { fs_.rmSync(stagingRoot, { recursive: true, force: true }); }
-    catch (error) { throw new Error(`changes committed, staging cleanup failed at ${stagingRoot}: ${String(error)}`); }
-  }
-  if (fs_.existsSync(backupRoot)) {
-    try { fs_.rmSync(backupRoot, { recursive: true, force: true }); }
-    catch (error) { throw new Error(`changes committed, backup cleanup failed at ${backupRoot}: ${String(error)}`); }
-  }
+  const expectedSha256 = Object.fromEntries([...validated, ...staleOwned].map(({ rel, target }) => [rel,
+    rel === ".moeicons/install-metadata.json"
+      ? (priorMetadataText === undefined ? undefined : sha256Bytes(priorMetadataText))
+      : prior?.managedFiles[rel] ?? (existsOnDisk(target) ? sha256Bytes(realReadFileSync(target)) : undefined),
+  ]));
+  executeManagedReconcile(project,
+    Object.fromEntries(validated.map(({ item, rel }) => [rel, item.bytes ?? item.content ?? ""])),
+    staleOwned.map(({ rel }) => rel), reconcileFs, { expectedSha256 });
 }
 
 /**

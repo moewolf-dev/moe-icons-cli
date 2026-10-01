@@ -28,7 +28,7 @@ describe("install commit and concurrent file safety", () => {
     expect(() => executeInstallPlan(plan, {
       ...fs,
       rmSync: (path, options) => {
-        if (String(path).includes(".moeicons-install-backup-")) {
+        if (String(path).includes(".reconcile-backup-")) {
           rmSync(join(String(path), "a.ts"), { force: true });
           throw new Error("simulated partial backup cleanup");
         }
@@ -47,9 +47,9 @@ describe("install commit and concurrent file safety", () => {
       ...fs,
       writeFileSync: (path, data, options) => {
         writeFileSync(path, data, options);
-        if (String(path).includes(".moeicons-install-staging-")) writeFileSync(target, "user content");
+        if (String(path).includes(".reconcile-staging-")) writeFileSync(target, "user content");
       },
-    })).toThrow("unowned user file");
+    })).toThrow("file changed since planning");
     expect(readFileSync(target, "utf8")).toBe("user content");
   });
 
@@ -67,9 +67,9 @@ describe("install commit and concurrent file safety", () => {
       ...fs,
       writeFileSync: (path, data, options) => {
         writeFileSync(path, data, options);
-        if (String(path).includes(".moeicons-install-staging-")) writeFileSync(join(project, "a.ts"), "user edit");
+        if (String(path).includes(".reconcile-staging-")) writeFileSync(join(project, "a.ts"), "user edit");
       },
-    })).toThrow("managed file was modified during install");
+    })).toThrow("file changed since planning");
     expect(readFileSync(join(project, "a.ts"), "utf8")).toBe("user edit");
   });
 
@@ -87,7 +87,7 @@ describe("install commit and concurrent file safety", () => {
         }
         return renameSync(from, to);
       },
-    })).toThrow("install failed");
+    })).toThrow("reconcile failed");
     expect(readFileSync(first, "utf8")).toBe("user edit");
     expect(existsSync(join(project, "b.ts"))).toBe(false);
   });

@@ -15,19 +15,35 @@ function isLoopback(hostname: string): boolean {
   return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
 }
 
-export function parseSignedDescriptor(value: unknown, now: number, options: { readonly allowLoopback?: boolean } = {}): SignedArtifactDescriptor {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new CliError("VALIDATION_ERROR", "invalid signed artifact descriptor");
+export function parseSignedDescriptor(
+  value: unknown,
+  now: number,
+  options: { readonly allowLoopback?: boolean } = {},
+): SignedArtifactDescriptor {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new CliError("VALIDATION_ERROR", "invalid signed artifact descriptor");
   const item = value as Record<string, unknown>;
-  if (Object.keys(item).some((key) => !["url", "expiresAt", "size", "sha256"].includes(key)) ||
-      typeof item.url !== "string" || typeof item.expiresAt !== "string" ||
-      typeof item.size !== "number" || !Number.isSafeInteger(item.size) || item.size < 1 ||
-      typeof item.sha256 !== "string" || !SHA256.test(item.sha256)) {
+  if (
+    Object.keys(item).some((key) => !["url", "expiresAt", "size", "sha256"].includes(key)) ||
+    typeof item.url !== "string" ||
+    typeof item.expiresAt !== "string" ||
+    typeof item.size !== "number" ||
+    !Number.isSafeInteger(item.size) ||
+    item.size < 1 ||
+    typeof item.sha256 !== "string" ||
+    !SHA256.test(item.sha256)
+  ) {
     throw new CliError("VALIDATION_ERROR", "invalid signed artifact descriptor");
   }
   let url: URL;
-  try { url = new URL(item.url); } catch { throw new CliError("VALIDATION_ERROR", "invalid signed artifact URL"); }
+  try {
+    url = new URL(item.url);
+  } catch {
+    throw new CliError("VALIDATION_ERROR", "invalid signed artifact URL");
+  }
   const expires = Date.parse(item.expiresAt);
-  const loopbackHttp = options.allowLoopback === true && url.protocol === "http:" && isLoopback(url.hostname);
+  const loopbackHttp =
+    options.allowLoopback === true && url.protocol === "http:" && isLoopback(url.hostname);
   if ((url.protocol !== "https:" && !loopbackHttp) || !Number.isFinite(expires) || expires <= now) {
     throw new CliError("VALIDATION_ERROR", "signed artifact descriptor is expired or insecure");
   }
@@ -41,14 +57,19 @@ export function parseSignedDescriptor(value: unknown, now: number, options: { re
  * bounce us to an untrusted host mid-handshake (unlike the large signed-artifact
  * download below, which follows a bounded number of CDN redirects).
  */
-export async function fetchSignedArtifactDescriptor(apiPath: string, accessToken: string, deps: {
-  readonly fetch?: typeof fetch;
-  readonly signal?: AbortSignal;
-  readonly timeoutMs?: number;
-  readonly now?: number;
-} = {}): Promise<SignedArtifactDescriptor> {
+export async function fetchSignedArtifactDescriptor(
+  apiPath: string,
+  accessToken: string,
+  deps: {
+    readonly fetch?: typeof fetch;
+    readonly signal?: AbortSignal;
+    readonly timeoutMs?: number;
+    readonly now?: number;
+  } = {},
+): Promise<SignedArtifactDescriptor> {
   const url = new URL(apiPath, API_ORIGIN);
-  if (url.origin !== API_ORIGIN || !apiPath.startsWith("/")) throw new CliError("VALIDATION_ERROR", "pro descriptor path must use the trusted API origin");
+  if (url.origin !== API_ORIGIN || !apiPath.startsWith("/"))
+    throw new CliError("VALIDATION_ERROR", "pro descriptor path must use the trusted API origin");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), deps.timeoutMs ?? 5_000);
   const abort = () => controller.abort();
@@ -56,14 +77,27 @@ export async function fetchSignedArtifactDescriptor(apiPath: string, accessToken
   deps.signal?.addEventListener("abort", abort, { once: true });
   try {
     const response = await (deps.fetch ?? fetch)(url, {
-      method: "GET", redirect: "error", signal: controller.signal,
+      method: "GET",
+      redirect: "error",
+      signal: controller.signal,
       headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
     });
-    if (!response.ok) throw new CliError(response.status === 401 ? "AUTH_ERROR" : response.status === 403 ? "FORBIDDEN" : "NETWORK_ERROR", `pro descriptor request failed with ${response.status}`);
+    if (!response.ok)
+      throw new CliError(
+        response.status === 401
+          ? "AUTH_ERROR"
+          : response.status === 403
+            ? "FORBIDDEN"
+            : "NETWORK_ERROR",
+        `pro descriptor request failed with ${response.status}`,
+      );
     return parseSignedDescriptor(await response.json(), deps.now ?? Date.now());
   } catch (error) {
     if (error instanceof CliError) throw error;
-    throw new CliError(deps.signal?.aborted ? "CANCELLED" : "NETWORK_ERROR", deps.signal?.aborted ? "pro descriptor request cancelled" : "pro descriptor request failed");
+    throw new CliError(
+      deps.signal?.aborted ? "CANCELLED" : "NETWORK_ERROR",
+      deps.signal?.aborted ? "pro descriptor request cancelled" : "pro descriptor request failed",
+    );
   } finally {
     clearTimeout(timer);
     deps.signal?.removeEventListener("abort", abort);
@@ -71,31 +105,62 @@ export async function fetchSignedArtifactDescriptor(apiPath: string, accessToken
 }
 
 /** Download signed bytes without forwarding API credentials or cookies. */
-export async function downloadSignedArtifact(descriptor: SignedArtifactDescriptor, options: {
-  readonly allowedHosts: readonly string[];
-  readonly fetch?: typeof fetch;
-  readonly signal?: AbortSignal;
-  readonly timeoutMs?: number;
-  readonly maxRedirects?: number;
-  readonly now?: number;
-  readonly allowLoopback?: boolean;
-  readonly onProgress?: (event: { readonly downloadedBytes: number; readonly totalBytes?: number }) => void;
-}): Promise<Uint8Array> {
+export async function downloadSignedArtifact(
+  descriptor: SignedArtifactDescriptor,
+  options: {
+    readonly allowedHosts: readonly string[];
+    readonly fetch?: typeof fetch;
+    readonly signal?: AbortSignal;
+    readonly timeoutMs?: number;
+    readonly maxRedirects?: number;
+    readonly now?: number;
+    readonly allowLoopback?: boolean;
+    readonly onProgress?: (event: {
+      readonly downloadedBytes: number;
+      readonly totalBytes?: number;
+    }) => void;
+  },
+): Promise<Uint8Array> {
+  if (options.signal?.aborted)
+    throw new CliError("CANCELLED", "signed resource download cancelled");
   const checked = parseSignedDescriptor(descriptor, options.now ?? Date.now(), options);
-  const result = await downloadArtifact(checked.url, {
-    maxBytes: checked.size,
-    timeoutMs: options.timeoutMs ?? 30_000,
-    maxRedirects: options.maxRedirects ?? 5,
-    allowedHosts: options.allowedHosts,
-    ...(options.allowLoopback ? { allowHttpLoopback: true } : {}),
-    ...(options.onProgress ? { onProgress: options.onProgress } : {}),
-  }, {
-    ...(options.fetch ? { fetchFn: options.fetch } : {}),
-    ...(options.signal ? { signal: options.signal } : {}),
-  });
-  if (!result.ok) throw new CliError(result.code === "NETWORK_ERROR" ? "NETWORK_ERROR" : "VALIDATION_ERROR", result.message);
-  if (result.bytes.byteLength !== checked.size) throw new CliError("VALIDATION_ERROR", `artifact size mismatch: expected ${checked.size}, got ${result.bytes.byteLength}`);
+  const result = await downloadArtifact(
+    checked.url,
+    {
+      maxBytes: checked.size,
+      timeoutMs:
+        options.timeoutMs ??
+        Math.min(
+          600_000,
+          Math.max(30_000, Math.ceil(checked.size / (128 * 1024)) * 1_000 + 15_000),
+        ),
+      maxRedirects: options.maxRedirects ?? 5,
+      allowedHosts: options.allowedHosts,
+      ...(options.allowLoopback ? { allowHttpLoopback: true } : {}),
+      ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+    },
+    {
+      ...(options.fetch ? { fetchFn: options.fetch } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+    },
+  );
+  if (options.signal?.aborted)
+    throw new CliError("CANCELLED", "signed resource download cancelled");
+  if (!result.ok)
+    throw new CliError(
+      result.code === "NETWORK_ERROR" ? "NETWORK_ERROR" : "VALIDATION_ERROR",
+      result.message,
+    );
+  if (result.bytes.byteLength !== checked.size)
+    throw new CliError(
+      "VALIDATION_ERROR",
+      `artifact size mismatch: expected ${checked.size}, got ${result.bytes.byteLength}`,
+    );
   const verified = verifyArtifact(result.bytes, checked.sha256);
-  if (!verified.ok) throw new CliError("VALIDATION_ERROR", `artifact SHA-256 mismatch: expected ${checked.sha256}, got ${verified.actual}`);
+  if (!verified.ok)
+    throw new CliError(
+      "VALIDATION_ERROR",
+      `artifact SHA-256 mismatch: expected ${checked.sha256}, got ${verified.actual}`,
+    );
   return result.bytes;
 }

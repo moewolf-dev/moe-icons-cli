@@ -97,6 +97,7 @@ describe("CLI output compatibility contract", () => {
         moeicons init                 create moeicons.config.jsonc
         moeicons init --dry-run       print the full config/entry/style plan without writing
         moeicons doctor               diagnose project anchors (read-only)
+        moeicons recover              recover interrupted writes (run at project root)
         moeicons doctor --check       exit non-zero when any required anchor is not OK
         moeicons update metadata      sync MANUAL.md/catalog.json/manifest.json only
         moeicons update               full code + metadata update

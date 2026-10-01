@@ -9,12 +9,51 @@ import type { CommandContext } from "../src/core/context.js";
 import { writeFreeReleaseFixture } from "./helpers/free-release-fixture.js";
 
 const descriptorSha = "a".repeat(64);
-function store(initial: StoredSession): TokenStore { let value: StoredSession | undefined = initial; return { get: () => value, getActive: () => value, set: (next) => { value = next; }, delete: () => { value = undefined; }, clear: () => { value = undefined; } }; }
-function context(dir: string, env: Record<string, string> = {}): CommandContext { return { cwd: dir, env, signal: new AbortController().signal, now: () => new Date("2026-08-24T00:00:00Z"), ui: { select: async () => undefined, confirm: async () => true, text: async () => undefined, note() {}, progress: () => ({ stop() {} }) } }; }
-const session: StoredSession = { accountId: "a", accessToken: "old-access", refreshToken: "refresh", expiresAt: Date.parse("2026-08-24T01:00:00Z"), scope: "openid", storedAt: 1 };
+function store(initial: StoredSession): TokenStore {
+  let value: StoredSession | undefined = initial;
+  return {
+    get: () => value,
+    getActive: () => value,
+    set: (next) => {
+      value = next;
+    },
+    delete: () => {
+      value = undefined;
+    },
+    clear: () => {
+      value = undefined;
+    },
+  };
+}
+function context(dir: string, env: Record<string, string> = {}): CommandContext {
+  return {
+    cwd: dir,
+    env,
+    signal: new AbortController().signal,
+    now: () => new Date("2026-08-24T00:00:00Z"),
+    ui: {
+      select: async () => undefined,
+      confirm: async () => true,
+      text: async () => undefined,
+      note() {},
+      progress: () => ({ stop() {} }),
+    },
+  };
+}
+const session: StoredSession = {
+  accountId: "a",
+  accessToken: "old-access",
+  refreshToken: "refresh",
+  expiresAt: Date.parse("2026-08-24T01:00:00Z"),
+  scope: "openid",
+  storedAt: 1,
+};
 
 describe("pro signed download", () => {
-  let release: string; let archive: Uint8Array; let metadataArchive: Uint8Array; let meta: ReturnType<typeof writeFreeReleaseFixture>;
+  let release: string;
+  let archive: Uint8Array;
+  let metadataArchive: Uint8Array;
+  let meta: ReturnType<typeof writeFreeReleaseFixture>;
   beforeEach(() => {
     release = mkdtempSync(join(tmpdir(), "pro-download-"));
     meta = writeFreeReleaseFixture(release, { tier: "pro" });
@@ -25,11 +64,22 @@ describe("pro signed download", () => {
 
   function body() {
     return {
-      ok: true, tier: "pro", version: meta.version, descriptorSha256: descriptorSha,
-      catalogFilename: "catalog.json", catalogSha256: meta.catalogSha,
-      url: "https://signed.example/object", expiresAt: "2026-08-24T00:02:00Z",
-      size: archive.byteLength, sha256: meta.freeSha,
-      metadata: { url: "https://signed.example/meta", expiresAt: "2026-08-24T00:02:00Z", size: metadataArchive.byteLength, sha256: meta.metadataSha },
+      ok: true,
+      tier: "pro",
+      version: meta.version,
+      descriptorSha256: descriptorSha,
+      catalogFilename: "catalog.json",
+      catalogSha256: meta.catalogSha,
+      url: "https://signed.example/object",
+      expiresAt: "2026-08-24T00:02:00Z",
+      size: archive.byteLength,
+      sha256: meta.freeSha,
+      metadata: {
+        url: "https://signed.example/meta",
+        expiresAt: "2026-08-24T00:02:00Z",
+        size: metadataArchive.byteLength,
+        sha256: meta.metadataSha,
+      },
     };
   }
 
@@ -40,10 +90,16 @@ describe("pro signed download", () => {
   it("downloads exact bytes and never forwards API credentials to the signed host", async () => {
     const calls: Array<{ url: string; authorization: string | null }> = [];
     const fetchFn = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-      const url = String(input); calls.push({ url, authorization: new Headers(init?.headers).get("authorization") });
+      const url = String(input);
+      calls.push({ url, authorization: new Headers(init?.headers).get("authorization") });
       return url.includes("artifact-descriptor") ? Response.json(body()) : signedResponse(url);
     });
-    const result = await downloadProArtifact(context(release), { tokenStore: store(session) }, { version: meta.version, descriptorSha256: descriptorSha }, { fetch: fetchFn as typeof fetch, allowedHosts: ["signed.example"] });
+    const result = await downloadProArtifact(
+      context(release),
+      { tokenStore: store(session) },
+      { version: meta.version, descriptorSha256: descriptorSha },
+      { fetch: fetchFn as typeof fetch, allowedHosts: ["signed.example"] },
+    );
     expect(result.catalogJson.length).toBeGreaterThan(0);
     expect(result.manifestJson).toContain('"tier": "pro"');
     expect(calls[0]?.authorization).toBe("Bearer old-access");
@@ -51,19 +107,78 @@ describe("pro signed download", () => {
     expect(JSON.stringify(calls)).not.toContain("refresh");
   });
 
+  it("validates metadata before requesting a complete Pro code archive", async () => {
+    const urls: string[] = [];
+    const config = {
+      schemaVersion: 3 as const,
+      tier: "pro" as const,
+      target: "react" as const,
+      outputDir: "src/icons",
+      defaultTheme: "outline",
+      themes: { outline: { styleGroup: "moe-outline" } },
+      icons: ["not-real"],
+      downloadMode: "full" as const,
+    };
+    const fetchFn = async (input: Parameters<typeof fetch>[0]) => {
+      const url = String(input);
+      urls.push(url);
+      return url.includes("artifact-descriptor") ? Response.json(body()) : signedResponse(url);
+    };
+    await expect(
+      downloadProArtifact(
+        context(release),
+        { tokenStore: store(session) },
+        { version: meta.version, descriptorSha256: descriptorSha },
+        {
+          fetch: fetchFn,
+          allowedHosts: ["signed.example"],
+          selection: { config, document: { kind: "ok", value: config, version: 3 } },
+        },
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(urls).toContain("https://signed.example/meta");
+    expect(urls).not.toContain("https://signed.example/object");
+  });
+
   it("refreshes exactly once on 401 and maps 403 without downloading", async () => {
-    const tokenStore = store(session); let apiCalls = 0; let refreshCalls = 0;
+    const tokenStore = store(session);
+    let apiCalls = 0;
+    let refreshCalls = 0;
     const fetchFn = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("oauth/token")) { refreshCalls += 1; return Response.json({ access_token: "new-access", expires_in: 60 }); }
-      if (url.includes("artifact-descriptor")) { apiCalls += 1; if (apiCalls === 1) return Response.json({}, { status: 401 }); expect(new Headers(init?.headers).get("authorization")).toBe("Bearer new-access"); return Response.json(body()); }
+      if (url.includes("oauth/token")) {
+        refreshCalls += 1;
+        return Response.json({ access_token: "new-access", expires_in: 60 });
+      }
+      if (url.includes("artifact-descriptor")) {
+        apiCalls += 1;
+        if (apiCalls === 1) return Response.json({}, { status: 401 });
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer new-access");
+        return Response.json(body());
+      }
       return signedResponse(url);
     });
-    const env = { MOEICONS_AUTH0_ISSUER: "https://tenant.auth0.com", MOEICONS_AUTH0_CLIENT_ID: "client" };
-    await downloadProArtifact(context(release, env), { tokenStore, fetch: fetchFn as typeof fetch }, { version: meta.version, descriptorSha256: descriptorSha }, { fetch: fetchFn as typeof fetch, allowedHosts: ["signed.example"] });
-    expect(apiCalls).toBe(2); expect(refreshCalls).toBe(1);
+    const env = {
+      MOEICONS_AUTH0_ISSUER: "https://tenant.auth0.com",
+      MOEICONS_AUTH0_CLIENT_ID: "client",
+    };
+    await downloadProArtifact(
+      context(release, env),
+      { tokenStore, fetch: fetchFn as typeof fetch },
+      { version: meta.version, descriptorSha256: descriptorSha },
+      { fetch: fetchFn as typeof fetch, allowedHosts: ["signed.example"] },
+    );
+    expect(apiCalls).toBe(2);
+    expect(refreshCalls).toBe(1);
     const forbidden = vi.fn(async () => Response.json({}, { status: 403 }));
-    await expect(downloadProArtifact(context(release), { tokenStore: store(session) }, { version: meta.version, descriptorSha256: descriptorSha }, { fetch: forbidden as typeof fetch, allowedHosts: ["signed.example"] })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      downloadProArtifact(
+        context(release),
+        { tokenStore: store(session) },
+        { version: meta.version, descriptorSha256: descriptorSha },
+        { fetch: forbidden as typeof fetch, allowedHosts: ["signed.example"] },
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(forbidden).toHaveBeenCalledTimes(1);
   });
 
@@ -72,8 +187,14 @@ describe("pro signed download", () => {
       resolveProDescriptorEndpoint({ MOEICONS_PRO_DESCRIPTOR_URL: "http://evil.example.com/x" }),
     ).toThrow(/loopback|https/);
     expect(resolveProDescriptorEndpoint({}).url).toContain("api.moeicons.com");
-    expect(resolveProDescriptorEndpoint({ MOEICONS_PRO_DESCRIPTOR_URL: "https://api.moeicons.com/x" }).allowLoopback).toBe(false);
-    expect(resolveProDescriptorEndpoint({ MOEICONS_PRO_DESCRIPTOR_URL: "http://127.0.0.1:9999/x" }).allowLoopback).toBe(true);
+    expect(
+      resolveProDescriptorEndpoint({ MOEICONS_PRO_DESCRIPTOR_URL: "https://api.moeicons.com/x" })
+        .allowLoopback,
+    ).toBe(false);
+    expect(
+      resolveProDescriptorEndpoint({ MOEICONS_PRO_DESCRIPTOR_URL: "http://127.0.0.1:9999/x" })
+        .allowLoopback,
+    ).toBe(true);
   });
 
   it("downloads pro code + metadata through a loopback mock endpoint (candidate acceptance)", async () => {
@@ -82,7 +203,9 @@ describe("pro signed download", () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       if (url.pathname.endsWith("/artifact-descriptor")) {
         let body = "";
-        request.on("data", (chunk: Buffer) => { body += chunk.toString("utf8"); });
+        request.on("data", (chunk: Buffer) => {
+          body += chunk.toString("utf8");
+        });
         request.on("end", () => {
           const expected = JSON.parse(body) as { version: string; descriptorSha256: string };
           if (expected.version !== meta.version || expected.descriptorSha256 !== descriptorSha) {
@@ -90,13 +213,26 @@ describe("pro signed download", () => {
             return;
           }
           response.writeHead(200, { "content-type": "application/json" });
-          response.end(JSON.stringify({
-            ok: true, tier: "pro", version: meta.version, descriptorSha256: descriptorSha,
-            catalogFilename: "catalog.json", catalogSha256: meta.catalogSha,
-            url: `http://127.0.0.1:${port}/pro.tgz`, expiresAt: "2099-01-01T00:00:00Z",
-            size: archive.byteLength, sha256: meta.freeSha,
-            metadata: { url: `http://127.0.0.1:${port}/pro-meta.tgz`, expiresAt: "2099-01-01T00:00:00Z", size: metadataArchive.byteLength, sha256: meta.metadataSha },
-          }));
+          response.end(
+            JSON.stringify({
+              ok: true,
+              tier: "pro",
+              version: meta.version,
+              descriptorSha256: descriptorSha,
+              catalogFilename: "catalog.json",
+              catalogSha256: meta.catalogSha,
+              url: `http://127.0.0.1:${port}/pro.tgz`,
+              expiresAt: "2099-01-01T00:00:00Z",
+              size: archive.byteLength,
+              sha256: meta.freeSha,
+              metadata: {
+                url: `http://127.0.0.1:${port}/pro-meta.tgz`,
+                expiresAt: "2099-01-01T00:00:00Z",
+                size: metadataArchive.byteLength,
+                sha256: meta.metadataSha,
+              },
+            }),
+          );
         });
         return;
       }

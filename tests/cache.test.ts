@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync, readdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  readdirSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { cacheArtifact, type CacheIo } from "../src/core/cache.js";
@@ -29,7 +37,9 @@ describe("cacheArtifact atomic persistence (R1/R5)", () => {
       const target = join(dir, "nested", "artifact.tgz");
       cacheArtifact(realIo(dir), target, Buffer.from("verified bytes"));
       expect(readFileSync(target, "utf8")).toBe("verified bytes");
-      expect(readdirSync(join(dir, "nested")).some((name) => name.includes(".staging-"))).toBe(false);
+      expect(readdirSync(join(dir, "nested")).some((name) => name.includes(".staging-"))).toBe(
+        false,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -109,7 +119,11 @@ describe("cacheArtifact atomic persistence (R1/R5)", () => {
       const target = join(dir, "artifact.tgz");
       const bytes = Buffer.from("the one true verified payload");
       const io = realIo(dir);
-      await Promise.all(Array.from({ length: 8 }, () => Promise.resolve().then(() => cacheArtifact(io, target, bytes, sha256(bytes)))));
+      await Promise.all(
+        Array.from({ length: 8 }, () =>
+          Promise.resolve().then(() => cacheArtifact(io, target, bytes, sha256(bytes))),
+        ),
+      );
       expect(readFileSync(target, "utf8")).toBe("the one true verified payload");
       const staging = readdirSync(dir).filter((name) => name.includes(".staging-"));
       expect(staging).toEqual([]);
@@ -122,7 +136,7 @@ describe("cacheArtifact atomic persistence (R1/R5)", () => {
     const dir = mkdtempSync(join(tmpdir(), "cache-sweep-"));
     try {
       const target = join(dir, "artifact.tgz");
-      const stale = join(dir, "artifact.tgz.staging-1234-deadbeef");
+      const stale = join(dir, "artifact.tgz.staging-99999999-deadbeef");
       writeFileSync(stale, "crashed writer bytes");
       cacheArtifact(realIo(dir), target, Buffer.from("fresh"), sha256(Buffer.from("fresh")));
       expect(readFileSync(target, "utf8")).toBe("fresh");
@@ -131,4 +145,16 @@ describe("cacheArtifact atomic persistence (R1/R5)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+it("does not delete an already staging live writer", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cache-live-"));
+  try {
+    const live = join(dir, `artifact.tgz.staging-${process.pid}-deadbeef`);
+    writeFileSync(live, "other writer in progress");
+    cacheArtifact(realIo(dir), join(dir, "artifact.tgz"), Buffer.from("verified"));
+    expect(readFileSync(live, "utf8")).toBe("other writer in progress");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

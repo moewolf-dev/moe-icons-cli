@@ -33,9 +33,9 @@ function sha256Hex(bytes: Uint8Array): string {
  * writer that lost the rename race reports success without rewriting.
  *
  * Staging files left behind by a crashed writer are inert (never read) and are
- * swept on the next successful write for the same path — only pre-existing
- * orphans are removed, so a concurrent writer's fresh staging file is never
- * deleted.
+ * swept on the next successful write only when their owner PID is proven
+ * dead. Live or unknown writers are preserved, including writers already
+ * staging when this call begins.
  */
 export function cacheArtifact(
   io: CacheIo,
@@ -66,6 +66,11 @@ export function cacheArtifact(
       if (expectedSha256 && io.existsSync(path) && io.readFileSync) {
         const existing = io.readFileSync(path);
         if (existing.byteLength === bytes.byteLength && sha256Hex(existing) === expectedSha256) {
+          try {
+            io.rmSync(staging, { force: true });
+          } catch {
+            /* Best effort own staging cleanup. */
+          }
           return;
         }
       }
@@ -74,6 +79,21 @@ export function cacheArtifact(
     if (io.rmSync && io.readdirSync) {
       for (const name of orphans) {
         if (!name.startsWith(stagingPattern)) continue;
+        const owner = /^(\d+)-[a-f0-9]{8}$/.exec(name.slice(stagingPattern.length));
+        if (!owner) continue;
+        const pid = Number(owner[1]);
+        if (!Number.isSafeInteger(pid) || pid < 1 || pid > 2147483647) continue;
+        let dead = false;
+        try {
+          process.kill(pid, 0);
+        } catch (error) {
+          dead =
+            typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            (error as { code?: unknown }).code === "ESRCH";
+        }
+        if (!dead) continue;
         try {
           io.rmSync(join(join(path, ".."), name), { force: true });
         } catch {
