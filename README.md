@@ -68,9 +68,10 @@ first, then run `moeicons install free --target <target>` and `moeicons generate
 For React/Vue, installation now keeps only the configured SVG component modules
 and their required files in `.moeicons/artifact`. After adding icon IDs to the
 config, run `moeicons install` again before `moeicons generate`; generate reports
-the missing installed component if this step is skipped. The verified release
-archive is still downloaded as a whole, so this reduces project files, not
-network transfer.
+the missing installed component if this step is skipped. New releases support
+selected-resource downloads as well as full archives; `downloadMode` controls
+this choice. Legacy releases without resource indexes still use a full archive
+in `auto` mode. See Download modes and resource selection below.
 Each theme may select a subset of the registered project icons:
 
 ```json
