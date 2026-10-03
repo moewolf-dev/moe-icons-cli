@@ -54,7 +54,8 @@ function assertUnique(values, label) {
 
 /** Strict Free-catalog validation. Exported for tests. */
 export function validateFreeCatalog(catalog) {
-  assertExactKeys(catalog, ["schemaVersion", "catalogVersion", "sourceVersion", "sourceCommit", "generatorCommit", "styleGroups", "icons"], "catalog");
+  assertExactKeys(catalog, ["schemaVersion", "catalogVersion", "sourceVersion", "sourceCommit", "generatorCommit", "manifestSchemaVersion", "styleGroups", "icons"], "catalog");
+  assert(catalog.manifestSchemaVersion === undefined || [1, 2].includes(catalog.manifestSchemaVersion), "catalog manifestSchemaVersion must be a supported source manifest version");
   assert(catalog.schemaVersion === 1, "catalog schemaVersion must be 1");
   assert(typeof catalog.catalogVersion === "string" && SEMVER.test(catalog.catalogVersion), "catalog catalogVersion must be X.Y.Z");
   assert(typeof catalog.sourceVersion === "string" && SEMVER.test(catalog.sourceVersion), "catalog sourceVersion must be X.Y.Z");

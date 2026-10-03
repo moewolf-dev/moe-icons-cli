@@ -15,6 +15,8 @@ import {
   renderMoeiconsConfigJsonc,
 } from "../src/project/config.js";
 
+import { catalog } from "../src/catalog/catalog.js";
+
 let dir: string;
 
 beforeEach(() => {
@@ -214,10 +216,11 @@ describe("readMoeiconsConfig / mergeMoeiconsConfig", () => {
   it("rejects tier elevation — free config with pro-only style group", () => {
     writeConfig(dir, {
       tier: "free",
-      themes: { colored: { styleGroup: "moe-colored" } }, // moe-colored is pro-only
+      themes: { colored: { styleGroup: "moe-colored" } },
       defaultTheme: "colored",
     });
-    const result = readMoeiconsConfig(dir);
+    const proCatalog = { ...catalog, styleGroups: catalog.styleGroups.map((group) => group.id === "moe-colored" ? { ...group, tiers: ["pro" as const] } : group) };
+    const result = readMoeiconsConfig(dir, proCatalog);
     expect(result.kind).toBe("invalid");
     if (result.kind === "invalid") {
       expect(result.message).toContain("moe-colored");

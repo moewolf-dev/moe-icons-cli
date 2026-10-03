@@ -11,7 +11,8 @@ describe("bundled catalog", () => {
       [...catalog.styleGroups].map((group) => group.id).sort(),
     );
     expect(findCatalogStyleGroup("moe-outline")?.tiers).toEqual(["free", "pro"]);
-    expect(findCatalogStyleGroup("moe-colored")?.tiers).toEqual(["pro"]);
+    expect(catalog.styleGroups.map((group) => group.id)).toEqual(["moe-colored", "moe-lite-outline", "moe-outline", "moe-solid"]);
+    for (const group of catalog.styleGroups) expect(group.tiers).toEqual(["free", "pro"]);
   });
 
   it("indexes complete icon IDs and their availability", () => {
