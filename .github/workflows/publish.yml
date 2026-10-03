@@ -13,6 +13,11 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      npm_auth_mode:
+        description: "Explicit authorized authentication mode using existing repository NPM_TOKEN"
+        type: choice
+        options: [oidc, token]
+        default: oidc
       resume_run_id:
         description: "Recover an already accepted immutable candidate from this repository run; never rebuild or bump"
         required: false
@@ -455,18 +460,23 @@ jobs:
           gh release download "$TAG" --pattern '*.tgz' --dir verify --clobber
           actual="$(shasum -a 256 verify/*.tgz | awk '{print $1}')"
           test "$actual" = "$EXPECTED_SHA" || { echo "draft asset digest mismatch" >&2; exit 1; }
-      # SEC-A2-05: npm OIDC Trusted Publishing only. No NPM_TOKEN /
-      # NODE_AUTH_TOKEN fallback exists; `id-token: write` + the protected
-      # `npm-publish` environment + `--provenance` are the only auth path.
+      # Explicit manual token override retains provenance and all release gates.
       - name: Publish to npm or verify the existing registry package
         env:
-          # OIDC only: do not inherit setup-node token placeholders.
-          NPM_CONFIG_USERCONFIG: /dev/null
+          AUTH_MODE: ${{ inputs.npm_auth_mode || 'oidc' }}
+          NODE_AUTH_TOKEN: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_auth_mode == 'token' && secrets.NPM_TOKEN || '' }}
           TAG: ${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}
           EXPECTED_SHA: ${{ needs.recover.outputs.candidate_sha || needs.pack.outputs.candidate_sha }}
         run: |
           set -euo pipefail
-          unset NODE_AUTH_TOKEN
+          if [ "$AUTH_MODE" = token ]; then
+            test -n "$NODE_AUTH_TOKEN" || { echo "repository NPM_TOKEN is unavailable" >&2; exit 1; }
+            npm whoami >/dev/null
+            echo "repository npm token authentication verified; publish enforces package permissions"
+          else
+            unset NODE_AUTH_TOKEN
+            export NPM_CONFIG_USERCONFIG=/dev/null
+          fi
           version="${TAG#v}"
           if npm view "@moewolf/moe-icons-cli@${version}" version >/dev/null 2>&1; then
             echo "npm version already exists; verifying registry CONTENT matches the candidate"

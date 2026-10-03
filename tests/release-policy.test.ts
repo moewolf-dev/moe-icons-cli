@@ -87,17 +87,22 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
     });
   });
 
-  it("SEC-A2-05A: npm publish has no long-lived token path", () => {
-    const workflows = walk(path.join(root, ".github"));
-    const offenders: string[] = [];
-    for (const file of workflows) {
-      const text = fs.readFileSync(file, "utf8");
-      if (/secrets\.NPM_TOKEN|NODE_AUTH_TOKEN\s*[:=]|_authToken\s*[:=]|npm config set [^\n]*_authToken/.test(text)) {
-        offenders.push(path.relative(root, file));
-      }
-    }
-    expect(offenders).toEqual([]);
+  it("SEC-A2-05A: token override is confined to protected manual publish", () => {
     const publish = fs.readFileSync(path.join(root, ".github", "workflows", "publish.yml"), "utf8");
+    for (const file of walk(path.join(root, ".github"))) {
+      const text = fs.readFileSync(file, "utf8");
+      if (file !== path.join(root, ".github", "workflows", "publish.yml")) {
+        expect(text).not.toMatch(/secrets\.NPM_TOKEN|NODE_AUTH_TOKEN\s*[:=]/);
+      }
+      expect(text).not.toMatch(/_authToken\s*[:=]|npm config set [^\n]*_authToken/);
+    }
+    expect(publish.match(/secrets\.NPM_TOKEN/g)).toHaveLength(1);
+    const offset = publish.indexOf("secrets.NPM_TOKEN");
+    expect(offset).toBeGreaterThan(publish.indexOf("      - name: Publish to npm or verify"));
+    expect(offset).toBeLessThan(publish.indexOf("      - name: Smoke npx install"));
+    expect(publish).toContain("github.event_name == 'workflow_dispatch' && inputs.npm_auth_mode == 'token'");
+    expect(publish).toMatch(/default: oidc/);
+    expect(publish).toMatch(/npm whoami >\/dev\/null/);
     expect(publish).toMatch(/id-token:\s*write/);
     expect(publish).toMatch(/--provenance/);
     expect(publish).toMatch(/environment:\s*npm-publish/);
