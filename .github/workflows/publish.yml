@@ -460,6 +460,9 @@ jobs:
       # `npm-publish` environment + `--provenance` are the only auth path.
       - name: Publish to npm or verify the existing registry package
         env:
+          # OIDC only: do not inherit setup-node token placeholders.
+          NPM_CONFIG_USERCONFIG: /dev/null
+          NODE_AUTH_TOKEN: ""
           TAG: ${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}
           EXPECTED_SHA: ${{ needs.recover.outputs.candidate_sha || needs.pack.outputs.candidate_sha }}
         run: |
@@ -479,7 +482,8 @@ jobs:
             integrity="$(npm view "@moewolf/moe-icons-cli@${version}" dist.integrity)"
             echo "registry integrity: $integrity"
           else
-            npm publish "$tgz" --access public --provenance
+            npm --version
+            npm publish "$tgz" --access public --provenance --loglevel verbose
           fi
       - name: Smoke npx install
         run: |
