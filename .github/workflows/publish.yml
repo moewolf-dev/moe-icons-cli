@@ -518,6 +518,8 @@ jobs:
           test "$visible" = true || { echo "npm accepted submission is not yet publicly available; keep Release draft" >&2; exit 1; }
           unset NODE_AUTH_TOKEN
           export NPM_CONFIG_USERCONFIG=/dev/null
+          mkdir -p "$RUNNER_TEMP/registry-smoke"
+          cd "$RUNNER_TEMP/registry-smoke"
           npx --yes --prefer-online "@moewolf/moe-icons-cli@${version}" --version
       - name: Finalize the Release
         env:
