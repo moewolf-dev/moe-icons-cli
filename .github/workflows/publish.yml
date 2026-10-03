@@ -462,11 +462,11 @@ jobs:
         env:
           # OIDC only: do not inherit setup-node token placeholders.
           NPM_CONFIG_USERCONFIG: /dev/null
-          NODE_AUTH_TOKEN: ""
           TAG: ${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}
           EXPECTED_SHA: ${{ needs.recover.outputs.candidate_sha || needs.pack.outputs.candidate_sha }}
         run: |
           set -euo pipefail
+          unset NODE_AUTH_TOKEN
           version="${TAG#v}"
           if npm view "@moewolf/moe-icons-cli@${version}" version >/dev/null 2>&1; then
             echo "npm version already exists; verifying registry CONTENT matches the candidate"
