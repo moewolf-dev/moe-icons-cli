@@ -30,7 +30,7 @@ describe("CLI publish leak gate", () => {
     const secondScan = workflow.lastIndexOf("scan-bundle.mjs");
     expect(checkoutIndex).toBeGreaterThan(-1);
     expect(secondScan).toBeGreaterThan(-1);
-    expect(workflow).toMatch(/ref:\s*\$\{\{\s*needs\.pack\.outputs\.cli_commit\s*\}\}/);
+    expect(workflow).toMatch(/ref:\s*\$\{\{\s*(?:needs\.recover\.outputs\.cli_commit\s*\|\|\s*)?needs\.pack\.outputs\.cli_commit\s*\}\}/);
     expect(checkoutIndex).toBeLessThan(secondScan);
   });
 
@@ -61,7 +61,7 @@ describe("CLI publish leak gate", () => {
 
   it("emits a canonical publish receipt after npm publish/finalize (P1-1)", () => {
     expect(workflow).toMatch(/cli-publish-receipt\.json/);
-    expect(workflow).toMatch(/name:\s*cli-publish-receipt-\$\{\{\s*needs\.pack\.outputs\.release_tag\s*\}\}/);
+    expect(workflow).toMatch(/name:\s*cli-publish-receipt-\$\{\{\s*(?:needs\.recover\.outputs\.release_tag\s*\|\|\s*)?needs\.pack\.outputs\.release_tag\s*\}\}/);
     expect(workflow).toMatch(/npmIntegrity/);
     expect(workflow).toMatch(/attestations/);
     // The receipt is written after the Release is finalized and npm is published.

@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const MARKER = /^chore\(release\): cli v(\d+\.\d+\.\d+) \[source ([0-9a-f]{7,40})\]$/;
-const ALLOWED = ['package.json', 'package-lock.json'];
+const ALLOWED = ['package.json', 'package-lock.json'].sort();
 
 function arg(name) {
   const index = process.argv.indexOf(name);
