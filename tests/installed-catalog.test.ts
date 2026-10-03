@@ -128,6 +128,13 @@ describe("FIX-22-B refresh-bundled-catalog validation", () => {
     expect(validateFreeCatalog(catalog()).freeGroups).toEqual(["moe-colored", "moe-lite-outline", "moe-outline", "moe-solid"]);
   });
 
+  it("accepts declared source manifest versions and rejects unsupported metadata", async () => {
+    const { validateFreeCatalog } = await import("../scripts/refresh-bundled-catalog.mjs");
+    expect(validateFreeCatalog({ ...catalog(), manifestSchemaVersion: 2 }).freeGroups).toHaveLength(4);
+    expect(() => validateFreeCatalog({ ...catalog(), manifestSchemaVersion: 3 })).toThrow(/manifestSchemaVersion/);
+    expect(() => validateFreeCatalog({ ...catalog(), manifestSchemaVersion: "2" })).toThrow(/manifestSchemaVersion/);
+  });
+
   it("rejects a fifth Pro group or bitmap variants/format/size", async () => {
     const { validateFreeCatalog } = await import("../scripts/refresh-bundled-catalog.mjs");
     const withFifth = catalog();
