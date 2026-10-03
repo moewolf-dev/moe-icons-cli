@@ -478,7 +478,17 @@ jobs:
             export NPM_CONFIG_USERCONFIG=/dev/null
           fi
           version="${TAG#v}"
-          if npm view "@moewolf/moe-icons-cli@${version}" version >/dev/null 2>&1; then
+          lifecycle=absent
+          if [ "$AUTH_MODE" = token ]; then
+            lifecycle="$(VERSION="$version" node --input-type=module -e '
+              const r=await fetch(`https://registry.npmjs.org/-/package/@moewolf%2fmoe-icons-cli/version/${process.env.VERSION}/status`,{headers:{Authorization:`Bearer ${process.env.NODE_AUTH_TOKEN}`}});
+              if(r.status===404||r.status===403){console.log("absent");}else if(r.ok){const j=await r.json();console.log(j.status);}else{console.error(`npm lifecycle HTTP ${r.status}`);process.exit(1);}
+            ')"
+            echo "npm version lifecycle: $lifecycle"
+          fi
+          if [ "$lifecycle" != absent ] && [ "$lifecycle" != published ]; then
+            echo "Existing npm submission: $lifecycle; do not resubmit the immutable version"
+          elif npm view "@moewolf/moe-icons-cli@${version}" version >/dev/null 2>&1; then
             echo "npm version already exists; verifying registry CONTENT matches the candidate"
             mkdir -p registry candidate-extract registry-extract
             registry_url="$(npm view "@moewolf/moe-icons-cli@${version}" dist.tarball)"
@@ -495,12 +505,20 @@ jobs:
             npm --version
             npm publish "$tgz" --access public --provenance --loglevel verbose
           fi
-      - name: Smoke npx install
+      - name: Wait for public registry visibility and smoke npx install
         run: |
           set -euo pipefail
           version="${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}"
           version="${version#v}"
-          npx --yes "@moewolf/moe-icons-cli@${version}" --version
+          visible=false
+          for attempt in $(seq 1 30); do
+            if npm view "@moewolf/moe-icons-cli@${version}" version --prefer-online >/dev/null 2>&1; then visible=true; break; fi
+            sleep 10
+          done
+          test "$visible" = true || { echo "npm accepted submission is not yet publicly available; keep Release draft" >&2; exit 1; }
+          unset NODE_AUTH_TOKEN
+          export NPM_CONFIG_USERCONFIG=/dev/null
+          npx --yes --prefer-online "@moewolf/moe-icons-cli@${version}" --version
       - name: Finalize the Release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -99,7 +99,7 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
     expect(publish.match(/secrets\.NPM_TOKEN/g)).toHaveLength(1);
     const offset = publish.indexOf("secrets.NPM_TOKEN");
     expect(offset).toBeGreaterThan(publish.indexOf("      - name: Publish to npm or verify"));
-    expect(offset).toBeLessThan(publish.indexOf("      - name: Smoke npx install"));
+    expect(offset).toBeLessThan(publish.indexOf("      - name: Wait for public registry visibility"));
     expect(publish).toContain("github.event_name == 'workflow_dispatch' && inputs.npm_auth_mode == 'token'");
     expect(publish).toMatch(/default: oidc/);
     expect(publish).toMatch(/npm whoami >\/dev\/null/);
