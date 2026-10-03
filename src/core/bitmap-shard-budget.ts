@@ -2,7 +2,7 @@
  * DEV-G08 (DEC-101/104/107): frozen bitmap shard resource budget interface.
  *
  * Values are calibrated from the OPS-04-06 real v4 release measurement
- * (release 0.0.17, `moe-3d-metal` six shards):
+ * (release 0.0.17, six bitmap shards):
  *   - 512x512/png: 93,843,123 compressed / 94,408,209 expanded (largest)
  *   - 256x256/png: 25,539,799 / 25,620,204
  *   - 128x128/png:  7,792,540 /  7,828,646

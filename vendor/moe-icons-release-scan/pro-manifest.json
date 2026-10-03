@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "resourceVersion": "0.0.17",
+  "sourceCommit": "9c48c93cc4bc70393b330e7fd3ed264c09b70623",
+  "generatorCommit": "b338673b98228f4f6726258623fbad3617c73097",
+  "catalogSha256": "eebea389f25c44c40865dcf607d968e7e761e51d9e633c4345072845a387b3c5",
+  "descriptorSha256": "245c9ddf644ac2449fabe954810b21eba2a2b04b0afa890cca84aa9d7396b765",
+  "proArtifactSha256": "e2a9ed922712c740a5325e11b490855622fe017eed3a4f517935cad9426845fa",
+  "verification": "metadata projected from CLI verified production Pro download; no icon bodies",
+  "styleGroups": [
+    {
+      "id": "moe-3d-metal",
+      "variants": [
+        {
+          "id": "moe-3d-metal-128-png"
+        },
+        {
+          "id": "moe-3d-metal-128-webp"
+        },
+        {
+          "id": "moe-3d-metal-256-png"
+        },
+        {
+          "id": "moe-3d-metal-256-webp"
+        },
+        {
+          "id": "moe-3d-metal-512-png"
+        },
+        {
+          "id": "moe-3d-metal-512-webp"
+        }
+      ]
+    },
+    {
+      "id": "moe-colored",
+      "variants": []
+    },
+    {
+      "id": "moe-duotone",
+      "variants": []
+    },
+    {
+      "id": "moe-lite-outline",
+      "variants": []
+    },
+    {
+      "id": "moe-outline",
+      "variants": []
+    },
+    {
+      "id": "moe-pixel-lite-outline",
+      "variants": []
+    },
+    {
+      "id": "moe-pixel-outline",
+      "variants": []
+    },
+    {
+      "id": "moe-pixel-solid",
+      "variants": []
+    },
+    {
+      "id": "moe-solid",
+      "variants": []
+    },
+    {
+      "id": "moe-sticker",
+      "variants": []
+    }
+  ]
+}

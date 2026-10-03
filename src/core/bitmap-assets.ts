@@ -7,7 +7,7 @@ import {
 } from "./resource-variant.js";
 
 export interface SelectedBitmapAsset {
-  /** POSIX path relative to outputDir, e.g. assets/moe-3d-metal-256-webp/ui-search.webp */
+  /** POSIX path relative to outputDir, e.g. assets/example-bitmap-style-256-webp/ui-search.webp */
   readonly destRel: string;
   readonly bytes: Uint8Array;
   readonly resourceVariantId: string;

@@ -1,3 +1,4 @@
+import type { IconCatalog } from "../../catalog/catalog.js";
 import { join } from "node:path";
 import type { AnchorResult } from "./types.js";
 import type { DetectorIo } from "./helpers.js";
@@ -16,10 +17,12 @@ export function targetFromAdapter(adapter: string | undefined): Target {
 
 export interface ConfigAnchorOptions {
   readonly root: string;
+  readonly sourceCatalog?: IconCatalog | undefined;
   readonly io?: DetectorIo;
   readonly adapter?: string;
   /** true when only assets are consumed and app entry is not required. */
   readonly assetsOnly?: boolean;
+  readonly ambiguous?: boolean;
 }
 
 /**
@@ -30,6 +33,9 @@ export interface ConfigAnchorOptions {
 export function inspectMoeiconsConfig(options: ConfigAnchorOptions): AnchorResult {
   const configPath = findConfigFile(options.root);
   if (!configPath) {
+    if (options.ambiguous && !options.adapter && !options.assetsOnly) {
+      return { kind: "config", status: "ambiguous", candidates: [], evidence: ["select a target with --target before initializing this project"], fixes: [] };
+    }
     const target = options.assetsOnly ? "assets" : targetFromAdapter(options.adapter);
     const content = renderMoeiconsConfigJsonc({ target });
     return {
@@ -49,7 +55,7 @@ export function inspectMoeiconsConfig(options: ConfigAnchorOptions): AnchorResul
     };
   }
 
-  const loaded = readMoeiconsConfig(options.root);
+  const loaded = readMoeiconsConfig(options.root, options.sourceCatalog);
   if (loaded.kind === "ok") {
     return {
       kind: "config",

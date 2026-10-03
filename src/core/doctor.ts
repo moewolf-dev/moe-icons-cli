@@ -4,6 +4,9 @@ import { diagnoseProject, type DiagnoseOutcome } from "../project/anchors/diagno
 import { applyPlannedChanges } from "../project/anchors/apply.js";
 import { withProjectLockSync } from "../project/project-lock.js";
 import type { DiagnosticReport, PlannedFileChange } from "../project/anchors/types.js";
+import { loadInstalledCatalogState } from "./generate.js";
+import type { IconCatalog } from "../catalog/catalog.js";
+import type { Target } from "../commands/parser.js";
 
 export type DoctorMode = "diagnose" | "check" | "dry-run" | "apply";
 
@@ -25,8 +28,8 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 /** Read-only four-anchor diagnosis. Never writes. */
-export function runDoctorDiagnose(cwd: string): DiagnoseOutcome {
-  return diagnoseProject({ cwd });
+export function runDoctorDiagnose(cwd: string, sourceCatalog?: IconCatalog): DiagnoseOutcome {
+  return diagnoseProject({ cwd, sourceCatalog: sourceCatalog ?? diagnosticCatalog(cwd) });
 }
 
 /** Human-readable table (manifest + config always shown). */
@@ -108,9 +111,16 @@ export function checkRequiresFix(report: DiagnosticReport): boolean {
   );
 }
 
+function diagnosticCatalog(cwd: string): IconCatalog | undefined {
+  const state = loadInstalledCatalogState(cwd, { readFileSync, existsSync });
+  if (state.status === "invalid") throw new Error(state.message);
+  return state.status === "ok" ? state.catalog : undefined;
+}
+
 /** Build the complete init plan (config create + application + style fixes). */
-export function buildInitPlan(cwd: string): { readonly outcome: DiagnoseOutcome } {
-  return { outcome: diagnoseProject({ cwd }) };
+export function buildInitPlan(cwd: string, target?: Target, confirmed?: { adapter?: string; entry?: string; style?: string }, sourceCatalog?: IconCatalog): { readonly outcome: DiagnoseOutcome } {
+  const adapter = confirmed?.adapter ?? (target === "vue" ? "vite-vue" : target === "react" ? "vite-react" : target === "vanilla" ? "vanilla" : target === "assets" ? "assets-only" : undefined);
+  return { outcome: diagnoseProject({ cwd, sourceCatalog: sourceCatalog ?? diagnosticCatalog(cwd), ...(adapter ? { confirmed: { ...confirmed, adapter } } : {}) }) };
 }
 
 /** Collect safe planned fixes from a diagnose outcome (already deduped). */

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { parseArgs } from "../src/commands/parser.js";
 import { main } from "../src/cli.js";
 import { CLI_ERROR_EXIT_MAP, type CliErrorCode } from "../src/errors/index.js";
-import { MOEICONS_BANNER } from "../src/ui/banner.js";
+import { CLI_VERSION, MOEICONS_BANNER } from "../src/ui/banner.js";
 
 function makeRuntime(cwd = "/non-existent-project") {
   const out: string[] = [];
@@ -122,8 +122,8 @@ describe("CLI output compatibility contract", () => {
     const json = makeRuntime();
     expect(await main(["--version"], text.runtime)).toBe(0);
     expect(await main(["--version", "--json"], json.runtime)).toBe(0);
-    expect(text.out.join("")).toBe("0.0.1\n");
-    expect(json.out.join("")).toBe('{"ok":true,"version":"0.0.1"}');
+    expect(text.out.join("")).toBe(`${CLI_VERSION}\n`);
+    expect(json.out.join("")).toBe(JSON.stringify({ ok: true, version: CLI_VERSION }));
     expect(text.err).toEqual([]);
     expect(json.err).toEqual([]);
     expect(text.out.join("")).not.toContain("\x1b[");
@@ -165,7 +165,7 @@ describe("CLI output compatibility contract", () => {
     const success = makeRuntime();
     expect(await main(["--version", "--json"], success.runtime)).toBe(0);
     const successBody = JSON.parse(success.out.join("")) as { ok: boolean; version: string };
-    expect(successBody).toEqual({ ok: true, version: "0.0.1" });
+    expect(successBody).toEqual({ ok: true, version: CLI_VERSION });
     expect(success.err).toEqual([]);
     expect(success.out.join("")).not.toMatch(ansi);
     expect(success.out.join("")).not.toContain(MOEICONS_BANNER.trim());

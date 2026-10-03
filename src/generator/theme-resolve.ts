@@ -143,7 +143,8 @@ export const ${wrapperName} = /* @__PURE__ */ defineComponent({
       const alt = typeof attrs.alt === "string" ? attrs.alt : undefined;
       const label = ariaLabel ?? alt ?? (typeof attrs.title === "string" ? attrs.title : undefined);
       const named = Boolean(label || attrs["aria-labelledby"]);
-      const { size: _size, ...imageAttrs } = attrs;
+      const imageAttrs = { ...attrs };
+      delete imageAttrs.size;
       return h("img", {
         ...imageAttrs,
         src: assetUrl,

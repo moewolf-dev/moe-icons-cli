@@ -2,7 +2,7 @@
  * MEDIA-FORMAT-V2: styleGroupId vs resourceVariantId.
  *
  * Canonical variant ids are the actual source directory names:
- * `<styleGroupId>-<imageSize>-<format>` (e.g. `moe-3d-metal-256-webp`). Parsing
+ * `<styleGroupId>-<imageSize>-<format>` (e.g. `example-bitmap-style-256-webp`). Parsing
  * is controlled keyword-token based, never substring based; `3d` is an ordinary
  * token. The legacy `<group ending -3d>-<format>-<size>` form is only readable
  * through the explicit `parseLegacyResourceVariantId` compatibility branch.

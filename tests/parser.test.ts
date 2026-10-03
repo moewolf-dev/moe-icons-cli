@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { parseArgs, HELP_TEXT } from "../src/commands/parser.js";
 import { CliError } from "../src/errors/index.js";
 import { main } from "../src/cli.js";
+import { CLI_VERSION } from "../src/ui/banner.js";
 
 function makeRuntime() {
   const out: string[] = [];
@@ -82,7 +83,7 @@ describe("main", () => {
     const { runtime, out } = makeRuntime();
     const code = await main(["--version"], runtime);
     expect(code).toBe(0);
-    expect(out.join("")).toContain("0.0.1");
+    expect(out.join("")).toContain(CLI_VERSION);
   });
 
   it("returns validation error code for unknown command", async () => {
@@ -101,11 +102,11 @@ describe("main", () => {
     expect(new CliError("TAILWIND_VERSION_UNSUPPORTED", "x").exitCode).toBe(1);
   });
 
-  it("returns 0 for mcp (server started in background)", async () => {
+  it("awaits MCP until transport EOF", async () => {
     const { runtime, out } = makeRuntime();
-    const code = await main(["mcp"], runtime);
+    const code = await main(["mcp"], { ...runtime, mcpLines: (async function* () { yield JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }); })() });
     expect(code).toBe(0);
-    expect(out.length).toBeGreaterThanOrEqual(0);
+    expect(JSON.parse(out.join(""))).toMatchObject({ id: 1, result: {} });
   });
 
   it("install works without a real project (uses cwd fallback is avoided)", async () => {

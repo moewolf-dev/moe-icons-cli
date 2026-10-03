@@ -39,8 +39,8 @@ vi.mock("../src/catalog/catalog.js", async (importOriginal) => {
       }
       return actual.findCatalogStyleGroup(id);
     },
-    findCatalogIcon: (id: string) => {
-      const found = actual.findCatalogIcon(id);
+    findCatalogIcon: (id: string, sourceCatalog?: import("../src/catalog/catalog.js").IconCatalog) => {
+      const found = actual.findCatalogIcon(id, sourceCatalog);
       if (!found) return undefined;
       if (found.availableIn.includes("moe-cute-3d")) return found;
       return { ...found, availableIn: [...found.availableIn, "moe-cute-3d"] };
@@ -179,7 +179,7 @@ describe("bitmap wrapper + asset plan (G4/G5)", () => {
     const sourceCatalog = {
       ...catalog,
       styleGroups: [...catalog.styleGroups, { id: "moe-cute-3d", type: "bitmap" as const, tiers: ["free" as const], formats: ["webp" as const], imageSizes: [256], variants: ["moe-cute-3d-256-webp"] }],
-      icons: catalog.icons.map((icon) => icon.id === "arrow-chevron-bottom-left" ? { ...icon, availableIn: ["moe-cute-3d"] } : icon),
+      icons: [...catalog.icons.filter((icon) => icon.id !== "arrow-chevron-bottom-left"), { id: "arrow-chevron-bottom-left", label: "Chevron bottom left", aliases: [], prefix: "arrow", availableIn: ["moe-cute-3d"] }],
     };
     const files = {
       ...archiveWithBothVariants(),

@@ -1,221 +1,97 @@
-/**
- * Minimal MCP (Model Context Protocol) stdio server. Registers only v1 tools:
- * list_icon_groups, get_account, install_icon_group. Protocol data goes only
- * to stdout; logs go to stderr. Graceful shutdown on SIGINT/SIGTERM.
- */
-
+/** Local, newline-delimited MCP transport. Business failures are tool results. */
 import { CLI_VERSION } from "../ui/banner.js";
 
-interface McpRequest {
-  readonly jsonrpc: "2.0";
-  readonly id: number | string;
-  readonly method: string;
-  readonly params?: Record<string, unknown>;
+export interface McpTool {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: Record<string, unknown>;
 }
-
-interface McpResponse {
-  readonly jsonrpc: "2.0";
-  readonly id: number | string;
-  readonly result?: unknown;
-  readonly error?: { code: number; message: string };
-}
-
 export interface McpServices {
-  readonly listIconGroups: () => Promise<readonly { id: string; displayName: string }[]>;
-  readonly getAccount: () => Promise<{ accountId: string; tier: string } | undefined>;
-  readonly installIconGroup: (args: {
-    groupId: string;
-    projectPath: string;
-  }) => Promise<{ ok: boolean; message: string }>;
+  readonly listIconGroups: () => Promise<unknown>;
+  readonly getAccount: () => Promise<unknown>;
+  readonly installIconGroup: (args: { groupId: string; projectPath: string }) => Promise<{ ok: boolean; message: string }>;
+  readonly tools?: readonly McpTool[];
+  readonly callTool?: (name: string, args: Record<string, unknown>) => Promise<unknown>;
 }
-
 export interface McpDeps {
   readonly services: McpServices;
   readonly stdout: (text: string) => void;
   readonly stderr: (text: string) => void;
   readonly signal?: AbortSignal;
+  readonly projectRoot?: string;
 }
-
-function validateArgs(
-  method: string,
-  params: Record<string, unknown> | undefined,
-  required: readonly string[],
-): Record<string, string> | undefined {
-  if (!params) {
-    return undefined;
-  }
-  for (const key of required) {
-    if (typeof params[key] !== "string" || params[key].length === 0) {
-      return undefined;
-    }
-  }
-  const out: Record<string, string> = {};
-  for (const key of required) {
-    out[key] = String(params[key]);
-  }
-  return out;
+interface Response {
+  jsonrpc: "2.0";
+  id: number | string | null;
+  result?: unknown;
+  error?: { code: number; message: string };
 }
-
-/**
- * Create an MCP server bound to injected streams. Returns a dispatcher that
- * handles one decoded JSON-RPC message.
- */
+export class McpArgumentError extends Error {}
+export const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+export function safeMcpValue(value: unknown, projectRoot?: string): unknown {
+  if (typeof value === "string") return (projectRoot ? value.split(projectRoot).join(".") : value).replace(/https?:\/\/[^\s"<>]+\?[^\s"<>]+/g, "[redacted URL]").replace(/(?:\/Users\/|\/home\/)[^/\s]+/g, "[home]");
+  if (Array.isArray(value)) return value.map((entry) => safeMcpValue(entry, projectRoot));
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !/(token|secret|authorization|signedurl|verifier)/i.test(key)).map(([key, entry]) => [key, safeMcpValue(entry, projectRoot)]));
+}
+const objectSchema = (properties: Record<string, unknown> = {}, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
+const legacyTools: readonly McpTool[] = [
+  { name: "list_icon_groups", description: "List available style groups and catalog identity", inputSchema: objectSchema() },
+  { name: "get_account", description: "Read the current account and entitlement without credentials", inputSchema: objectSchema() },
+  { name: "install_icon_group", description: "Deprecated: use configuration and install instead", inputSchema: objectSchema({ groupId: { type: "string" }, projectPath: { type: "string" } }, ["groupId", "projectPath"]) },
+];
 export function createMcpServer(deps: McpDeps) {
-  const handle = async (message: McpRequest): Promise<McpResponse | undefined> => {
-    if (message.jsonrpc !== "2.0") {
-      return { jsonrpc: "2.0", id: message.id, error: { code: -32600, message: "invalid request" } };
+  const tools = deps.services.tools ?? legacyTools;
+  const handle = async (value: unknown): Promise<Response | undefined> => {
+    const id = isRecord(value) && (typeof value.id === "string" || typeof value.id === "number") ? value.id : null;
+    const error = (code: number, message: string): Response => ({ jsonrpc: "2.0", id, error: { code, message } });
+    if (!isRecord(value) || value.jsonrpc !== "2.0" || typeof value.method !== "string" || (value.id !== undefined && id === null)) return error(-32600, "invalid request");
+    if (value.id === undefined) return undefined; // Never respond to notifications.
+    if (value.params !== undefined && !isRecord(value.params)) return error(-32602, "params must be an object");
+    const params = value.params ?? {};
+    if (value.method === "initialize") {
+      const requested = params.protocolVersion;
+      const supported = ["2024-11-05", "2025-03-26", "2025-06-18"];
+      const protocolVersion = typeof requested === "string" && supported.includes(requested) ? requested : "2024-11-05";
+      return { jsonrpc: "2.0", id, result: { protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "moeicons", version: CLI_VERSION } } };
     }
-
-    switch (message.method) {
-      case "initialize":
-        return {
-          jsonrpc: "2.0",
-          id: message.id,
-          result: {
-            protocolVersion: "2024-11-05",
-            capabilities: { tools: {} },
-            serverInfo: { name: "moeicons", version: CLI_VERSION },
-          },
-        };
-      case "tools/list":
-        return {
-          jsonrpc: "2.0",
-          id: message.id,
-          result: {
-            tools: [
-              {
-                name: "list_icon_groups",
-                description: "List available icon groups",
-                inputSchema: { type: "object", properties: {} },
-              },
-              {
-                name: "get_account",
-                description: "Get the current account/tier",
-                inputSchema: { type: "object", properties: {} },
-              },
-              {
-                name: "install_icon_group",
-                description: "Install an icon group into a project",
-                inputSchema: {
-                  type: "object",
-                  properties: {
-                    groupId: { type: "string" },
-                    projectPath: { type: "string" },
-                  },
-                  required: ["groupId", "projectPath"],
-                },
-              },
-            ],
-          },
-        };
-      case "tools/call": {
-        const toolName = message.params?.name;
-        const args = (message.params?.arguments as Record<string, unknown> | undefined) ?? {};
-        try {
-          if (toolName === "list_icon_groups") {
-            const groups = await deps.services.listIconGroups();
-            return {
-              jsonrpc: "2.0",
-              id: message.id,
-              result: { content: [{ type: "text", text: JSON.stringify(groups) }] },
-            };
-          }
-          if (toolName === "get_account") {
-            const account = await deps.services.getAccount();
-            return {
-              jsonrpc: "2.0",
-              id: message.id,
-              result: {
-                content: [
-                  { type: "text", text: account ? JSON.stringify(account) : "not logged in" },
-                ],
-              },
-            };
-          }
-          if (toolName === "install_icon_group") {
-            const validated = validateArgs(toolName, args, ["groupId", "projectPath"]);
-            if (!validated) {
-              return {
-                jsonrpc: "2.0",
-                id: message.id,
-                error: { code: -32602, message: "groupId and projectPath are required strings" },
-              };
-            }
-            const projectPath = validated["projectPath"];
-            const groupId = validated["groupId"];
-            if (!projectPath || !groupId) {
-              return {
-                jsonrpc: "2.0",
-                id: message.id,
-                error: { code: -32602, message: "groupId and projectPath are required strings" },
-              };
-            }
-            if (projectPath.split(/[\\/]/).includes("..")) {
-              return {
-                jsonrpc: "2.0",
-                id: message.id,
-                error: { code: -32602, message: "projectPath must not contain path traversal" },
-              };
-            }
-            const result = await deps.services.installIconGroup({
-              groupId,
-              projectPath,
-            });
-            // AUD-CL-01-R1: a failed tool result MUST be a protocol-level error
-            // (`isError: true`), not an ordinary success carrying `{ok:false}`,
-            // so automated clients never treat it as success.
-            return {
-              jsonrpc: "2.0",
-              id: message.id,
-              result: {
-                content: [{ type: "text", text: JSON.stringify(result) }],
-                ...(result.ok === false ? { isError: true } : {}),
-              },
-            };
-          }
-          return {
-            jsonrpc: "2.0",
-            id: message.id,
-            error: { code: -32601, message: `unknown tool: ${String(toolName)}` },
-          };
-        } catch (error) {
-          deps.stderr(`mcp tool error: ${String(error)}\n`);
-          return {
-            jsonrpc: "2.0",
-            id: message.id,
-            error: { code: -32000, message: String(error) },
-          };
-        }
+    if (value.method === "ping") return { jsonrpc: "2.0", id, result: {} };
+    if (value.method === "tools/list") return { jsonrpc: "2.0", id, result: { tools } };
+    if (value.method !== "tools/call") return error(-32601, `method not found: ${value.method}`);
+    const name = params.name;
+    if (typeof name !== "string" || !tools.some((tool) => tool.name === name)) return error(-32601, "unknown tool");
+    if (params.arguments !== undefined && !isRecord(params.arguments)) return error(-32602, "arguments must be an object");
+    const args = params.arguments ?? {};
+    try {
+      let result: unknown;
+      if (deps.services.callTool) result = await deps.services.callTool(name, args);
+      else if (name === "list_icon_groups") result = await deps.services.listIconGroups();
+      else if (name === "get_account") result = await deps.services.getAccount() ?? "not logged in";
+      else {
+        if (typeof args.groupId !== "string" || !args.groupId || typeof args.projectPath !== "string" || !args.projectPath) throw new McpArgumentError("groupId and projectPath are required strings");
+        if (args.projectPath.split(/[\\/]/).includes("..")) throw new McpArgumentError("projectPath must not contain path traversal");
+        result = await deps.services.installIconGroup({ groupId: args.groupId, projectPath: args.projectPath });
       }
-      default:
-        return { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: `method not found: ${message.method}` } };
+      const safe = safeMcpValue(result, deps.projectRoot);
+      return { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: typeof safe === "string" ? safe : JSON.stringify(safe) }], ...(isRecord(result) && result.ok === false ? { isError: true } : {}) } };
+    } catch (cause) {
+      if (cause instanceof McpArgumentError) return error(-32602, cause.message);
+      const message = String(safeMcpValue(cause instanceof Error ? cause.message : String(cause), deps.projectRoot));
+      deps.stderr(`mcp tool error: ${message}\n`);
+      return { jsonrpc: "2.0", id, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ ok: false, code: isRecord(cause) && typeof cause.code === "string" ? cause.code : "TOOL_ERROR", message }) }] } };
     }
   };
-
   return { handle };
 }
-
-/**
- * Read JSON-RPC messages from an async iterable of lines and write responses to
- * stdout. Used by the stdio transport.
- */
-export async function runMcpStdio(
-  deps: McpDeps & { lines: AsyncIterable<string> },
-): Promise<void> {
+export async function runMcpStdio(deps: McpDeps & { lines: AsyncIterable<string> }): Promise<void> {
   const server = createMcpServer(deps);
   for await (const line of deps.lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    let message: McpRequest;
-    try {
-      message = JSON.parse(trimmed) as McpRequest;
-    } catch {
-      deps.stdout(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } }) + "\n");
-      continue;
-    }
+    if (deps.signal?.aborted) break;
+    if (!line.trim()) continue;
+    let message: unknown;
+    try { message = JSON.parse(line); }
+    catch { deps.stdout(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } }) + "\n"); continue; }
     const response = await server.handle(message);
-    if (response) {
-      deps.stdout(JSON.stringify(response) + "\n");
-    }
+    if (response) deps.stdout(JSON.stringify(response) + "\n");
   }
 }

@@ -70,7 +70,7 @@ describe("planGeneratedFiles", () => {
       ...config,
       icons: ["arrow-chevron-right"],
     };
-    const result = planGeneratedFiles(unavailable, "src/moeicons");
+    const result = planGeneratedFiles(unavailable, "src/moeicons", { catalog: { ...catalog, icons: [...catalog.icons, { id: "arrow-chevron-right", label: "Chevron right", aliases: [], prefix: "arrow", availableIn: ["moe-lite-outline"] }] } });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors.some((error) => error.includes('icon "arrow-chevron-right"'))).toBe(true);

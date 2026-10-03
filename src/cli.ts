@@ -1,3 +1,6 @@
+import type { Target } from "./commands/parser.js";
+import { safeMcpValue } from "./mcp/server.js";
+import { createProjectMcpServices } from "./mcp/services.js";
 import { assertDownloadSelection } from "./core/selected-resources.js";
 import { parseArgs, HELP_TEXT, type Command } from "./commands/parser.js";
 import { CliError, isCliError, jsonErrorBody, type CliErrorCode } from "./errors/index.js";
@@ -91,6 +94,8 @@ export interface CliRuntime {
   readonly readKey?: () => Promise<string>;
   readonly auth?: AuthUseCaseDependencies;
   readonly fetchVersions?: () => Promise<readonly string[]>;
+  readonly signal?: AbortSignal;
+  readonly mcpLines?: AsyncIterable<string>;
 }
 
 function commandContext(
@@ -116,7 +121,7 @@ function commandContext(
     }),
     cwd: runtime.cwd(),
     env: runtime.env,
-    signal: new AbortController().signal,
+    signal: runtime.signal ?? new AbortController().signal,
     now: () => new Date(),
   };
 }
@@ -318,11 +323,11 @@ async function dispatchSync(
       return 0;
     }
     case "init":
-      return await runInit(runtime, json, yes, command.dryRun === true);
+      return await runInit(runtime, json, yes, command.dryRun === true, target);
     case "doctor":
       return runDoctor(runtime, json, command.check === true, command.dryRun === true);
     case "mcp":
-      void runMcp(runtime);
+      await runMcp(runtime);
       return 0;
     case "update":
       return await runUpdate(runtime, json, yes, command.metadata === true);
@@ -604,8 +609,9 @@ async function runInit(
   json: boolean,
   yes: boolean,
   dryRun = false,
+  target?: Target,
 ): Promise<number> {
-  const { outcome } = buildInitPlan(runtime.cwd());
+  const { outcome } = buildInitPlan(runtime.cwd(), target);
   const { report } = outcome;
   const fixes = collectSafeFixes(outcome);
   const manifest = report.anchors.find((a) => a.kind === "manifest");
@@ -629,6 +635,7 @@ async function runInit(
   }
 
   if (fixes.length === 0) {
+    if (report.anchors.some((anchor) => anchor.status === "ambiguous")) throw new CliError("VALIDATION_ERROR", "select --target before initializing this project");
     if (json) writeJson(runtime, { ok: true, alreadyConfigured: true, ...doctorJson(report) });
     else runtime.stdout("already configured\n");
     return 0;
@@ -680,29 +687,31 @@ function runDoctor(runtime: CliRuntime, json: boolean, check: boolean, dryRun: b
  * closed with guidance rather than reporting a fake success.
  */
 export function createMcpServices(runtime: CliRuntime) {
-  return {
-    listIconGroups: () =>
-      Promise.resolve([
-        { id: "free", displayName: "Free icons" },
-        { id: "pro", displayName: "Pro icons" },
-      ]),
-    getAccount: () => Promise.resolve(undefined),
-    installIconGroup: (args: { groupId: string; projectPath: string }) => {
-      runtime.stderr(`install_icon_group is not supported: ${args.groupId}\n`);
-      return Promise.resolve({
-        ok: false,
-        message: `single style-group install is not supported — run "moeicons install free" or "moeicons install pro"`,
-      });
-    },
-  };
+  return createProjectMcpServices(runtime, async (argv) => {
+    let output = "";
+    const status = await main(argv, { ...runtime, isTTY: () => false, stdout: (text) => { output += text; }, stderr: (text) => runtime.stderr(String(safeMcpValue(text)).split(runtime.cwd()).join(".")) });
+    try { return JSON.parse(output) as unknown; }
+    catch { return { ok: false, code: "COMMAND_FAILED", message: `command returned ${status} without a JSON result` }; }
+  });
 }
 
 async function runMcp(runtime: CliRuntime): Promise<void> {
   const { runMcpStdio } = await import("./mcp/server.js");
+  if (runtime.mcpLines) {
+    await runMcpStdio({ services: createMcpServices(runtime), projectRoot: runtime.cwd(), stdout: runtime.stdout, stderr: runtime.stderr, lines: runtime.mcpLines, ...(runtime.signal ? { signal: runtime.signal } : {}) });
+    return;
+  }
   const readline = await import("node:readline");
-  const services = createMcpServices(runtime);
+  const controller = new AbortController();
+  const services = createMcpServices({ ...runtime, signal: controller.signal });
   const rl = readline.createInterface({ input: process.stdin });
-  await runMcpStdio({ services, stdout: runtime.stdout, stderr: runtime.stderr, lines: rl });
+  const stop = () => { controller.abort(); rl.close(); };
+  const eof = () => controller.abort();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  rl.once("close", eof);
+  try { await runMcpStdio({ services, projectRoot: runtime.cwd(), stdout: runtime.stdout, stderr: runtime.stderr, lines: rl, signal: controller.signal }); }
+  finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); rl.removeListener("close", eof); rl.close(); }
 }
 
 function versionString(): string {

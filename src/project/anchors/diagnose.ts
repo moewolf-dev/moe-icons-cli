@@ -1,3 +1,4 @@
+import type { IconCatalog } from "../../catalog/catalog.js";
 import { dirname } from "node:path";
 import type { AnchorResult, DiagnosticReport, PlannedFileChange } from "./types.js";
 import { realDetectorIo, type DetectorIo } from "./helpers.js";
@@ -15,6 +16,7 @@ import { readMoeiconsConfig } from "../config.js";
 
 export interface DiagnoseOptions {
   readonly cwd: string;
+  readonly sourceCatalog?: IconCatalog | undefined;
   readonly io?: DetectorIo;
   /** Confirmed config integration paths, when previously stored in config. */
   readonly confirmed?: { readonly adapter?: string; readonly entry?: string; readonly style?: string };
@@ -64,7 +66,7 @@ export function diagnoseProject(options: DiagnoseOptions): DiagnoseOutcome {
     };
   } else {
     const root = manifest.path ? dirname(manifest.path) : options.cwd;
-    const loaded = readMoeiconsConfig(root);
+    const loaded = readMoeiconsConfig(root, options.sourceCatalog);
     const confirmed = loaded.kind === "ok" ? loaded.config.integration : undefined;
     const effectiveAdapter = options.confirmed?.adapter ?? confirmed?.adapter ?? adapter;
     const confirmedEntry = options.confirmed?.entry ?? confirmed?.entry;
@@ -73,8 +75,10 @@ export function diagnoseProject(options: DiagnoseOptions): DiagnoseOutcome {
     config = inspectMoeiconsConfig({
       root,
       io,
+      sourceCatalog: options.sourceCatalog,
       ...(effectiveAdapter && effectiveAdapter !== "assets-only" ? { adapter: effectiveAdapter } : {}),
       assetsOnly,
+      ambiguous: manifest.evidence.some((line) => line.startsWith("adapter ambiguous:")),
     });
     application = inspectApplicationAnchor({
       root,

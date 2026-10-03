@@ -165,10 +165,9 @@ describe("createMcpServer", () => {
         arguments: { groupId: "free", projectPath: "src/moeicons" },
       },
     });
-    expect(response?.error?.code).toBe(-32000);
-    expect(response?.error?.message).toContain("session expired");
-    // error goes to the log channel, never to the protocol result payload
-    expect(response?.result).toBeUndefined();
+    expect(response?.error).toBeUndefined();
+    expect(response?.result).toMatchObject({ isError: true });
+    expect(JSON.stringify(response?.result)).toContain("session expired");
     expect(log.join("\n")).toContain("session expired");
   });
 
@@ -187,8 +186,9 @@ describe("createMcpServer", () => {
       method: "tools/call",
       params: { name: "list_icon_groups", arguments: {} },
     });
-    expect(response?.error?.code).toBe(-32000);
-    expect(response?.error?.message).toContain("network offline");
+    expect(response?.error).toBeUndefined();
+    expect(response?.result).toMatchObject({ isError: true });
+    expect(JSON.stringify(response?.result)).toContain("network offline");
   });
 });
 

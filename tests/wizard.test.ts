@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { main } from "../src/cli.js";
+import { CLI_VERSION } from "../src/ui/banner.js";
 import { writeFreeReleaseFixture } from "./helpers/free-release-fixture.js";
 
 /**
@@ -88,7 +89,7 @@ describe("wizard TUI (CLI-04)", () => {
     });
     setCwd(dir);
     expect(await main([], runtime)).toBe(0);
-    expect(out.join("")).toContain("Current 0.0.1 / Latest unavailable / Update: unavailable");
+    expect(out.join("")).toContain(`Current ${CLI_VERSION} / Latest unavailable / Update: unavailable`);
   });
 
   it("exits 0 when the user cancels at the menu", async () => {

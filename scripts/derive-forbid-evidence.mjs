@@ -22,10 +22,10 @@ function arg(name) {
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
-export function buildForbidEvidence({ freePath, resourceReleasePath, descriptorPath }) {
+export function buildForbidEvidence({ freePath, resourceReleasePath, descriptorPath, manifestPath }) {
   // AUD-BLOCK-48: a declared but missing input fails closed; never silently
   // produce an empty token set.
-  for (const [label, value] of [["--free", freePath], ["--resource-release", resourceReleasePath], ["--descriptor", descriptorPath]]) {
+  for (const [label, value] of [["--manifest", manifestPath], ["--free", freePath], ["--resource-release", resourceReleasePath], ["--descriptor", descriptorPath]]) {
     if (value && !existsSync(value)) throw new Error(`${label} declared but missing: ${value}`);
   }
   const freeGroups = freePath && existsSync(freePath)
@@ -37,13 +37,16 @@ export function buildForbidEvidence({ freePath, resourceReleasePath, descriptorP
   const descriptor = descriptorPath && existsSync(descriptorPath)
     ? JSON.parse(readFileSync(descriptorPath, "utf8"))
     : undefined;
-  const tokens = deriveForbiddenTokens({ freeGroups, resourceRelease, descriptor });
+  const manifest = manifestPath ? JSON.parse(readFileSync(manifestPath, "utf8")) : undefined;
+  if (manifest && (manifest.schemaVersion !== 1 || !Array.isArray(manifest.styleGroups))) throw new Error("invalid release scan manifest");
+  const tokens = deriveForbiddenTokens({ freeGroups, resourceRelease, descriptor, manifest });
   const canonical = `${JSON.stringify({ schemaVersion: 1, tokens: [...tokens].sort() }, null, 2)}\n`;
   return {
     schemaVersion: 1,
     tokens: [...tokens].sort(),
     sha256: createHash("sha256").update(canonical).digest("hex"),
     sources: {
+      manifest: manifestPath || null,
       free: freePath && existsSync(freePath) ? freePath : null,
       resourceRelease: resourceReleasePath && existsSync(resourceReleasePath) ? resourceReleasePath : null,
       descriptor: descriptorPath && existsSync(descriptorPath) ? descriptorPath : null,
@@ -53,6 +56,7 @@ export function buildForbidEvidence({ freePath, resourceReleasePath, descriptorP
 
 function main() {
   const evidence = buildForbidEvidence({
+    manifestPath: arg("--manifest"),
     freePath: arg("--free"),
     resourceReleasePath: arg("--resource-release"),
     descriptorPath: arg("--descriptor"),

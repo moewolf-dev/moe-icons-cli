@@ -209,3 +209,58 @@ Run `moeicons install free` or `moeicons install pro` after changing the selecte
 Generation works offline from the project's verified installed resources; `moeicons recover` also needs no network. Install/update still consult the fixed descriptor and metadata, and Pro checks current entitlement. A resource cache hit does not bypass authorization, and there is no offline install flag. Corrupt cache entries are rejected and fetched again online. Interrupted downloads retain only verified cache members; project files change in one recoverable transaction after all required resources have verified.
 
 Version queries have a deadline covering both response headers and body, with bounded JSON sizes. Invalid or unavailable version responses make update fail explicitly. Cache cleanup preserves staging files owned by a live process; disk-full and permission failures report actionable errors.
+
+## MCP project integration
+
+Run `moeicons mcp` in the project root containing `package.json`. Use a fixed,
+installed CLI executable in your MCP client's command configuration:
+
+```json
+{
+  "command": "node",
+  "args": ["/absolute/path/to/node_modules/@moewolf/moe-icons-cli/bin/moeicons.js", "mcp"],
+  "cwd": "/absolute/path/to/your/project"
+}
+```
+
+The client must support a working directory for subprocesses. The server uses
+stdio and needs no port. Log in with `moeicons login` outside the MCP server;
+never place credentials in client configuration or browser source code.
+
+Use `init_config` (explicit `target: "vue"` for mixed-framework projects), then
+`get_project_config` to obtain the current config hash. `list_icon_groups` and
+`find_icons` expose installed, verified catalog data when available; bundled
+results are identified separately. Call `update_config` with `expectedHash` and
+an explicit patch, `install` with the configured tier, then `generate`.
+`update` updates icon resources, not the CLI executable. Changes to selection
+require resource reconciliation before generation. Read `get_usage_guide` and
+the installed manual before editing application code.
+
+For example, add or remove selections without replacing the whole config:
+
+```json
+{
+  "expectedHash": "<hash from get_project_config>",
+  "patch": {
+    "icons": { "add": ["dashboard"], "remove": ["weather-sun"] }
+  },
+  "dryRun": true
+}
+```
+
+Review the dry-run diff, then call with `dryRun: false`. If the config changed,
+read it again and revise the patch. Generated files are owned by the generator:
+import their named exports rather than editing them. Install the runtime
+`clsx` and a `tailwind-merge` version compatible with your Tailwind version.
+For Vue, put `MoeiconsProvider` around all consuming components and bind its
+`theme` to an exact configured theme key. Give decorative icons `aria-hidden`
+and bitmap icons empty `alt`; icon-only controls require accessible labels.
+Custom application bootstrap can require manual Provider placement; doctor
+reports unsupported shapes rather than certifying them automatically.
+
+Available tools: `list_icon_groups`, `get_account`, `get_project_config`,
+`find_icons`, `get_usage_guide`, `init_config`, `update_config`, `install`,
+`update`, and `generate`. The legacy `install_icon_group` tool remains an
+explicit unsupported operation with migration guidance. Tool failures use
+`isError`; malformed protocol arguments use JSON-RPC errors. The server binds
+all operations to one project root and does not expose arbitrary shell commands.

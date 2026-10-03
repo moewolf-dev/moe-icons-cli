@@ -21,6 +21,7 @@ const DEFAULT_FREE_GROUPS = ["moe-colored", "moe-lite-outline", "moe-outline", "
 export function deriveForbiddenTokens({ manifest, descriptor, freeGroups = DEFAULT_FREE_GROUPS, resourceRelease }) {
   const tokens = new Set();
   const isFree = (id) => freeGroups.includes(id);
+  if (manifest && manifest.proArtifactSha256) tokens.add(manifest.proArtifactSha256);
   const groups = manifest && Array.isArray(manifest.styleGroups) ? manifest.styleGroups : [];
   for (const group of groups) {
     if (!group || isFree(group.id)) continue;

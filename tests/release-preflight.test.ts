@@ -12,7 +12,8 @@ import { checkVersionPublished } from "../scripts/release-preflight.mjs";
  */
 
 const script = resolve("scripts/release-preflight.mjs");
-const PACKAGE_VERSION = "0.0.1";
+import packageJson from "../package.json" with { type: "json" };
+const PACKAGE_VERSION = packageJson.version;
 
 describe("release-preflight", () => {
   describe("checkVersionPublished (mock fetch)", () => {

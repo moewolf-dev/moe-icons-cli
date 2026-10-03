@@ -200,7 +200,7 @@ jobs:
         run: |
           set -euo pipefail
           tgz="$(node -e "const a=require('$RUNNER_TEMP/pack.json');process.stdout.write(a[0].filename)")"
-          EVIDENCE_ARGS=(--free vendor/moe-icons-release-policy/free-style-groups.v1.json)
+          EVIDENCE_ARGS=(--free vendor/moe-icons-release-policy/free-style-groups.v1.json --manifest vendor/moe-icons-release-scan/pro-manifest.json)
           if [ -f src/catalog/resource-release.json ]; then
             EVIDENCE_ARGS+=(--resource-release src/catalog/resource-release.json)
           fi
