@@ -490,6 +490,14 @@ jobs:
           node scripts/scan-bundle.mjs --tgz "$tgz" \
             --forbid-file candidate/forbid-evidence.json \
             --forbid-prefix "moe-3d-metal"
+      - name: Checkout exact publisher tools for immutable-candidate recovery
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: .tmp/publisher-tools
+          persist-credentials: false
+          sparse-checkout: scripts/ensure-release-tag.mjs
+          sparse-checkout-cone-mode: false
       - name: Create or reuse draft Release and upload the candidate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -499,7 +507,7 @@ jobs:
           PAYLOAD_HASH: ${{ needs.recover.outputs.payload_hash || needs.decide.outputs.payload_hash }}
         run: |
           set -euo pipefail
-          node scripts/ensure-release-tag.mjs
+          node .tmp/publisher-tools/scripts/ensure-release-tag.mjs
           if gh release view "$TAG" >/dev/null 2>&1; then
             is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
             test "$is_draft" = "true" || { echo "$TAG is already published" >&2; exit 1; }
@@ -508,7 +516,7 @@ jobs:
             gh release create "$TAG" --draft --target "${{ needs.recover.outputs.cli_commit || needs.pack.outputs.cli_commit }}" --title "$TAG" --notes "sha256: $EXPECTED_SHA\npayloadHash: $PAYLOAD_HASH"
           fi
           # Verify the tag target even on rerun.
-          node scripts/ensure-release-tag.mjs
+          node .tmp/publisher-tools/scripts/ensure-release-tag.mjs
           if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -q '\.tgz$'; then
             gh release upload "$TAG" "$tgz"
           fi
