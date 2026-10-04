@@ -303,7 +303,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/candidate"
           npm pack --pack-destination "$RUNNER_TEMP/candidate" --json > "$RUNNER_TEMP/pack.json"
           tgz="$(node -e "const a=require('$RUNNER_TEMP/pack.json');process.stdout.write(a[0].filename)")"
-          sha="$(shasum -a 256 "$RUNNER_TEMP/candidate/$tgz" | awk '{print $1}')"
+          sha="$(sha256sum "$RUNNER_TEMP/candidate/$tgz" | awk '{print $1}')"
           echo "tgz=$RUNNER_TEMP/candidate/$tgz" >> "$GITHUB_OUTPUT"
           echo "candidate_sha=$sha" >> "$GITHUB_OUTPUT"
       # FIX-26-D: scan the actual npm pack tgz for Pro group names/digests before
@@ -320,7 +320,7 @@ jobs:
             EVIDENCE_ARGS+=(--descriptor "$MOE_ICONS_PRO_DESCRIPTOR")
           fi
           node scripts/derive-forbid-evidence.mjs "${EVIDENCE_ARGS[@]}" --out "$RUNNER_TEMP/candidate/forbid-evidence.json"
-          (cd "$RUNNER_TEMP/candidate" && shasum -a 256 forbid-evidence.json > forbid-evidence.json.sha256)
+          (cd "$RUNNER_TEMP/candidate" && sha256sum forbid-evidence.json > forbid-evidence.json.sha256)
           node scripts/scan-bundle.mjs \
             --tgz "$RUNNER_TEMP/candidate/$tgz" \
             --forbid-file "$RUNNER_TEMP/candidate/forbid-evidence.json" \

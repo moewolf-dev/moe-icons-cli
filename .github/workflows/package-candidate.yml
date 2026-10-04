@@ -88,7 +88,7 @@ jobs:
           mkdir -p .artifacts
           npm pack --json --pack-destination .artifacts > .artifacts/npm-pack.json
           TGZ="$(node -e "const p=require('./.artifacts/npm-pack.json');process.stdout.write(p[0].filename)")"
-          SHA="$(shasum -a 256 ".artifacts/$TGZ" | cut -d ' ' -f 1)"
+          SHA="$(sha256sum ".artifacts/$TGZ" | cut -d ' ' -f 1)"
           VERSION="$(node -p "require('./package.json').version")"
           node -e "const fs=require('fs');fs.writeFileSync('.artifacts/candidate.json',JSON.stringify({schemaVersion:1,commit:process.env.GITHUB_SHA,version:process.argv[1],tarball:process.argv[2],sha256:process.argv[3]},null,2)+'\n')" "$VERSION" "$TGZ" "$SHA"
           test -f ".artifacts/$TGZ"
