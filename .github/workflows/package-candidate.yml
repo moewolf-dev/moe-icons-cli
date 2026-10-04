@@ -68,6 +68,11 @@ jobs:
         run: node scripts/verify-svg-model.mjs
         env:
           MOEICONS_SVG_MODEL_REPO: ${{ github.workspace }}/svg-model-source
+      - name: Prepare pinned pnpm invocation tool
+        run: |
+          root="$RUNNER_TEMP/cli-pnpm-${GITHUB_RUN_ID}-${GITHUB_JOB}-${GITHUB_RUN_ATTEMPT}"
+          npm install --prefix "$root" --no-save --no-audit --no-fund pnpm@10.17.1
+          echo "$root/node_modules/.bin" >> "$GITHUB_PATH"
       - run: npm ci
       # AUD-BLOCK-02: prove the vendored contract matches the pinned public commit.
       - run: npm run policy:verify-remote

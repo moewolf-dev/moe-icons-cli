@@ -67,6 +67,27 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
+      - name: Resolve exact config contract authority
+        id: config-authority
+        run: echo "sha=$(node -p 'require("./src/config-package/generated/SOURCE.json").sourceCommit')" >> "$GITHUB_OUTPUT"
+      - name: Checkout exact config contract authority
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: moewolf-dev/moe-icons-code-library
+          ref: ${{ steps.config-authority.outputs.sha }}
+          token: ${{ secrets.CODE_LIBRARY_READ_TOKEN }}
+          path: .tmp/config-contract-fixture
+          persist-credentials: false
+          sparse-checkout: config-package
+      - name: Require config authority checks instead of skipping them
+        run: |
+          test -f .tmp/config-contract-fixture/config-package/src/render-config.cjs
+          echo "MOEICONS_CODE_LIBRARY_REPO=$GITHUB_WORKSPACE/.tmp/config-contract-fixture" >> "$GITHUB_ENV"
+      - name: Prepare pinned pnpm invocation tool
+        run: |
+          root="$RUNNER_TEMP/cli-pnpm-${GITHUB_RUN_ID}-${GITHUB_JOB}-${GITHUB_RUN_ATTEMPT}"
+          npm install --prefix "$root" --no-save --no-audit --no-fund pnpm@10.17.1
+          echo "$root/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Validate without publishing
         run: |
           set -euo pipefail
@@ -207,6 +228,27 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+      - name: Resolve exact config contract authority
+        id: config-authority
+        run: echo "sha=$(node -p 'require("./src/config-package/generated/SOURCE.json").sourceCommit')" >> "$GITHUB_OUTPUT"
+      - name: Checkout exact config contract authority
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: moewolf-dev/moe-icons-code-library
+          ref: ${{ steps.config-authority.outputs.sha }}
+          token: ${{ secrets.CODE_LIBRARY_READ_TOKEN }}
+          path: .tmp/config-contract-fixture
+          persist-credentials: false
+          sparse-checkout: config-package
+      - name: Require config authority checks instead of skipping them
+        run: |
+          test -f .tmp/config-contract-fixture/config-package/src/render-config.cjs
+          echo "MOEICONS_CODE_LIBRARY_REPO=$GITHUB_WORKSPACE/.tmp/config-contract-fixture" >> "$GITHUB_ENV"
+      - name: Prepare pinned pnpm invocation tool
+        run: |
+          root="$RUNNER_TEMP/cli-pnpm-${GITHUB_RUN_ID}-${GITHUB_JOB}-${GITHUB_RUN_ATTEMPT}"
+          npm install --prefix "$root" --no-save --no-audit --no-fund pnpm@10.17.1
+          echo "$root/node_modules/.bin" >> "$GITHUB_PATH"
       # R-P0-3: recover an existing release commit, or freeze+commit LOCALLY.
       # The push happens only after the candidate builds/tests/packs.
       - name: Recover or create the frozen release commit

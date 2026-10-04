@@ -1,3 +1,4 @@
+import { catalog, findCatalogStyleGroup } from "../src/catalog/catalog.js";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -214,15 +215,22 @@ describe("readMoeiconsConfig / mergeMoeiconsConfig", () => {
   it("rejects tier elevation — free config with pro-only style group", () => {
     writeConfig(dir, {
       tier: "free",
-      themes: { colored: { styleGroup: "moe-colored" } }, // moe-colored is pro-only
-      defaultTheme: "colored",
+      themes: { private: { styleGroup: "test-pro-only" } },
+      defaultTheme: "private",
     });
-    const result = readMoeiconsConfig(dir);
+    // Public release catalogs contain Free groups. Tier enforcement uses the
+    // verified runtime catalog, so exercise an explicit Pro-only fixture.
+    const scopedCatalog = { ...catalog, styleGroups: [...catalog.styleGroups,
+      { ...findCatalogStyleGroup("moe-outline")!, id: "test-pro-only", tiers: ["pro"] as const },
+    ] };
+    const result = readMoeiconsConfig(dir, scopedCatalog);
     expect(result.kind).toBe("invalid");
     if (result.kind === "invalid") {
-      expect(result.message).toContain("moe-colored");
+      expect(result.message).toContain("test-pro-only");
       expect(result.message).toContain("free");
     }
+    writeConfig(dir, { tier: "pro", themes: { private: { styleGroup: "test-pro-only" } }, defaultTheme: "private" });
+    expect(readMoeiconsConfig(dir, scopedCatalog).kind).toBe("ok");
   });
 
   it("rejects an unknown icon id", () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import freePolicy from "../vendor/moe-icons-release-policy/free-style-groups.v1.json" with { type: "json" };
 import { catalog, findCatalogIcon, findCatalogStyleGroup, parseCatalog } from "../src/catalog/catalog.js";
 
 describe("bundled catalog", () => {
@@ -11,7 +12,8 @@ describe("bundled catalog", () => {
       [...catalog.styleGroups].map((group) => group.id).sort(),
     );
     expect(findCatalogStyleGroup("moe-outline")?.tiers).toEqual(["free", "pro"]);
-    expect(findCatalogStyleGroup("moe-colored")?.tiers).toEqual(["pro"]);
+    expect(catalog.styleGroups.map((group) => group.id)).toEqual([...freePolicy.freeStyleGroups].sort());
+    expect(catalog.styleGroups.every((group) => group.tiers.includes("free"))).toBe(true);
   });
 
   it("indexes complete icon IDs and their availability", () => {
