@@ -14,7 +14,9 @@ moeicons logout             clear local session
 moeicons account            show account/tier info
 moeicons groups             list available icon groups
 moeicons generate           generate target-specific project files
-moeicons init               create moeicons.config.json
+moeicons doctor --check     check configuration and integration
+moeicons recover            recover an interrupted transaction
+moeicons init               create moeicons.config.jsonc
 moeicons update metadata    sync MANUAL.md/catalog.json/manifest.json only
 moeicons update             full code + metadata update
 moeicons mcp                start the MCP stdio server
@@ -30,10 +32,10 @@ link instead of a `SyntaxError` if the runtime is too old.
 
 Primary development and CI use Node 24. See https://nodejs.org/en/about/eol
 
-**Platforms (first release candidate):** Linux x64 and macOS ARM64 are covered
-by CI on Node 22/24. **Windows is not certified** yet (explicit release
-exception); do not assume Windows package/bin/PATH works until a dedicated
-runner validates it.
+**Platforms:** Linux x64 and macOS ARM64 use Node 22/24 in CI. Windows x64
+verification covers Node 22/24, npm/pnpm, Free React/Vue core commands,
+production builds and interrupted-write recovery. Windows Pro authentication
+and interactive terminal/PTY behavior are outside this verified scope.
 
 ## Framework support
 
@@ -42,9 +44,13 @@ runner validates it.
 | Vite React / Vite Vue | Generated local proxies; use `init` → `install` → `generate` |
 | Tailwind CSS 3 | Content glob added to a supported static config |
 | Tailwind CSS 4 or no Tailwind | Core icon dimensions work without a Tailwind config rewrite |
-| Next App Router / Nuxt | Manual integration; automatic root wrapping and production image behavior are not certified |
+| Next App Router / Nuxt SSR | Generated local components verified with single/multiple themes, production server rendering and browser hydration |
 | Vanilla DOM | SVG factories and project runtime; bitmap style groups are unavailable |
-| Windows | Not certified; use a tested macOS or Linux environment for release builds |
+| Windows x64 | Free React/Vue core flow verified on Node 22/24 with npm/pnpm |
+
+Next Pages Router and custom Nuxt modules require their own integration checks.
+Custom bootstrap shapes can require manual Provider placement; `doctor --check`
+reports unsupported integration shapes.
 
 ## First run
 
@@ -177,7 +183,7 @@ metadata-only sync, and authenticated Pro pre-download/update.
 
 ### Download modes and resource selection
 
-Set `downloadMode` in `moeicons.config.json` (schemaVersion 3):
+Set `downloadMode` in `moeicons.config.jsonc` (schemaVersion 3):
 
 ```json
 {
