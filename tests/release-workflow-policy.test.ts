@@ -95,6 +95,18 @@ describe("CLI single version owner", () => {
     expect(pinWorkflow).toContain('test "$live" = "$pushed"');
   });
 
+  it("continues validated identical pins while excluding blocked and dry-run events", () => {
+    for (const name of ["Write the pin receipt", "Upload the pin receipt", "Dispatch guarded OIDC publisher for the exact pushed pin"]) {
+      const block = pinWorkflow.split(`- name: ${name}`)[1]?.split("\n      - ")[0];
+      expect(block).toContain("steps.apply.outputs.action == 'skip'");
+      expect(block).toContain("steps.switch.outputs.blocked == '0'");
+      expect(block).toContain("steps.dispatchcheck.outputs.write_allowed == '1'");
+      expect(block).toContain("github.event_name == 'repository_dispatch'");
+    }
+    const commit = pinWorkflow.split("- name: Plan and optionally commit pin bump")[1]?.split("\n      - ")[0];
+    expect(commit).not.toContain("steps.apply.outputs.action == 'skip'");
+  });
+
   it("resource-pin uploads a receipt with the exact pushed commit (P1)", () => {
     expect(pinWorkflow).toMatch(/cli-pin-receipt\.json/);
     expect(pinWorkflow).toMatch(/name:\s*cli-resource-pin-receipt-/);
