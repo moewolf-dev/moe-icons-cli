@@ -55,6 +55,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Checkout immutable shared contract fixture authority
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: moewolf-dev/moe-icons-package-maker
+          ref: 26cbe1f04ebb4c29419cd99b9e8a5c3df2a356c2
+          path: .tmp/shared-contract-fixture
+          persist-credentials: false
+      - name: Require shared fixture checks instead of skipping them
+        run: echo "MOEICONS_PACKAGE_MAKER_REPO=$GITHUB_WORKSPACE/.tmp/shared-contract-fixture" >> "$GITHUB_ENV"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
@@ -185,6 +194,15 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+      - name: Checkout immutable shared contract fixture authority
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: moewolf-dev/moe-icons-package-maker
+          ref: 26cbe1f04ebb4c29419cd99b9e8a5c3df2a356c2
+          path: .tmp/shared-contract-fixture
+          persist-credentials: false
+      - name: Require shared fixture checks instead of skipping them
+        run: echo "MOEICONS_PACKAGE_MAKER_REPO=$GITHUB_WORKSPACE/.tmp/shared-contract-fixture" >> "$GITHUB_ENV"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
