@@ -23,6 +23,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: moewolf-dev/moe-icons-package-maker
+          ref: 26cbe1f04ebb4c29419cd99b9e8a5c3df2a356c2
           path: moe-icons-package-maker
           persist-credentials: false
       - name: Resolve vendored config source commit
