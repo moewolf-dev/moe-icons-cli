@@ -12,7 +12,6 @@ moeicons install [group]    install an icon group (free | pro)
 moeicons login              browser login (PKCE)
 moeicons logout             clear local session
 moeicons account            show account/tier info
-moeicons groups             list available icon groups
 moeicons generate           generate target-specific project files
 moeicons doctor --check     check configuration and integration
 moeicons recover            recover an interrupted transaction
