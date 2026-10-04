@@ -499,10 +499,7 @@ jobs:
           PAYLOAD_HASH: ${{ needs.recover.outputs.payload_hash || needs.decide.outputs.payload_hash }}
         run: |
           set -euo pipefail
-          target="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$TAG" --jq '.object.sha' 2>/dev/null || true)"
-          if [ -z "$target" ]; then
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$CLI_COMMIT" >/dev/null
-          fi
+          node scripts/ensure-release-tag.mjs
           if gh release view "$TAG" >/dev/null 2>&1; then
             is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
             test "$is_draft" = "true" || { echo "$TAG is already published" >&2; exit 1; }
@@ -511,8 +508,7 @@ jobs:
             gh release create "$TAG" --draft --target "${{ needs.recover.outputs.cli_commit || needs.pack.outputs.cli_commit }}" --title "$TAG" --notes "sha256: $EXPECTED_SHA\npayloadHash: $PAYLOAD_HASH"
           fi
           # Verify the tag target even on rerun.
-          target="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/$TAG" --jq '.object.sha' 2>/dev/null || true)"
-          test "$target" = "${{ needs.recover.outputs.cli_commit || needs.pack.outputs.cli_commit }}" || { echo "tag $TAG target $target != $CLI_COMMIT" >&2; exit 1; }
+          node scripts/ensure-release-tag.mjs
           if ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -q '\.tgz$'; then
             gh release upload "$TAG" "$tgz"
           fi
