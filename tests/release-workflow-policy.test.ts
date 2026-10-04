@@ -86,6 +86,15 @@ describe("CLI single version owner", () => {
     expect(pinWorkflow).not.toMatch(/for resources/);
   });
 
+  it("dispatches the guarded OIDC publisher after uploading the exact pin receipt", () => {
+    const upload = pinWorkflow.indexOf("name: Upload the pin receipt");
+    const dispatch = pinWorkflow.indexOf("name: Dispatch guarded OIDC publisher");
+    expect(dispatch).toBeGreaterThan(upload);
+    expect(pinWorkflow).toMatch(/actions: write/);
+    expect(pinWorkflow).toMatch(/npm_auth_mode=oidc -f dry_run=false -f break_glass=PUBLISH/);
+    expect(pinWorkflow).toContain('test "$live" = "$pushed"');
+  });
+
   it("resource-pin uploads a receipt with the exact pushed commit (P1)", () => {
     expect(pinWorkflow).toMatch(/cli-pin-receipt\.json/);
     expect(pinWorkflow).toMatch(/name:\s*cli-resource-pin-receipt-/);

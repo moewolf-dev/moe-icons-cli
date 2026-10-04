@@ -44,7 +44,7 @@ on:
 
 permissions:
   contents: write
-  actions: read
+  actions: write
   issues: write
 
 concurrency:
@@ -203,8 +203,7 @@ jobs:
           node scripts/plan-resource-pin-commit.mjs --resource-version "$VERSION" > "$RUNNER_TEMP/pin-commit.json"
           MSG="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).commitMessage)" "$RUNNER_TEMP/pin-commit.json")"
           # CLI-version-owner: pin only updates the resource files; the patch
-          # bump happens exactly once in Publish CLI (this commit's push triggers
-          # it). Staging package.json here caused a double increment.
+          # bump happens exactly once in the explicitly dispatched Publish CLI. Staging package.json here caused a double increment.
           git config user.name "moe-icons-release-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/catalog/catalog.json src/catalog/resource-release.json
@@ -244,6 +243,21 @@ jobs:
           path: ${{ runner.temp }}/pin-receipt/cli-pin-receipt.json
           if-no-files-found: error
           retention-days: 1
+
+      # A GITHUB_TOKEN push cannot trigger a push workflow. Dispatch the existing
+      # guarded OIDC publisher after the pin receipt exists; do not wait here,
+      # because both workflows share cli-auto-release concurrency.
+      - name: Dispatch guarded OIDC publisher for the exact pushed pin
+        if: steps.apply.outputs.action == 'apply' && steps.switch.outputs.blocked == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pushed="$(git rev-parse HEAD)"
+          live="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          test "$live" = "$pushed" || { echo "main drifted after resource pin; refusing publisher dispatch" >&2; exit 1; }
+          gh workflow run publish.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f npm_auth_mode=oidc -f dry_run=false -f break_glass=PUBLISH
 
       - name: Dry-run / blocked conclusion
         if: steps.switch.outputs.blocked == '1'
