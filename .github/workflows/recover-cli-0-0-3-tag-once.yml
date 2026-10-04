@@ -20,11 +20,12 @@ jobs:
           node-version: 24
       - name: Verify the already accepted immutable candidate and create only its missing exact tag
         env:
+          RELEASE_ENABLED: ${{ vars.MOEICONS_AUTO_RELEASE_ENABLED }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_WRITE_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(gh api repos/moewolf-dev/moe-icons-cli/actions/variables/MOEICONS_AUTO_RELEASE_ENABLED --jq .value)" = true
+          test "$RELEASE_ENABLED" = true
           node --input-type=module <<'JS'
           import assert from 'node:assert/strict';import fs from 'node:fs';import {join} from 'node:path';import {createHash} from 'node:crypto';import {execFileSync} from 'node:child_process';
           import {verifyRecoveryIdentity} from './scripts/recover-candidate.mjs';import {ensureReleaseTag} from './scripts/ensure-release-tag.mjs';
