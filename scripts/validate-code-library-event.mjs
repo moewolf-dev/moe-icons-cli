@@ -31,13 +31,33 @@ function sortedList(values) {
   return [...values].sort();
 }
 
+function parseVariantId(id) {
+  const tokens = String(id).split('-');
+  const format = tokens.at(-1);
+  const imageSize = Number(tokens.at(-2));
+  const styleGroupId = tokens.slice(0, -2).join('-');
+  if (!/^moe-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(styleGroupId)) return undefined;
+  if (!['png', 'webp'].includes(format) || ![128, 256, 512].includes(imageSize)) return undefined;
+  return { styleGroupId, format, imageSize };
+}
+
 function batchForVariants(variantIds) {
   const normalized = sortedList(variantIds);
   for (const [batchId, expected] of BITMAP_BATCHES) {
     const want = sortedList(expected);
     if (normalized.length === want.length && normalized.every((id, index) => id === want[index])) return batchId;
   }
-  return undefined;
+  const byGroup = new Map();
+  for (const id of normalized) {
+    const parsed = parseVariantId(id);
+    if (!parsed) return undefined;
+    if (!byGroup.has(parsed.styleGroupId)) byGroup.set(parsed.styleGroupId, new Set());
+    byGroup.get(parsed.styleGroupId).add(`${parsed.imageSize}-${parsed.format}`);
+  }
+  const complete = ['128-png', '128-webp', '256-png', '256-webp', '512-png', '512-webp'];
+  return byGroup.size > 0 && [...byGroup.values()].every((variants) => complete.every((id) => variants.has(id)))
+    ? 'bitmap-wave-3'
+    : undefined;
 }
 
 /** DEV-20-01: validate the nested entitlement binding. */
@@ -72,10 +92,11 @@ export function validateEventBinding(raw) {
     if (!Array.isArray(batch.styleGroupIds) || batch.styleGroupIds.length === 0) throw new Error("invalid binding bitmapBatch.styleGroupIds");
     if (!Array.isArray(batch.variantIds) || batch.variantIds.length === 0) throw new Error("invalid binding bitmapBatch.variantIds");
     const styleGroupIds = sortedList(batch.styleGroupIds.map((value) => String(value)));
-    if (styleGroupIds.length !== 1 || styleGroupIds[0] !== BITMAP_GROUP_ID) {
-      throw new Error(`binding bitmapBatch.styleGroupIds must be exactly ${BITMAP_GROUP_ID}`);
-    }
     const variantIds = sortedList(batch.variantIds.map((value) => String(value)));
+    const derivedGroups = sortedList([...new Set(variantIds.map((id) => parseVariantId(id)?.styleGroupId).filter(Boolean))]);
+    if (styleGroupIds.length !== derivedGroups.length || styleGroupIds.some((id, index) => id !== derivedGroups[index])) {
+      throw new Error("binding bitmapBatch.styleGroupIds do not match variantIds");
+    }
     const expectedBatchId = batchForVariants(variantIds);
     if (!expectedBatchId) throw new Error(`binding bitmapBatch.variantIds do not match a frozen C1/C2/C3 set: ${variantIds.join(",")}`);
     if (String(batch.batchId) !== expectedBatchId) {
