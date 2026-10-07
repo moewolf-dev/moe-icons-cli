@@ -7,7 +7,8 @@ export function verifyRecoveryIdentity({run,jobs,pkg,manifest,sha,repository,run
   if (String(run.id)!==String(runId)||run.repository?.full_name!==repository||run.head_branch!=='main'||run.path!=='.github/workflows/publish.yml'||run.status!=='completed'||run.conclusion!=='failure') throw Error('not a failed main publish workflow from this repository');
   if (jobs.total_count>100) throw Error('job history exceeds verified page');
   const successful=name=>jobs.jobs.filter(j=>j.name===name&&j.status==='completed'&&j.conclusion==='success').sort((a,b)=>b.id-a.id)[0];
-  if (!successful('pack')||!successful('validate')||!successful('acceptance')) throw Error('original complete validation, pack and acceptance required');
+  // Push releases validate inside pack; only manual entrypoints have a validate job.
+  if (!successful('pack')||!successful('acceptance')||(run.event!=='push'&&!successful('validate'))) throw Error('original complete pack, acceptance and manual-entry validation required');
   const publish=jobs.jobs.filter(j=>j.name==='publish').sort((a,b)=>b.id-a.id)[0];
   if (publish?.conclusion!=='failure') throw Error('only failed publication can resume');
   if (pkg.name!=='@moewolf/moe-icons-cli'||!/^\d+\.\d+\.\d+$/.test(pkg.version)||! /^[a-f0-9]{64}$/.test(pkg.payloadHash??'')) throw Error('invalid frozen package identity');

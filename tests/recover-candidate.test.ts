@@ -6,6 +6,8 @@ describe('immutable publish recovery',()=>{
  it('accepts only a previously accepted frozen candidate',()=>expect(verifyRecoveryIdentity(valid()).version).toBe('0.0.2'));
  it.each(['repository','head_branch','path','status','conclusion'])('rejects wrong run %s',key=>{const x=valid();(x.run as Record<string,unknown>)[key]='wrong';expect(()=>verifyRecoveryIdentity(x)).toThrow();});
  it('rejects absent acceptance and a newer publication state',()=>{const x=valid();x.jobs.jobs[2]!.conclusion='failure';expect(()=>verifyRecoveryIdentity(x)).toThrow();});
+ it('recovers an automatic push whose pack includes validation and rejects a missing pack',()=>{const x=valid();Object.assign(x.run,{event:'push'});x.jobs.jobs=x.jobs.jobs.filter(j=>j.name!=='validate');expect(verifyRecoveryIdentity(x).version).toBe('0.0.2');x.jobs.jobs=x.jobs.jobs.filter(j=>j.name!=='pack');expect(()=>verifyRecoveryIdentity(x)).toThrow();});
+ it('still requires the explicit validation job for manual runs',()=>{const x=valid();Object.assign(x.run,{event:'workflow_dispatch'});x.jobs.jobs=x.jobs.jobs.filter(j=>j.name!=='validate');expect(()=>verifyRecoveryIdentity(x)).toThrow();});
  it('rejects changed candidate bytes and version',()=>{const x=valid();x.sha='c'.repeat(64);expect(()=>verifyRecoveryIdentity(x)).toThrow();x.sha='b'.repeat(64);x.pkg.version='0.0.3';expect(()=>verifyRecoveryIdentity(x)).toThrow();});
 });
 
