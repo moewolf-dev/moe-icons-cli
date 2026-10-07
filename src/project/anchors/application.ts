@@ -135,14 +135,14 @@ function planViteReact(source: string, rel: string, specifier: string): AnchorRe
       fixes: [],
     };
   }
-  const { childStart, childEnd } = root;
+  const { childStart, childEnd, jsx } = root;
   const child = source.slice(childStart, childEnd);
   if (binding && new RegExp(`^\\s*<${escapeRegExp(binding)}(?:\\s|>)`).test(child)) {
     return { kind: "application", status: "ok", path: rel, candidates: [rel], evidence: ["render root is wrapped in the generated Provider"], fixes: [] };
   }
   const providerName = binding ?? "MoeiconsProvider";
   const after =
-    source.slice(0, childStart) + `<${providerName}>${child}</${providerName}>` + source.slice(childEnd);
+    source.slice(0, childStart) + `<${providerName}>${jsx ? child : `{${child}}`}</${providerName}>` + source.slice(childEnd);
   const imported = binding ? after : insertImport(after, `import { MoeiconsProvider } from "${specifier}";`, rel);
   const valid = parseSource(imported, rel);
   if (!valid.ok) return { kind: "application", status: "invalid", path: rel, candidates: [rel], evidence: [`generated React patch is invalid: ${valid.error}`], fixes: [] };
@@ -158,10 +158,10 @@ function planViteReact(source: string, rel: string, specifier: string): AnchorRe
 
 /** Find the unique JSX child range of a `.render(...)` call. */
 function findUniqueRender(ast: File):
-  | { readonly childStart: number; readonly childEnd: number }
+  | { readonly childStart: number; readonly childEnd: number; readonly jsx: boolean }
   | "multiple"
   | undefined {
-  const renders: Array<{ start: number; end: number }> = [];
+  const renders: Array<{ start: number; end: number; jsx: boolean }> = [];
   const visit = (node: unknown): void => {
     if (!isRecord(node) || typeof node !== "object") return;
     const type = typeof node.type === "string" ? node.type : "";
@@ -180,9 +180,9 @@ function findUniqueRender(ast: File):
       Array.isArray(node.arguments) &&
       node.arguments.length === 1
     ) {
-      const child = node.arguments[0] as { start?: number; end?: number } | undefined;
+      const child = node.arguments[0] as { start?: number; end?: number; type?: string } | undefined;
       if (child && typeof child.start === "number" && typeof child.end === "number") {
-        renders.push({ start: child.start, end: child.end });
+        renders.push({ start: child.start, end: child.end, jsx: child.type === "JSXElement" || child.type === "JSXFragment" });
       }
     }
     for (const value of Object.values(node)) {
@@ -194,7 +194,7 @@ function findUniqueRender(ast: File):
   if (renders.length === 0) return undefined;
   if (renders.length > 1) return "multiple";
   const only = renders[0];
-  return only ? { childStart: only.start, childEnd: only.end } : undefined;
+  return only ? { childStart: only.start, childEnd: only.end, jsx: only.jsx } : undefined;
 }
 
 function insertImport(source: string, line: string, rel = "src/main.tsx"): string {
@@ -297,7 +297,7 @@ function findCreateAppMount(ast: File):
       Array.isArray(node.callee.object.arguments) &&
       node.callee.object.arguments.length >= 1
     ) {
-      const root = node.callee.object.arguments[0] as { start?: number; end?: number } | undefined;
+      const root = node.callee.object.arguments[0] as { start?: number; end?: number; type?: string } | undefined;
       if (root && typeof root.start === "number" && typeof root.end === "number") {
         found.push({ start: root.start, end: root.end });
       }

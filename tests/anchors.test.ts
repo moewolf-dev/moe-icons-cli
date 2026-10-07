@@ -299,3 +299,13 @@ describe("diagnoseProject orchestrator", () => {
     expect(fixes).toEqual([]);
   });
 });
+
+
+it("wraps a React render expression as a JSX expression instead of literal text", () => {
+  writePkg({dependencies:{react:"^18","react-dom":"^18"},devDependencies:{vite:"^6"}});
+  mkdirSync(join(dir,"src"));
+  writeFileSync(join(dir,"src/main.tsx"),'import React from "react"; import { createRoot } from "react-dom/client"; import App from "./App"; createRoot(document.getElementById("root")!).render(React.createElement(App));');
+  const result=inspectApplicationAnchor({root:dir,adapter:"vite-react",io:realDetectorIo});
+  expect(result.status).toBe("missing");
+  expect(result.fixes[0]?.after).toContain('<MoeiconsProvider>{React.createElement(App)}</MoeiconsProvider>');
+});
