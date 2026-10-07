@@ -363,6 +363,7 @@ export async function downloadProArtifact(
 ): Promise<{
   readonly descriptor: ProArtifactDescriptor;
   readonly artifactBytes: Uint8Array;
+  readonly archiveFiles?: Readonly<Record<string, Uint8Array>>;
   readonly catalogJson: string;
   readonly manifestJson: string;
   readonly manualMd: string;
@@ -459,6 +460,7 @@ export async function downloadProArtifact(
   return {
     descriptor,
     artifactBytes,
+    archiveFiles: extracted.files,
     catalogJson: decodeUtf8(catalog),
     manifestJson: metadata.manifestJson,
     manualMd: metadata.manualMd,

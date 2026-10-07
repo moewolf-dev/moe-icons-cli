@@ -23,7 +23,8 @@ import {
 import { artifactCachePath, metadataCachePath } from "./free-download.js";
 import {
   configuredComponentFiles,
-  selectTargetSubtree,
+  selectTargetSubtreeAsync,
+  selectTargetSubtreeFromFiles,
   computeSubtreeHash,
 } from "./target-subtree.js";
 import { typesReexport } from "./install.js";
@@ -162,7 +163,9 @@ export async function runProInstallUseCase(
     : undefined;
   const subtree = selectedTarget
     ? { ok: true as const, target, files: selectedTarget, ...computeSubtreeHash(selectedTarget) }
-    : selectTargetSubtree(downloaded.artifactBytes, downloaded.descriptor, target);
+    : downloaded.archiveFiles
+      ? selectTargetSubtreeFromFiles(downloaded.archiveFiles, downloaded.descriptor, target)
+      : await selectTargetSubtreeAsync(downloaded.artifactBytes, downloaded.descriptor, target, context.signal);
   if (!subtree.ok) {
     throw new CliError("VALIDATION_ERROR", subtree.message);
   }

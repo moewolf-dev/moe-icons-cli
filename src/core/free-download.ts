@@ -71,6 +71,7 @@ export type FreeDownloadSuccess = {
   readonly descriptor: ReleaseDescriptor;
   readonly descriptorSha256: string;
   readonly artifactBytes: Uint8Array;
+  readonly archiveFiles?: Readonly<Record<string, Uint8Array>>;
   readonly selected?: SelectedResourceDownload;
   readonly downloadNote?: string;
   readonly catalogJson: string;
@@ -271,7 +272,7 @@ async function catalogFromArchive(
   catalogFilename: string,
   expectedSha: string,
   signal?: AbortSignal,
-): Promise<{ ok: true; json: string } | FreeDownloadFailure> {
+): Promise<{ ok: true; json: string; files: Record<string, Uint8Array> } | FreeDownloadFailure> {
   const unpacked = await extractTarGzAsync(artifactBytes, {
     maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
     maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
@@ -292,7 +293,7 @@ async function catalogFromArchive(
       message: `catalog SHA-256 mismatch: expected ${expectedSha}, got ${actual}`,
     };
   }
-  return { ok: true, json: decodeUtf8(catalogBytes) };
+  return { ok: true, json: decodeUtf8(catalogBytes), files: unpacked.files };
 }
 
 export interface ExtractedMetadata extends MetadataArchiveFiles {
@@ -713,6 +714,7 @@ export async function downloadFreeRelease(
         descriptorSha256,
         artifactBytes: cached,
         catalogJson: catalog.json,
+        archiveFiles: catalog.files,
         cacheHit: true,
         tag,
         metadataSha256: metadata.value.metadataSha256,
@@ -782,6 +784,7 @@ export async function downloadFreeRelease(
     descriptorSha256,
     artifactBytes: artifact.bytes,
     catalogJson: catalog.json,
+    archiveFiles: catalog.files,
     cacheHit: false,
     tag,
     metadataSha256: metadata.value.metadataSha256,

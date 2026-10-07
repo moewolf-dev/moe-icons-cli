@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { extractTarGz, ICON_ARCHIVE_MAX_ENTRIES, ICON_ARCHIVE_MAX_EXPANDED_BYTES } from "../project/tar-gz.js";
+import { extractTarGz, extractTarGzAsync, ICON_ARCHIVE_MAX_ENTRIES, ICON_ARCHIVE_MAX_EXPANDED_BYTES } from "../project/tar-gz.js";
 import type { ReleaseTarget, ReleaseTargetMetadata } from "./release-descriptor.js";
 import type { Target } from "../commands/parser.js";
 import { posix } from "node:path";
@@ -165,7 +165,18 @@ export function selectTargetSubtree(
   if (extracted.errors.length > 0) {
     return { ok: false, reason: "validation", message: extracted.errors[0] ?? "invalid archive" };
   }
-  const files = subtreeFilesOf(extracted.files, target);
+  return selectTargetSubtreeFromFiles(extracted.files, source, target);
+}
+
+export async function selectTargetSubtreeAsync(archiveBytes: Uint8Array, source: TargetSubtreeSource, target: Target, signal?: AbortSignal): Promise<TargetSubtreeResult> {
+  const extracted = await extractTarGzAsync(archiveBytes, { maxEntries: ICON_ARCHIVE_MAX_ENTRIES, maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES }, signal);
+  if (extracted.errors.length) return { ok: false, reason: "validation", message: extracted.errors[0] ?? "invalid archive" };
+  return selectTargetSubtreeFromFiles(extracted.files, source, target);
+}
+
+/** Reuse the same verified archive rather than inflating it again per target. */
+export function selectTargetSubtreeFromFiles(archiveFiles: Readonly<Record<string, Uint8Array>>, source: TargetSubtreeSource, target: Target): TargetSubtreeResult {
+  const files = subtreeFilesOf(archiveFiles, target);
   const computed = computeSubtreeHash(files);
   const modern = hasModernTargetContract(source);
 

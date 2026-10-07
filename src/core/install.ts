@@ -11,7 +11,8 @@ import { withProjectLock } from "../project/project-lock.js";
 import type { Target } from "../commands/parser.js";
 import {
   configuredComponentFiles,
-  selectTargetSubtree,
+  selectTargetSubtreeAsync,
+  selectTargetSubtreeFromFiles,
   computeSubtreeHash,
 } from "./target-subtree.js";
 import { parseCatalog } from "../catalog/catalog.js";
@@ -183,7 +184,9 @@ export async function runInstallUseCase(
     : undefined;
   const subtree = selectedTarget
     ? { ok: true as const, target, files: selectedTarget, ...computeSubtreeHash(selectedTarget) }
-    : selectTargetSubtree(downloaded.artifactBytes, downloaded.descriptor.free, target);
+    : downloaded.archiveFiles
+      ? selectTargetSubtreeFromFiles(downloaded.archiveFiles, downloaded.descriptor.free, target)
+      : await selectTargetSubtreeAsync(downloaded.artifactBytes, downloaded.descriptor.free, target, context.signal);
   if (!subtree.ok) {
     return subtree.reason === "checksum-mismatch"
       ? { ok: false, reason: "checksum-mismatch", message: subtree.message }

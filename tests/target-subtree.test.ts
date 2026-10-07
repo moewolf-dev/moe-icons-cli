@@ -105,3 +105,12 @@ describe("selectTargetSubtree validation", () => {
     }
   });
 });
+
+it('async extraction and verified file reuse preserve target hashes', async () => {
+  const {selectTargetSubtreeAsync,selectTargetSubtreeFromFiles}=await import('../src/core/target-subtree.js');
+  const files={'react/index.js':Buffer.from('export {};\n')};
+  const archive=createTarGz(files);
+  expect(await selectTargetSubtreeAsync(archive,{},'react')).toEqual(selectTargetSubtreeFromFiles(files,{},'react'));
+  const controller=new AbortController();controller.abort();
+  expect((await selectTargetSubtreeAsync(archive,{},'react',controller.signal)).ok).toBe(false);
+});

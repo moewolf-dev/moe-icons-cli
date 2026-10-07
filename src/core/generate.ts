@@ -17,7 +17,7 @@ import { planGeneratedFiles } from "../generator/generate.js";
 import { ensureClassMergeDependencies, planTailwindIntegration } from "../project/tailwind.js";
 import { isCliError } from "../errors/index.js";
 import {
-  extractTarGz,
+  extractTarGzAsync,
   ICON_ARCHIVE_MAX_ENTRIES,
   ICON_ARCHIVE_MAX_EXPANDED_BYTES,
 } from "../project/tar-gz.js";
@@ -351,14 +351,15 @@ function mergePinnedBitmapShardAssets(
  * Vanilla (and bitmap themes on react/vue) need the full cached archive so
  * `assets/` is available — the installed package subtree alone is not enough.
  */
-export function loadArchiveFiles(
+export async function loadArchiveFiles(
   projectRoot: string,
   env: Readonly<Record<string, string | undefined>>,
   fs_: Pick<TransactionalFsWithCopy, "readFileSync" | "existsSync" | "readdirSync">,
   injected?: Readonly<Record<string, Uint8Array>>,
-):
+  signal?: AbortSignal,
+): Promise<
   | { readonly ok: true; readonly files: Readonly<Record<string, Uint8Array>> }
-  | { readonly ok: false; readonly reason: string } {
+  | { readonly ok: false; readonly reason: string }> {
   if (injected) return { ok: true, files: injected };
   const fixtureTgz = env.MOEICONS_BITMAP_ARCHIVE;
   // DEV-G08: the aggregate-archive fixture is a local-test-only seam. It must
@@ -368,10 +369,10 @@ export function loadArchiveFiles(
     return { ok: false, reason: "MOEICONS_BITMAP_ARCHIVE is only honored in a local-test context" };
   }
   if (fixtureTgz && fs_.existsSync(fixtureTgz)) {
-    const unpacked = extractTarGz(readBinaryFile(fs_, fixtureTgz), {
+    const unpacked = await extractTarGzAsync(readBinaryFile(fs_, fixtureTgz), {
       maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
       maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
-    });
+    }, signal);
     if (unpacked.errors.length > 0)
       return { ok: false, reason: unpacked.errors[0] ?? "invalid bitmap archive fixture" };
     return { ok: true, files: unpacked.files };
@@ -438,10 +439,10 @@ export function loadArchiveFiles(
   if (meta?.artifactVersion && meta.artifactSha256) {
     const cached = artifactCachePath(cacheDir, meta.artifactVersion, meta.artifactSha256);
     if (fs_.existsSync(cached)) {
-      const unpacked = extractTarGz(readBinaryFile(fs_, cached), {
+      const unpacked = await extractTarGzAsync(readBinaryFile(fs_, cached), {
         maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
         maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
-      });
+      }, signal);
       if (unpacked.errors.length > 0)
         return { ok: false, reason: unpacked.errors[0] ?? "invalid cached artifact" };
       return { ok: true, files: unpacked.files };
@@ -500,7 +501,7 @@ export async function runGenerateUseCase(
   }
   let archiveFiles: Readonly<Record<string, Uint8Array>> | undefined = options.archiveFiles;
   if (needsArchiveFiles(effectiveConfig, sourceCatalog) && archiveFiles === undefined) {
-    const loadedArchive = loadArchiveFiles(project.root, context.env, fs_, undefined);
+    const loadedArchive = await loadArchiveFiles(project.root, context.env, fs_, undefined, context.signal);
     if (!loadedArchive.ok) {
       return {
         ok: false,

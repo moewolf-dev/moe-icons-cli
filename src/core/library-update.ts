@@ -20,7 +20,7 @@ import {
 import { withProjectLock } from "../project/project-lock.js";
 import { ensureClassMergeDependencies, planTailwindIntegration } from "../project/tailwind.js";
 import {
-  extractTarGz,
+  extractTarGzAsync,
   ICON_ARCHIVE_MAX_ENTRIES,
   ICON_ARCHIVE_MAX_EXPANDED_BYTES,
 } from "../project/tar-gz.js";
@@ -46,7 +46,7 @@ import type { BitmapShard } from "./bitmap-shards.js";
 import type { CacheIo } from "./cache.js";
 import {
   configuredComponentFiles,
-  selectTargetSubtree,
+  selectTargetSubtreeFromFiles,
   computeSubtreeHash,
   type TargetSubtreeSource,
 } from "./target-subtree.js";
@@ -99,6 +99,7 @@ export async function runLibraryUpdateUseCase(
   assertDownloadSelection(bootstrap.config);
   let selected: SelectedResourceDownload | undefined;
   let catalogJson: string;
+  let fullArchiveFiles: Readonly<Record<string, Uint8Array>> | undefined;
   let archiveBytes: Uint8Array;
   let artifactSha256: string;
   let catalogSha256: string;
@@ -138,6 +139,7 @@ export async function runLibraryUpdateUseCase(
     selected = downloaded.selected;
     catalogJson = downloaded.catalogJson;
     archiveBytes = downloaded.artifactBytes;
+    fullArchiveFiles = downloaded.archiveFiles;
     artifactSha256 = downloaded.descriptor.free.sha256;
     catalogSha256 = downloaded.descriptor.catalog.sha256;
     manifestJson = downloaded.manifestJson;
@@ -153,6 +155,7 @@ export async function runLibraryUpdateUseCase(
     selected = downloaded.selected;
     catalogJson = downloaded.catalogJson;
     archiveBytes = downloaded.artifactBytes;
+    fullArchiveFiles = downloaded.archiveFiles;
     artifactSha256 = downloaded.descriptor.sha256;
     catalogSha256 = downloaded.descriptor.catalogSha256;
     manifestJson = downloaded.manifestJson;
@@ -206,10 +209,10 @@ export async function runLibraryUpdateUseCase(
     : undefined;
   const unpacked = selected
     ? { files: selected.files, errors: [] }
-    : extractTarGz(archiveBytes, {
+    : fullArchiveFiles ? { files: fullArchiveFiles, errors: [] } : await extractTarGzAsync(archiveBytes, {
         maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
         maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
-      });
+      }, context.signal);
   if (unpacked.errors.length)
     throw new CliError("VALIDATION_ERROR", unpacked.errors[0] ?? "invalid artifact");
   const target = loaded.config.target;
@@ -222,7 +225,7 @@ export async function runLibraryUpdateUseCase(
     : undefined;
   const subtree = selectedTarget
     ? { ok: true as const, target, files: selectedTarget, ...computeSubtreeHash(selectedTarget) }
-    : selectTargetSubtree(archiveBytes, tierSource, target);
+    : selectTargetSubtreeFromFiles(unpacked.files, tierSource, target);
   if (!subtree.ok) throw new CliError("VALIDATION_ERROR", subtree.message);
   const archiveFiles = { ...unpacked.files };
   let bitmapPins: readonly BitmapShard[] | undefined;

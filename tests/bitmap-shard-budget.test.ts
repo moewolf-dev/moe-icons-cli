@@ -77,21 +77,21 @@ describe("DEV-G08 legacy aggregate-archive seam cannot bypass shards", () => {
 
   const fs_ = { readFileSync, existsSync, readdirSync };
 
-  it("rejects MOEICONS_BITMAP_ARCHIVE outside a local-test context", () => {
-    const result = loadArchiveFiles(dir, { MOEICONS_BITMAP_ARCHIVE: join(dir, "fixture.tgz") }, fs_);
+  it("rejects MOEICONS_BITMAP_ARCHIVE outside a local-test context", async () => {
+    const result = await loadArchiveFiles(dir, { MOEICONS_BITMAP_ARCHIVE: join(dir, "fixture.tgz") }, fs_);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toMatch(/local-test context/);
   });
 
-  it("honors the fixture only under a local-test context", () => {
+  it("honors the fixture only under a local-test context", async () => {
     const env = {
       MOEICONS_ENV: "local",
       MOEICONS_LIBRARY_VERSIONS_URL: "http://127.0.0.1:1/v1/icon-library/versions",
       MOEICONS_PRO_DESCRIPTOR_URL: "http://127.0.0.1:1/v1/icon-library/pro/artifact-descriptor",
       MOEICONS_BITMAP_ARCHIVE: join(dir, "fixture.tgz"),
     };
-    const result = loadArchiveFiles(dir, env, fs_);
+    const result = await loadArchiveFiles(dir, env, fs_);
     expect(result.ok).toBe(true);
   });
 });
