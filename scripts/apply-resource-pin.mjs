@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { validateFreeCatalog } from "./refresh-bundled-catalog.mjs";
 import { validateCodeLibraryReleaseEvent, bindingMatchesPolicy } from "./validate-code-library-event.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -102,7 +103,7 @@ export function assertAllowedPinDiff(changedPaths) {
   }
 }
 
-export function applyResourcePin({ event, catalog, catalogSha256, dryRun = false, nowIso }) {
+export function applyResourcePin({ event, catalog, catalogSha256, dryRun = false, nowIso, currentRelease }) {
   assertCatalogShape(catalog, event);
   // DEV-20-01: an actual pin write must carry a binding that matches the
   // vendored entitlement PIN and the Pro action scope. Dry-run may preview an
@@ -119,6 +120,8 @@ export function applyResourcePin({ event, catalog, catalogSha256, dryRun = false
   } else if (!dryRun) {
     throw new Error("unbound release event cannot pin resources; entitlement binding is required");
   }
+  validateFreeCatalog(catalog);
+  if (!dryRun && !catalogSha256) throw new Error("verified catalog SHA-256 is required for writes");
   const catalogJson = `${JSON.stringify(catalog, null, 2)}\n`;
   const actualSha = sha256Text(catalogJson);
   if (catalogSha256 && catalogSha256.toLowerCase() !== actualSha) {
@@ -126,10 +129,18 @@ export function applyResourcePin({ event, catalog, catalogSha256, dryRun = false
   }
 
   const releasePath = join(root, "src/catalog/resource-release.json");
-  const existing = existsSync(releasePath)
-    ? JSON.parse(readFileSync(releasePath, "utf8"))
-    : null;
+  const existing = currentRelease !== undefined ? currentRelease : existsSync(releasePath)
+    ? JSON.parse(readFileSync(releasePath, "utf8")) : null;
+  if (existing) {
+    const old = existing.resourceVersion.split(".").map(Number);
+    const next = event.resourceVersion.split(".").map(Number);
+    const different = next.findIndex((value, index) => value !== old[index]);
+    if (different >= 0 && next[different] < old[different]) throw new Error("stale resource event cannot downgrade the pin");
+    if (different < 0 && !shouldSkipPin(existing, event)) throw new Error("same resource version has conflicting descriptor digests");
+  }
   if (shouldSkipPin(existing, event)) {
+    if (existing.catalogSha256 !== actualSha) throw new Error("repeated pin has conflicting catalog content");
+    if (currentRelease === undefined && sha256Text(readFileSync(join(root, "src/catalog/catalog.json"), "utf8")) !== actualSha) throw new Error("stored pin catalog drifted; repair before replay");
     return {
       action: "skip",
       reason: "identical resourceVersion + descriptor digests already pinned",

@@ -50,6 +50,7 @@ permissions:
 concurrency:
   group: cli-auto-release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   pin:
@@ -147,16 +148,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/candidate"
           gh api "repos/moewolf-dev/moe-icons-code-library/actions/artifacts/${ARTIFACT_ID}/zip" > "$RUNNER_TEMP/candidate.zip"
           unzip -q "$RUNNER_TEMP/candidate.zip" -d "$RUNNER_TEMP/candidate"
-          VERSION="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).resourceVersion)" "$RUNNER_TEMP/cli-pin-event.validated.json")"
-          META="$RUNNER_TEMP/candidate/moe-icons-free-metadata-${VERSION}.tgz"
-          test -f "$META"
-          mkdir -p "$RUNNER_TEMP/metadata"
-          tar -xzf "$META" -C "$RUNNER_TEMP/metadata"
-          # metadata archive layout: metadata/catalog.json
-          CATALOG="$(find "$RUNNER_TEMP/metadata" -name catalog.json | head -n 1)"
-          test -f "$CATALOG"
-          cp "$CATALOG" "$RUNNER_TEMP/catalog.json"
-          echo "catalog_sha=$(shasum -a 256 "$RUNNER_TEMP/catalog.json" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          gh api "repos/moewolf-dev/moe-icons-code-library/actions/artifacts/${ARTIFACT_ID}" > "$RUNNER_TEMP/candidate-artifact.json"
+          node scripts/verify-pin-candidate.mjs "$RUNNER_TEMP/cli-pin-event.validated.json" \
+            "$RUNNER_TEMP/candidate-artifact.json" "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/catalog.json" \
+            > "$RUNNER_TEMP/catalog-proof.json"
+          echo "catalog_sha=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1])).catalogSha256' "$RUNNER_TEMP/catalog-proof.json")" >> "$GITHUB_OUTPUT"
         id: catalog
 
       - name: Fixture catalog for dry-run without artifact
@@ -190,6 +186,7 @@ jobs:
           node scripts/apply-resource-pin.mjs \
             --event "$RUNNER_TEMP/cli-pin-event.validated.json" \
             --catalog "$RUNNER_TEMP/catalog.json" \
+            --catalog-sha256 "${{ steps.catalog.outputs.catalog_sha || steps.fixturecatalog.outputs.catalog_sha }}" \
             "${EXTRA[@]}" | tee "$RUNNER_TEMP/pin-apply.json"
           echo "action=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).action)" "$RUNNER_TEMP/pin-apply.json")" >> "$GITHUB_OUTPUT"
 
@@ -243,7 +240,7 @@ jobs:
           name: cli-resource-pin-receipt-${{ github.event.client_payload.resourceVersion || inputs.resourceVersion }}
           path: ${{ runner.temp }}/pin-receipt/cli-pin-receipt.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 14
 
       # A GITHUB_TOKEN push cannot trigger a push workflow. Dispatch the existing
       # guarded OIDC publisher after the pin receipt exists; do not wait here,

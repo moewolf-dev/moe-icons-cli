@@ -31,8 +31,8 @@ function miniCatalog(overrides = {}) {
     sourceVersion: "0.0.18",
     sourceCommit: "a".repeat(40),
     generatorCommit: "b".repeat(40),
-    styleGroups: [{ id: "moe-outline", type: "outline", tiers: ["free"], formats: ["svg"], imageSizes: [] }],
-    icons: [{ id: "ui-search", prefix: "ui", availableIn: ["moe-outline"] }],
+    styleGroups: ["moe-outline", "moe-lite-outline", "moe-solid", "moe-colored"].map(id => ({ id, type: "outline", tiers: ["free", "pro"], formats: ["svg"], imageSizes: [] })),
+    icons: [{ id: "ui-search", prefix: "ui", label: "Search", aliases: [], availableIn: ["moe-outline"] }],
     ...overrides,
   };
 }
@@ -63,7 +63,7 @@ describe("G1A apply-resource-pin", () => {
   });
 
   it("dry-run applies without writing and rejects catalog/event mismatches", () => {
-    const report = applyResourcePin({
+    const report = applyResourcePin({ currentRelease: null,
       event: validateCodeLibraryReleaseEvent(EVENT),
       catalog: miniCatalog(),
       dryRun: true,
@@ -76,7 +76,7 @@ describe("G1A apply-resource-pin", () => {
       "src/catalog/resource-release.json",
     ]);
     expect(() =>
-      applyResourcePin({
+      applyResourcePin({ currentRelease: null,
         event: validateCodeLibraryReleaseEvent(EVENT),
         catalog: miniCatalog({ catalogVersion: "0.0.17", sourceVersion: "0.0.17" }),
         dryRun: true,
@@ -136,19 +136,19 @@ describe("DEV-20-01 CLI pin binding", () => {
 
   it("rejects a writer pin without a binding or with a mismatched PIN/scope", () => {
     const event = validateCodeLibraryReleaseEvent(EVENT);
-    expect(() => applyResourcePin({ event, catalog: miniCatalog(), dryRun: false })).toThrow(/unbound release event/);
+    expect(() => applyResourcePin({ currentRelease: null, event, catalog: miniCatalog(), dryRun: false })).toThrow(/unbound release event/);
     const bound = validateCodeLibraryReleaseEvent({ ...EVENT, binding: BINDING });
     // A correct Pro binding is accepted (dry-run keeps the real tree untouched).
     expect(
-      applyResourcePin({ event: bound, catalog: miniCatalog(), dryRun: true, nowIso: "2026-09-11T00:00:00.000Z" }).dryRun,
+      applyResourcePin({ currentRelease: null, event: bound, catalog: miniCatalog(), dryRun: true, nowIso: "2026-09-11T00:00:00.000Z" }).dryRun,
     ).toBe(true);
     const wrongPin = validateCodeLibraryReleaseEvent({
       ...EVENT,
       binding: { ...BINDING, releasePolicySha256: "f".repeat(64) },
     });
-    expect(() => applyResourcePin({ event: wrongPin, catalog: miniCatalog(), dryRun: false })).toThrow(/vendored release PIN/);
+    expect(() => applyResourcePin({ currentRelease: null, event: wrongPin, catalog: miniCatalog(), dryRun: false })).toThrow(/vendored release PIN/);
     const wrongScope = validateCodeLibraryReleaseEvent({ ...EVENT, binding: { ...BINDING, releaseScope: "free" } });
-    expect(() => applyResourcePin({ event: wrongScope, catalog: miniCatalog(), dryRun: false })).toThrow(/releaseScope pro/);
+    expect(() => applyResourcePin({ currentRelease: null, event: wrongScope, catalog: miniCatalog(), dryRun: false })).toThrow(/releaseScope pro/);
   });
 });
 
@@ -173,5 +173,20 @@ describe("PATCH-24-B CLI version pairing", () => {
     expect(() => validateEventBinding({ ...BINDING, mediaContractVersion: "1" })).toThrow(/illegal binding version combination/);
     expect(() => validateEventBinding({ ...BINDING, sourceManifestSchemaVersion: "1" })).toThrow(/illegal binding version combination/);
     expect(validateEventBinding({ ...BINDING, mediaContractVersion: "1", sourceManifestSchemaVersion: "1" })?.mediaContractVersion).toBe("1");
+  });
+});
+
+
+describe("resource ordering and replay", () => {
+  it("refuses stale/conflicting versions and validates repeated catalog bytes", async () => {
+    const { createHash } = await import("node:crypto");
+    const event = validateCodeLibraryReleaseEvent({ ...EVENT, binding: BINDING });
+    const catalog = miniCatalog();
+    const catalogSha256 = createHash("sha256").update(JSON.stringify(catalog, null, 2) + "\n").digest("hex");
+    const release = buildResourceRelease(event, { catalogSha256 });
+    expect(() => applyResourcePin({ event, catalog, currentRelease: { ...release, resourceVersion: "0.0.19" }, dryRun: true })).toThrow(/stale/);
+    expect(() => applyResourcePin({ event, catalog, currentRelease: { ...release, publicDescriptorSha256: "f".repeat(64) }, dryRun: true })).toThrow(/conflicting descriptor/);
+    expect(applyResourcePin({ event, catalog, currentRelease: release, dryRun: true }).action).toBe("skip");
+    expect(() => applyResourcePin({ event, catalog: miniCatalog({ icons: [] }), currentRelease: release, dryRun: true })).toThrow(/conflicting catalog/);
   });
 });

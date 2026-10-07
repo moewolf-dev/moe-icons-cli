@@ -23,6 +23,7 @@ function rawTarEntry(name: string, typeflag: number, body = ""): Buffer {
   writeOctal(header, 124, 12, Buffer.byteLength(body));
   header[156] = typeflag;
   header.write("ustar", 257, 5, "utf8");
+  header.write("        ", 148, 8, "ascii");
   const sum = checksum(header);
   header.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, 8, "utf8");
   const bodyBuf = Buffer.from(body);
@@ -115,5 +116,30 @@ describe("tar-gz extraction hardening (R3/R6)", () => {
     for (let i = 0; i < 50; i += 1) files[`f${i}.txt`] = "x";
     const result = extractTarGz(createTarGz(files), { maxEntries: 10, maxExpandedBytes: 1_000_000 });
     expect(result.errors.some((error) => error.includes("too many entries"))).toBe(true);
+  });
+});
+
+
+describe("tar completeness", () => {
+  it("rejects a checksummed header with a truncated body", () => {
+    const entry = rawTarEntry("sample.txt", 0x30, "x".repeat(1024));
+    const result = extractTarGz(gzipSync(entry.subarray(0, 515)), { maxEntries: 10, maxExpandedBytes: 4096 });
+    expect(result.errors).toContain("truncated tar archive");
+  });
+  it("rejects an altered header and missing end markers", () => {
+    const entry = rawTarEntry("sample.txt", 0x30, "abc");
+    expect(extractTarGz(gzipSync(entry), { maxEntries: 10, maxExpandedBytes: 4096 }).errors).toContain("truncated tar archive");
+    entry[0] = 0;
+    expect(extractTarGz(gzipSync(entry), { maxEntries: 10, maxExpandedBytes: 4096 }).errors).toContain("invalid tar header checksum");
+  });
+  it("streaming extraction uses the same validation and permits cancellation", async () => {
+    const { extractTarGzAsync } = await import("../src/project/tar-gz.js");
+    const bytes = createTarGz({ "sample.txt": "abc" });
+    const limits = { maxEntries: 10, maxExpandedBytes: 4096 };
+    const result = await extractTarGzAsync(bytes, limits);
+    expect(result.errors).toEqual([]);
+    expect(Buffer.from(result.files["sample.txt"]!).toString()).toBe("abc");
+    const controller = new AbortController(); controller.abort();
+    expect((await extractTarGzAsync(bytes, limits, controller.signal)).errors).toContain("archive extraction cancelled");
   });
 });

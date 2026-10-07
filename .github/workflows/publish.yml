@@ -46,6 +46,7 @@ permissions:
 concurrency:
   group: cli-auto-release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   # R-P0-2: a manual dry-run still validates the tree but performs zero writes.
@@ -354,7 +355,7 @@ jobs:
           # is flat (tgz + sidecars at the same level); download keeps that layout.
           path: ${{ runner.temp }}/candidate
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 14
 
   acceptance:
     needs: [decide, pack]
@@ -636,4 +637,4 @@ jobs:
           name: cli-publish-receipt-${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}
           path: receipt/cli-publish-receipt.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 14

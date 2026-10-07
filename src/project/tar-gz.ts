@@ -1,4 +1,5 @@
-import { gzipSync, gunzipSync } from "node:zlib";
+import { gzipSync, gunzipSync, createGunzip } from "node:zlib";
+import { Readable } from "node:stream";
 
 const BLOCK = 512;
 
@@ -70,76 +71,121 @@ export type ExtractedTarFiles = {
 };
 
 function readOctal(buf: Buffer, offset: number, length: number): number {
-  const raw = buf.subarray(offset, offset + length).toString("utf8").replace(/\0.*$/, "").trim();
-  if (!raw) return 0;
-  return Number.parseInt(raw, 8);
+  const raw = buf.subarray(offset, offset + length).toString("ascii").replace(/\0.*$/, "").trim();
+  if (!/^[0-7]+$/.test(raw)) throw new Error("invalid tar numeric field");
+  const value = Number.parseInt(raw, 8);
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error("invalid tar size");
+  return value;
 }
 
-/**
- * Gunzip + unpack tar. Rejects absolute paths, `..`, symlinks and oversized
- * archives. Path safety uses POSIX `/` separators (the tar format mandates `/`);
- * a Windows-style separator would appear literally inside a name and never be
- * treated as a path separator, so `..\evil` is inert (no traversal), which is
- * the documented known assumption.
- */
-export function extractTarGz(
-  bytes: Uint8Array,
-  limits: { maxEntries: number; maxExpandedBytes: number },
-): ExtractedTarFiles {
-  const files: Record<string, Uint8Array> = {};
-  const errors: string[] = [];
-  let data: Buffer;
-  try {
-    // Bound the decompressed stream itself so a zip bomb fails during gunzip,
-    // before the tar bytes are materialised.
-    data = gunzipSync(bytes, { maxOutputLength: limits.maxExpandedBytes });
-  } catch (error) {
-    if (isOutputLimitError(error)) return { files, errors: ["expanded size exceeds limit"] };
-    return { files, errors: ["invalid gzip"] };
+/** One incremental parser used by both fixture and production extraction. */
+class TarReader {
+  readonly files: Record<string, Uint8Array> = {};
+  readonly errors: string[] = [];
+  private header = Buffer.alloc(BLOCK);
+  private headerBytes = 0;
+  private body: Buffer | undefined;
+  private bodyBytes = 0;
+  private padding = 0;
+  private name = "";
+  private longName: string | undefined;
+  private type = 0;
+  private total = 0;
+  private entries = 0;
+  private zeroBlocks = 0;
+  private failed = false;
+  constructor(private readonly limits: { maxEntries: number; maxExpandedBytes: number }) {}
+  private fail(message: string): void { this.errors.push(message); this.failed = true; }
+  feed(bytes: Uint8Array): void {
+    if (this.failed) return;
+    this.total += bytes.length;
+    if (this.total > this.limits.maxExpandedBytes) return this.fail("expanded size exceeds limit");
+    let offset = 0;
+    while (offset < bytes.length && !this.failed) {
+      if (this.body) {
+        const count = Math.min(this.body.length - this.bodyBytes, bytes.length - offset);
+        this.body.set(bytes.subarray(offset, offset + count), this.bodyBytes);
+        offset += count; this.bodyBytes += count;
+        if (this.bodyBytes !== this.body.length) continue;
+        this.finishBody();
+      } else if (this.padding) {
+        const count = Math.min(this.padding, bytes.length - offset);
+        offset += count; this.padding -= count;
+      } else {
+        const count = Math.min(BLOCK - this.headerBytes, bytes.length - offset);
+        this.header.set(bytes.subarray(offset, offset + count), this.headerBytes);
+        this.headerBytes += count; offset += count;
+        if (this.headerBytes === BLOCK) { this.headerBytes = 0; this.beginBody(); }
+      }
+    }
   }
+  private beginBody(): void {
+    const header = this.header;
+    if (header.every(byte => byte === 0)) { this.zeroBlocks++; return; }
+    if (this.zeroBlocks) return this.fail("tar data after end marker");
+    try {
+      const expected = readOctal(header, 148, 8);
+      const copy = Buffer.from(header); copy.fill(0x20, 148, 156);
+      if (checksumHeader(copy) !== expected) return this.fail("invalid tar header checksum");
+      const size = readOctal(header, 124, 12);
+      if (size > this.limits.maxExpandedBytes) return this.fail("expanded size exceeds limit");
+      this.entries++;
+      if (this.entries > this.limits.maxEntries) return this.fail(`too many entries (> ${this.limits.maxEntries})`);
+      const name = header.subarray(0, 100).toString("utf8").replace(/\0.*$/, "");
+      const prefix = header.subarray(257, 263).toString("ascii") === "ustar\0"
+        ? header.subarray(345, 500).toString("utf8").replace(/\0.*$/, "") : "";
+      this.name = this.longName ?? (prefix ? `${prefix}/${name}` : name);
+      this.longName = undefined;
+      this.name = this.name.replace(/^\.\//, "");
+      this.type = header[156] ?? 0;
+      this.padding = (BLOCK - size % BLOCK) % BLOCK;
+      this.bodyBytes = 0;
+      this.body = Buffer.alloc(size);
+      if (size === 0) this.finishBody();
+    } catch (error) { this.fail(error instanceof Error ? error.message : "invalid tar header"); }
+  }
+  private finishBody(): void {
+    const body = this.body!; this.body = undefined;
+    if (this.type === 0x4c) { // GNU long names, emitted by the production packer.
+      this.longName = body.toString("utf8").replace(/\0.*$/, ""); return;
+    }
+    if (this.type === 0x31 || this.type === 0x32) { this.errors.push(`link entries are not allowed: ${this.name}`); return; }
+    if (this.type === 0x35) return;
+    if (this.type !== 0 && this.type !== 0x30) return this.fail("unsupported tar entry type");
+    if (!this.name || this.name.startsWith("/") || this.name.split("/").includes("..")) {
+      this.errors.push(`unsafe path "${this.name}"`); return;
+    }
+    if (this.name in this.files) { this.errors.push(`duplicate entry "${this.name}"`); return; }
+    this.files[this.name] = body;
+  }
+  result(): ExtractedTarFiles {
+    if (!this.failed && (this.body || this.padding || this.headerBytes || this.zeroBlocks < 2 || this.longName)) this.errors.push("truncated tar archive");
+    return { files: this.files, errors: this.errors };
+  }
+}
 
-  let offset = 0;
-  let entries = 0;
-  let expanded = 0;
-  while (offset + BLOCK <= data.byteLength) {
-    const header = data.subarray(offset, offset + BLOCK);
-    offset += BLOCK;
-    if (header.every((byte) => byte === 0)) break;
-    const name = header.subarray(0, 100).toString("utf8").replace(/\0.*$/, "").replace(/^\.\//, "");
-    const size = readOctal(header, 124, 12);
-    const type = header[156];
-    const padded = Math.ceil(size / BLOCK) * BLOCK;
-    const content = data.subarray(offset, offset + size);
-    offset += padded;
-    if (type === 0x31 || type === 0x32) {
-      // Hard-link (typeflag '1') and symlink (typeflag '2') entries are
-      // rejected with an explicit error, never silently skipped.
-      errors.push(`link entries are not allowed: ${name || "<unnamed>"}`);
-      continue;
+export function extractTarGz(bytes: Uint8Array, limits: { maxEntries: number; maxExpandedBytes: number }): ExtractedTarFiles {
+  const reader = new TarReader(limits);
+  try { reader.feed(gunzipSync(bytes, { maxOutputLength: limits.maxExpandedBytes })); }
+  catch (error) { return { files: {}, errors: [isOutputLimitError(error) ? "expanded size exceeds limit" : "invalid gzip"] }; }
+  return reader.result();
+}
+
+/** Production path: yield between chunks; never materialise the complete tar. */
+export async function extractTarGzAsync(bytes: Uint8Array, limits: { maxEntries: number; maxExpandedBytes: number }, signal?: AbortSignal): Promise<ExtractedTarFiles> {
+  const reader = new TarReader(limits);
+  const stream = Readable.from([bytes]).pipe(createGunzip());
+  const abort = () => stream.destroy(new Error("archive extraction cancelled"));
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
+  try {
+    for await (const chunk of stream) {
+      reader.feed(chunk as Buffer);
+      if (reader.errors.length) { stream.destroy(); break; }
     }
-    if (type !== 0 && type !== 0x30) continue;
-    if (!name || name.endsWith("/")) continue;
-    entries += 1;
-    if (entries > limits.maxEntries) {
-      errors.push(`too many entries (> ${limits.maxEntries})`);
-      break;
-    }
-    if (name.startsWith("/") || name.split("/").includes("..")) {
-      errors.push(`unsafe path "${name}"`);
-      continue;
-    }
-    if (name in files) {
-      errors.push(`duplicate entry "${name}"`);
-      continue;
-    }
-    expanded += content.byteLength;
-    if (expanded > limits.maxExpandedBytes) {
-      errors.push("expanded size exceeds limit");
-      break;
-    }
-    files[name] = new Uint8Array(content);
-  }
-  return { files, errors };
+    return reader.result();
+  } catch (error) { return { files: {}, errors: [signal?.aborted ? "archive extraction cancelled" : "invalid gzip"] }; }
+  finally { signal?.removeEventListener("abort", abort); stream.destroy(); }
 }
 
 export function decodeUtf8(bytes: Uint8Array): string {

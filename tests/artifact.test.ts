@@ -134,3 +134,17 @@ describe("extractArtifact", () => {
     expect(result.errors.length).toBeGreaterThan(0);
   });
 });
+
+it('spills a large download without changing bytes and cleans up its stream', async () => {
+  const payload = new Uint8Array(9 * 1024 * 1024).fill(42);
+  const result = await downloadArtifact('https://cdn.example.com/large', {maxBytes: 10 * 1024 * 1024, timeoutMs: 5000, maxRedirects: 0}, {fetchFn: async () => new Response(payload)});
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(verifyArtifact(result.bytes, verifyArtifact(payload, '').actual).ok).toBe(true);
+});
+it('does not fetch an already cancelled download', async () => {
+  const controller = new AbortController(); controller.abort();
+  let called = false;
+  const result = await downloadArtifact('https://cdn.example.com/large', {maxBytes: 10, timeoutMs: 1000, maxRedirects: 0}, {signal:controller.signal,fetchFn:async () => {called=true;return new Response('x');}});
+  expect(called).toBe(false); expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.code).toBe('CANCELLED');
+});

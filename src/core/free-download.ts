@@ -17,7 +17,7 @@ import { createHash } from "node:crypto";
 import { downloadArtifact, verifyArtifact, type DownloadLimits } from "../project/install.js";
 import {
   decodeUtf8,
-  extractTarGz,
+  extractTarGzAsync,
   ICON_ARCHIVE_MAX_ENTRIES,
   ICON_ARCHIVE_MAX_EXPANDED_BYTES,
 } from "../project/tar-gz.js";
@@ -265,15 +265,16 @@ async function loadBytes(
   };
 }
 
-function catalogFromArchive(
+async function catalogFromArchive(
   artifactBytes: Uint8Array,
   catalogFilename: string,
   expectedSha: string,
-): { ok: true; json: string } | FreeDownloadFailure {
-  const unpacked = extractTarGz(artifactBytes, {
+  signal?: AbortSignal,
+): Promise<{ ok: true; json: string } | FreeDownloadFailure> {
+  const unpacked = await extractTarGzAsync(artifactBytes, {
     maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
     maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
-  });
+  }, signal);
   if (unpacked.errors.length > 0) {
     return { ok: false, reason: "validation", message: unpacked.errors[0] ?? "extract failed" };
   }
@@ -685,10 +686,11 @@ export async function downloadFreeRelease(
     const cached = io.readFileSync(artifactCache);
     const verified = verifyArtifact(cached, descriptor.free.sha256);
     if (verified.ok) {
-      const catalog = catalogFromArchive(
+      const catalog = await catalogFromArchive(
         cached,
         descriptor.catalog.filename,
         descriptor.catalog.sha256,
+        io.signal,
       );
       if (!catalog.ok) return catalog;
       const metadata = preflightMetadata
@@ -745,10 +747,11 @@ export async function downloadFreeRelease(
       message: `free artifact SHA-256 mismatch: expected ${descriptor.free.sha256}, got ${verified.actual}`,
     };
   }
-  const catalog = catalogFromArchive(
+  const catalog = await catalogFromArchive(
     artifact.bytes,
     descriptor.catalog.filename,
     descriptor.catalog.sha256,
+    io.signal,
   );
   if (!catalog.ok) return catalog;
 

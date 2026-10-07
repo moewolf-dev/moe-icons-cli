@@ -9,7 +9,7 @@ import { parseCatalog } from "../catalog/catalog.js";
 import type { SelectedResourceDownload } from "./free-download.js";
 import { CliError } from "../errors/index.js";
 import {
-  extractTarGz,
+  extractTarGzAsync,
   decodeUtf8,
   ICON_ARCHIVE_MAX_ENTRIES,
   ICON_ARCHIVE_MAX_EXPANDED_BYTES,
@@ -443,10 +443,10 @@ export async function downloadProArtifact(
     },
     downloadOptions,
   );
-  const extracted = extractTarGz(artifactBytes, {
+  const extracted = await extractTarGzAsync(artifactBytes, {
     maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
     maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
-  });
+  }, context.signal);
   if (extracted.errors.length > 0)
     throw new CliError("VALIDATION_ERROR", extracted.errors[0] ?? "invalid pro archive");
   const catalog =

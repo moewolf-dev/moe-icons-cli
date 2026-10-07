@@ -1,0 +1,1 @@
+export function verifyPinCandidate(input: { event: unknown; artifact: { id: string | number; expired: boolean; workflow_run: { id: string | number; head_sha: string } }; candidateDir: string }): { catalogText: string; catalogSha256: string; inputCatalogSha256: string };

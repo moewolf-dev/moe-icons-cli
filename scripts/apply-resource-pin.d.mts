@@ -24,4 +24,5 @@ export function applyResourcePin(input: {
   catalogSha256?: string;
   dryRun?: boolean;
   nowIso?: string;
+  currentRelease?: ResourceRelease | null;
 }): { action: string; dryRun: boolean; written: string[]; [key: string]: unknown };

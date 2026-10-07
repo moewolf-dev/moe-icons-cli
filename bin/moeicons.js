@@ -9,6 +9,14 @@ if (!checked.ok) {
   process.exit(1);
 }
 
+// Plain help/version do not need the generation, extraction or MCP modules.
+const args = process.argv.slice(2);
+if (args.length === 1 && ["--help", "-h", "help"].includes(args[0])) {
+  const { HELP_TEXT } = await import("../dist/commands/parser.js");
+  process.stdout.write(HELP_TEXT);
+} else if (args.length === 1 && ["--version", "-v"].includes(args[0])) {
+  process.stdout.write(require("../package.json").version + "\n");
+} else {
 const { main } = await import("../dist/cli.js");
 
 const runtime = {
@@ -29,3 +37,5 @@ main(process.argv.slice(2), runtime).then(
     process.exitCode = 5;
   },
 );
+
+}
