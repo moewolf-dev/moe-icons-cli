@@ -447,6 +447,7 @@ export async function downloadProArtifact(
     maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
     maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
   }, context.signal);
+  if (context.signal.aborted) throw new CliError("CANCELLED", "archive extraction cancelled");
   if (extracted.errors.length > 0)
     throw new CliError("VALIDATION_ERROR", extracted.errors[0] ?? "invalid pro archive");
   const catalog =

@@ -163,6 +163,7 @@ function mapDownloadError(code: string, message: string): FreeDownloadFailure {
   if (code === "HTTP_ERROR" && / 404$/.test(message)) {
     return { ok: false, reason: "not-found", message };
   }
+  if (code === "CANCELLED") return { ok: false, reason: "cancelled", message };
   if (code === "NETWORK_ERROR") return { ok: false, reason: "network", message };
   return { ok: false, reason: "validation", message };
 }
@@ -276,6 +277,7 @@ async function catalogFromArchive(
     maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
   }, signal);
   if (unpacked.errors.length > 0) {
+    if (signal?.aborted) return { ok: false, reason: "cancelled", message: "archive extraction cancelled" };
     return { ok: false, reason: "validation", message: unpacked.errors[0] ?? "extract failed" };
   }
   const catalogBytes = unpacked.files[catalogFilename] ?? unpacked.files[`./${catalogFilename}`];
