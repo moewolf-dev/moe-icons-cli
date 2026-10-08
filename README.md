@@ -170,9 +170,10 @@ out keeps cached archives but blocks new unauthenticated installs/updates.
 | `MOEICONS_BOOTSTRAP_FILE` | override bootstrap completion marker path |
 | `MOEICONS_PRO_DESCRIPTOR_URL` | test-only Pro descriptor endpoint override (https or loopback http) |
 | `MOEICONS_LIBRARY_VERSIONS_URL` | test-only library versions endpoint override (https or loopback http) |
-| `MOEICONS_TOKEN_STORE_DIR` | 0600 file token store directory |
+| `MOEICONS_TOKEN_STORE_DIR` | explicit file token store directory (with disabled keychain) |
+| `MOEICONS_STATE_DIR` | session storage preference directory (default `~/.moeicons`) |
 | `MOEICONS_DISABLE_SYSTEM_KEYCHAIN` | `1` disables OS keychain storage |
-| `MOEICONS_AUTH0_ISSUER` / `MOEICONS_AUTH0_CLIENT_ID` | Auth0 refresh/revoke |
+| `MOEICONS_AUTH0_ISSUER` / `MOEICONS_AUTH0_CLIENT_ID` | explicit Auth0 refresh/revoke overrides; official production defaults are bundled |
 
 ## Status
 
@@ -269,3 +270,28 @@ Available tools: `list_icon_groups`, `get_account`, `get_project_config`,
 explicit unsupported operation with migration guidance. Tool failures use
 `isError`; malformed protocol arguments use JSON-RPC errors. The server binds
 all operations to one project root and does not expose arbitrary shell commands.
+
+### Session storage and refresh
+
+When native credential storage is unavailable and you approve a file store,
+the CLI remembers that selection in `session-store.json` (no credentials).
+Later CLI processes and the VS Code extension use the same selection. Credential
+store errors are reported, not silently replaced by an old fallback session.
+Log out before switching storage methods. Official production refresh uses the
+existing public Auth0 configuration; custom/local environments must provide
+matching issuer and client ID. Account and refresh requests have a deadline
+covering headers and body. Revoked refresh credentials require a new login.
+
+The VS Code extension reads credentials on its own host. For Remote SSH, WSL
+or a container, run the CLI login on that host; local credentials are not copied.
+
+### Independent CLI release and plugin recovery
+
+A successful canonical publish triggers `plugin-update.yml`. It verifies the
+published receipt and resource pin, sends a metadata-only CLI event and waits
+for Marketplace verification. `PLUGIN_DISPATCH_TOKEN` must be configured in this
+repository with Contents write for `moe-icons-plugins`. A failed notification is
+replayed with `publish_run_id` in that workflow (and `published_version`
+for the durable Release receipt after Actions artifact expiry), without republishing the CLI or
+rebuilding resources. Temporary Actions receipts have a retention period; new
+releases also retain a canonical receipt on their immutable GitHub Release.

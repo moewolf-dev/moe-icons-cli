@@ -19,3 +19,6 @@ verifySvgModel({ root });
 const svgTarget = join(root, "dist/generator/shared");
 mkdirSync(svgTarget, { recursive: true });
 for (const name of readdirSync(svgSource)) cpSync(join(svgSource, name), join(svgTarget, name));
+
+mkdirSync(join(root, 'dist/auth'), { recursive: true });
+cpSync(join(root, 'src/auth/session-policy.cjs'), join(root, 'dist/auth/session-policy.cjs'));

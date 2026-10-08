@@ -42,6 +42,7 @@ describe('device-style Auth0 login', () => {
   it('uses Auth0 refresh rotation and preserves the old refresh token when omitted', async () => {
     const memory = memoryStore();
     const old: StoredSession = { accountId: 'auth0|u', accessToken: 'old-a', refreshToken: 'old-r', expiresAt: 0, scope: 'openid', storedAt: 0 };
+    memory.store.set(old);
     const updated = await refreshAuth0Session(config, old, {
       fetch: vi.fn(async () => new Response(JSON.stringify({ access_token: 'new-a', expires_in: 60 }), { status: 200 })),
       tokenStore: memory.store, now: () => 1000,

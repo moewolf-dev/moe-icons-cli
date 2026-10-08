@@ -1,0 +1,56 @@
+name: Notify plugin after CLI publication
+on:
+  workflow_run:
+    workflows: [Publish CLI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      publish_run_id:
+        description: Successful canonical publish run to replay without republishing CLI
+        required: true
+        type: string
+      published_version:
+        description: Optional exact CLI version for durable Release receipt replay after Actions expiry
+        required: false
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: cli-plugin-notification-${{ github.event.workflow_run.id || inputs.publish_run_id }}
+  cancel-in-progress: false
+jobs:
+  notify:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: main
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - name: Read completed publisher receipt and notify plugin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLUGIN_DISPATCH_TOKEN: ${{ secrets.PLUGIN_DISPATCH_TOKEN }}
+          PUBLISHED_VERSION: ${{ inputs.published_version }}
+          CLI_PUBLISH_RUN_ID: ${{ github.event.workflow_run.id || inputs.publish_run_id }}
+        run: |
+          set -euo pipefail
+          published="$(gh api "repos/moewolf-dev/moe-icons-cli/actions/runs/$CLI_PUBLISH_RUN_ID/jobs?per_page=100" --jq '[.jobs[] | select(.name == "publish" and .conclusion == "success")] | length')"
+          if [ "$published" != 1 ]; then
+            echo 'No completed publish job: dry-run/validate-only does not notify plugins'
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/cli-plugin-receipt"
+          if [ -n "$PUBLISHED_VERSION" ]; then
+            [[ "$PUBLISHED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            gh release download "v$PUBLISHED_VERSION" --repo moewolf-dev/moe-icons-cli --pattern cli-publish-receipt.json --dir "$RUNNER_TEMP/cli-plugin-receipt"
+          else
+            gh run download "$CLI_PUBLISH_RUN_ID" --repo moewolf-dev/moe-icons-cli --pattern 'cli-publish-receipt-*' --dir "$RUNNER_TEMP/cli-plugin-receipt"
+          fi
+          receipt="$(find "$RUNNER_TEMP/cli-plugin-receipt" -name cli-publish-receipt.json)"
+          test -f "$receipt"
+          node scripts/dispatch-plugin-release.mjs "$receipt"

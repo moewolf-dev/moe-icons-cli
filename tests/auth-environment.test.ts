@@ -71,7 +71,7 @@ describe("H5 resolveAuthEnvironment", () => {
     // Matching issuers are accepted; an empty issuer is allowed.
     expect(resolveAuthEnvironment({ ...LOCAL, MOEICONS_AUTH0_ISSUER: "http://127.0.0.1:9000" }).auth0Issuer).toBe("http://127.0.0.1:9000");
     expect(resolveAuthEnvironment({ MOEICONS_AUTH0_ISSUER: "https://tenant.auth0.com" }).auth0Issuer).toBe("https://tenant.auth0.com");
-    expect(resolveAuthEnvironment({}).auth0Issuer).toBe("");
+    expect(resolveAuthEnvironment({}).auth0Issuer).toBe("https://login.moewolf.com/");
   });
 
   it("describeAuthEnvironment reads the command context env", () => {

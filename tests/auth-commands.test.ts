@@ -160,7 +160,7 @@ describe("auth command adapters", () => {
       ui: { select: async () => undefined, confirm: async () => undefined, text: async () => undefined, note() {}, progress: () => ({ stop() {} }) },
     });
     await expect(runSessionStatusUseCase(context({}), { tokenStore: memoryStore(session) })).resolves.toMatchObject({ kind: "authenticated" });
-    await expect(runSessionStatusUseCase(context({}), { tokenStore: memoryStore({ ...session, expiresAt: 0 }) })).resolves.toMatchObject({ kind: "signed-out", reason: "stored session is expired" });
+    await expect(runSessionStatusUseCase(context({MOEICONS_AUTH0_ISSUER:"",MOEICONS_AUTH0_CLIENT_ID:""}), { tokenStore: memoryStore({ ...session, expiresAt: 0 }) })).resolves.toMatchObject({ kind: "signed-out", reason: "stored session is expired" });
     await expect(runSessionStatusUseCase(context({}), { tokenStore: memoryStore() })).resolves.toEqual({ kind: "signed-out" });
     const authEnv = { MOEICONS_AUTH0_ISSUER: "https://tenant.auth0.com", MOEICONS_AUTH0_CLIENT_ID: "client" };
     await expect(runSessionStatusUseCase(context(authEnv), { tokenStore: memoryStore({ ...session, expiresAt: 0 }), fetch: vi.fn(async () => { throw new TypeError("offline"); }) })).resolves.toMatchObject({ kind: "unknown", reason: "offline" });

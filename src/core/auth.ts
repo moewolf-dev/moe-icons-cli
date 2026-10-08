@@ -2,6 +2,9 @@ import { loginWithDeviceSession, refreshAuth0Session, type DeviceLoginDependenci
 import { createFileTokenStore, createSystemTokenStore, redactSession, type StoredSession, type TokenStore } from "../auth/token-store.js";
 import { openBrowser } from "../auth/open-browser.js";
 import { requestJson } from "../api/client.js";
+import { selectedStore, rememberFileStore, stateRoot } from "../auth/session-policy.cjs";
+import { resolve } from "node:path";
+import { boundedResponse } from "../auth/transport.js";
 import { CliError } from "../errors/index.js";
 import type { CommandContext } from "./context.js";
 
@@ -26,15 +29,20 @@ export type SessionStatus =
   | { readonly kind: "unknown"; readonly reason: string };
 
 function existingStore(context: CommandContext, deps: AuthUseCaseDependencies): TokenStore | undefined {
-  return deps.tokenStore ?? (context.env.MOEICONS_DISABLE_SYSTEM_KEYCHAIN === "1" ? undefined : (deps.systemTokenStore ?? createSystemTokenStore)()) ??
-    (context.env.MOEICONS_TOKEN_STORE_DIR ? (deps.fileTokenStore ?? ((rootDir) => createFileTokenStore(rootDir ? { rootDir } : {})))(context.env.MOEICONS_TOKEN_STORE_DIR) : undefined);
+  if (deps.tokenStore) return deps.tokenStore;
+  const selection = selectedStore(context.env);
+  if (selection.mode === "file") return (deps.fileTokenStore ?? ((rootDir) => createFileTokenStore({ rootDir: rootDir! })))(selection.rootDir);
+  if (selection.mode === "none") return undefined;
+  return (deps.systemTokenStore ?? createSystemTokenStore)();
 }
 
 /** Probe existing credentials without prompting for or creating fallback storage. */
 export async function runSessionStatusUseCase(context: CommandContext, deps: AuthUseCaseDependencies = {}): Promise<SessionStatus> {
-  const store = existingStore(context, deps);
+  let store: TokenStore | undefined;
+  let session: StoredSession | undefined;
+  try { store = existingStore(context, deps); session = store?.getActive(); }
+  catch { return { kind: "unknown", reason: "credential storage unavailable" }; }
   if (!store) return { kind: "signed-out" };
-  const session = store.getActive();
   if (!session) return { kind: "signed-out" };
   if (session.expiresAt > context.now().getTime()) return { kind: "authenticated", account: redactSession(session) };
   const config = auth0Config(context);
@@ -43,7 +51,7 @@ export async function runSessionStatusUseCase(context: CommandContext, deps: Aut
     const refreshed = await refreshAuth0Session(config, session, { fetch: deps.fetch ?? fetch, tokenStore: store, now: () => context.now().getTime(), signal: context.signal });
     return { kind: "authenticated", account: redactSession(refreshed) };
   } catch (error) {
-    if (!(error instanceof CliError) || error.code === "NETWORK_ERROR" || error.code === "CANCELLED") {
+    if (!(error instanceof CliError) || error.code !== "AUTH_ERROR") {
       return { kind: "unknown", reason: error instanceof Error ? error.message : "session validation unavailable" };
     }
     return { kind: "signed-out", reason: error.message };
@@ -52,6 +60,8 @@ export async function runSessionStatusUseCase(context: CommandContext, deps: Aut
 
 async function selectStore(context: CommandContext, deps: AuthUseCaseDependencies): Promise<TokenStore> {
   if (deps.tokenStore) return deps.tokenStore;
+  const selected = existingStore(context, deps);
+  if (selected) return selected;
   const system = context.env.MOEICONS_DISABLE_SYSTEM_KEYCHAIN === "1" ? undefined : (deps.systemTokenStore ?? createSystemTokenStore)();
   if (system) return system;
   if (context.env.MOEICONS_DISABLE_SYSTEM_KEYCHAIN === "1" && context.env.MOEICONS_TOKEN_STORE_DIR) {
@@ -62,7 +72,11 @@ async function selectStore(context: CommandContext, deps: AuthUseCaseDependencie
   const accepted = await context.ui.confirm("System credential storage is unavailable. Use a local file protected with mode 0600?", context.signal);
   if (accepted === undefined) throw new CliError("CANCELLED", "login cancelled");
   if (!accepted) throw new CliError("AUTH_ERROR", "login requires secure credential storage");
-  return (deps.fileTokenStore ?? ((rootDir) => createFileTokenStore(rootDir ? { rootDir } : {})))(context.env.MOEICONS_TOKEN_STORE_DIR);
+  const rootDir = resolve(context.env.MOEICONS_TOKEN_STORE_DIR ?? stateRoot(context.env));
+  const store = (deps.fileTokenStore ?? ((rootDir) => createFileTokenStore({ rootDir: rootDir! })))(rootDir);
+  // Injected test stores never mutate the user's storage preference.
+  if (!deps.fileTokenStore) rememberFileStore(context.env, rootDir);
+  return store;
 }
 
 function assertTrustedHttpBase(value: string, envName: string): string {
@@ -137,7 +151,7 @@ export function resolveAuthEnvironment(
   }
   const mode = declared ?? inferred;
   // H5: the Auth0 issuer receives refresh tokens, so it must match the mode.
-  const auth0Issuer = env.MOEICONS_AUTH0_ISSUER ?? "";
+  const auth0Issuer = env.MOEICONS_AUTH0_ISSUER ?? (mode === "production" && apiBaseUrl === DEFAULT_API_BASE_URL && websiteOrigin === DEFAULT_WEBSITE_ORIGIN ? "https://login.moewolf.com/" : "");
   if (auth0Issuer) {
     assertTrustedHttpBase(auth0Issuer, "MOEICONS_AUTH0_ISSUER");
     const issuerLoopback = isLoopbackHttp(auth0Issuer);
@@ -160,7 +174,7 @@ export function resolveAuthEnvironment(
     apiBaseUrl,
     websiteOrigin,
     auth0Issuer,
-    auth0ClientId: env.MOEICONS_AUTH0_CLIENT_ID ?? "",
+    auth0ClientId: env.MOEICONS_AUTH0_CLIENT_ID ?? (auth0Issuer === "https://login.moewolf.com/" ? "N7xIQMbIB1ao501jP6abai42SiWXyUXB" : ""),
   };
 }
 
@@ -240,15 +254,10 @@ export async function runRemoteAccountUseCase(
 ): Promise<{ tier: string; entitlementStatus: string; validUntil: string | null } | undefined> {
   const apiBaseUrl = auth0Config(context).apiBaseUrl;
   const doFetch = deps.fetch ?? fetch;
-  let session: StoredSession;
-  try {
-    session = (await activeSession(context, deps)).session;
-  } catch {
-    throw new CliError("AUTH_ERROR", "not logged in");
-  }
+  const session = (await activeSession(context, deps)).session;
 
   const call = async (token: string): Promise<Response> =>
-    doFetch(`${apiBaseUrl}/v1/cli/account`, {
+    boundedResponse(doFetch, `${apiBaseUrl}/v1/cli/account`, {
       method: "GET",
       headers: { authorization: `Bearer ${token}` },
       signal: context.signal,
@@ -286,7 +295,7 @@ export async function runLogoutUseCase(context: CommandContext, deps: AuthUseCas
   const config = auth0Config(context);
   if (config.auth0Issuer && config.auth0ClientId) {
     try {
-      const response = await (deps.fetch ?? fetch)(`${config.auth0Issuer.replace(/\/$/, "")}/oauth/revoke`, {
+      const response = await boundedResponse(deps.fetch ?? fetch, `${config.auth0Issuer.replace(/\/$/, "")}/oauth/revoke`, {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ client_id: config.auth0ClientId, token: session.refreshToken }), signal: context.signal,
       });

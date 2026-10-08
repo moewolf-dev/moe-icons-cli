@@ -1,6 +1,8 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, lstatSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { missingCredential } from "./session-policy.cjs";
+import { CliError } from "../errors/index.js";
 import { execFileSync } from "node:child_process";
 
 /**
@@ -29,8 +31,8 @@ function parseSession(value: string): StoredSession | undefined {
   try {
     const session = JSON.parse(value) as Partial<StoredSession>;
     return typeof session.accountId === "string" && typeof session.accessToken === "string" &&
-      typeof session.refreshToken === "string" && typeof session.expiresAt === "number" &&
-      typeof session.scope === "string" && typeof session.storedAt === "number"
+      typeof session.refreshToken === "string" && typeof session.expiresAt === "number" && Number.isFinite(session.expiresAt) &&
+      typeof session.scope === "string" && typeof session.storedAt === "number" && Number.isFinite(session.storedAt)
       ? session as StoredSession : undefined;
   } catch { return undefined; }
 }
@@ -46,12 +48,13 @@ export function createFileTokenStore(options: { rootDir?: string } = {}): TokenS
   function readAll(): Record<string, StoredSession> {
     if (!existsSync(file)) return {};
     try {
+      const meta = lstatSync(file);
+      if (!meta.isFile() || meta.isSymbolicLink() || meta.size > 1_000_000 || (process.platform !== "win32" && ((meta.mode & 0o077) !== 0 || typeof process.getuid === "function" && meta.uid !== process.getuid()))) throw new Error("insecure store");
       const raw: unknown = JSON.parse(readFileSync(file, "utf8"));
-      if (typeof raw === "object" && raw !== null) return raw as Record<string, StoredSession>;
-    } catch {
-      // corrupt store; treat as empty
-    }
-    return {};
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("invalid store");
+      for (const item of Object.values(raw)) if (!parseSession(JSON.stringify(item))) throw new Error("invalid session");
+      return raw as Record<string, StoredSession>;
+    } catch { throw new CliError("AUTH_ERROR", "file credential storage unavailable; check permissions or repair the store"); }
   }
 
   function writeAll(data: Record<string, StoredSession>): void {
@@ -91,7 +94,7 @@ export function createSystemTokenStore(options: {
   const service = "moeicons";
   const account = "active-session";
   const invoke = (command: string, args: string[], input?: string): string =>
-    String(run(command, args, { encoding: "utf8", stdio: ["pipe", "pipe", "ignore"], ...(input ? { input } : {}) })).trim();
+    String(run(command, args, { encoding: "utf8", timeout: 5000, maxBuffer: 1_000_000, stdio: ["pipe", "pipe", "pipe"], ...(input ? { input } : {}) })).trim();
 
   let read: () => string;
   let write: (value: string) => void;
@@ -107,20 +110,23 @@ export function createSystemTokenStore(options: {
     remove = () => { invoke("secret-tool", ["clear", "service", service, "account", account]); };
   } else if (platform === "win32") {
     const prefix = "[void][Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime];$v=[Windows.Security.Credentials.PasswordVault]::new();";
-    read = () => invoke("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `${prefix}$c=$v.Retrieve('${service}','${account}');$c.RetrievePassword();[Console]::Out.Write($c.Password)`]);
+    read = () => invoke("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `${prefix}try{$c=$v.Retrieve('${service}','${account}');$c.RetrievePassword();[Console]::Out.Write($c.Password)}catch{$e=$_.Exception;while($e){if($e.HResult -eq -2147023728){exit 44};$e=$e.InnerException};exit 45}`]);
     write = (value) => { invoke("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `${prefix}$p=[Console]::In.ReadToEnd();try{$v.Remove($v.Retrieve('${service}','${account}'))}catch{};$v.Add([Windows.Security.Credentials.PasswordCredential]::new('${service}','${account}',$p))`], value); };
     remove = () => { invoke("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `${prefix}try{$v.Remove($v.Retrieve('${service}','${account}'))}catch{}`]); };
   } else {
     return undefined;
   }
 
-  const active = (): StoredSession | undefined => { try { return parseSession(read()); } catch { return undefined; } };
+  const active = (): StoredSession | undefined => {
+    try { const value = read(); if (!value) return undefined; const session = parseSession(value); if (!session) throw new Error("invalid session"); return session; }
+    catch (error) { if (missingCredential(platform, error as never)) return undefined; throw new CliError("AUTH_ERROR", "system credential storage unavailable; retry or check its permissions"); }
+  };
   return {
     get: (accountId) => { const value = active(); return value?.accountId === accountId ? value : undefined; },
     getActive: active,
-    set: (session) => { write(JSON.stringify(session)); },
+    set: (session) => { try { write(JSON.stringify(session)); } catch { throw new CliError("AUTH_ERROR", "cannot save system credentials; check credential store permissions"); } },
     delete: (accountId) => { if (active()?.accountId === accountId) { try { remove(); } catch { /* already absent */ } } },
-    clear: () => { try { remove(); } catch { /* already absent */ } },
+    clear: () => { try { remove(); } catch (error) { if (!missingCredential(platform,error as never)) throw new CliError("AUTH_ERROR", "cannot clear system credentials; check credential store permissions"); } },
   };
 }
 

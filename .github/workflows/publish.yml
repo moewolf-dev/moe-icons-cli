@@ -665,3 +665,8 @@ jobs:
           path: receipt/cli-publish-receipt.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Preserve immutable public publish receipt for downstream replay
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/persist-publish-receipt.mjs

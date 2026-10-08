@@ -5,6 +5,7 @@ import {
   parsePollLoginResponse,
 } from "./login-schemas.js";
 import type { StoredSession, TokenStore } from "./token-store.js";
+import { boundedResponse } from "./transport.js";
 import { CliError } from "../errors/index.js";
 
 export interface DeviceLoginConfig {
@@ -112,7 +113,7 @@ export async function refreshAuth0Session(
   session: StoredSession,
   deps: { fetch: typeof fetch; tokenStore: TokenStore; now: () => number; signal?: AbortSignal },
 ): Promise<StoredSession> {
-  const response = await deps.fetch(`${config.auth0Issuer.replace(/\/$/, "")}/oauth/token`, {
+  const response = await boundedResponse(deps.fetch, `${config.auth0Issuer.replace(/\/$/, "")}/oauth/token`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -122,10 +123,12 @@ export async function refreshAuth0Session(
     }),
     ...(deps.signal ? { signal: deps.signal } : {}),
   });
+  if (response.status >= 500 || response.status === 429) throw new CliError("NETWORK_ERROR", "Auth0 refresh temporarily unavailable; retry");
   const body = (await response.json()) as Record<string, unknown>;
   if (!response.ok || typeof body.access_token !== "string") {
     throw new CliError("AUTH_ERROR", "Auth0 refresh failed");
   }
+  if (body.expires_in !== undefined && (typeof body.expires_in !== "number" || !Number.isSafeInteger(body.expires_in) || body.expires_in <= 0)) throw new CliError("VALIDATION_ERROR", "invalid Auth0 token lifetime");
   const updated: StoredSession = {
     ...session,
     accessToken: body.access_token,
@@ -133,6 +136,8 @@ export async function refreshAuth0Session(
     expiresAt: deps.now() + (typeof body.expires_in === "number" ? body.expires_in : 3600) * 1000,
     storedAt: deps.now(),
   };
+  const latest = deps.tokenStore.getActive();
+  if (!latest || latest.accessToken !== session.accessToken || latest.storedAt !== session.storedAt) throw new CliError("AUTH_ERROR", "session changed during refresh; retry with the current account");
   deps.tokenStore.set(updated);
   return updated;
 }
