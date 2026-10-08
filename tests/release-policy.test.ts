@@ -96,8 +96,15 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
       }
       expect(text).not.toMatch(/_authToken\s*[:=]|npm config set [^\n]*_authToken/);
     }
-    expect(publish.match(/secrets\.NPM_TOKEN/g)).toHaveLength(1);
-    const offset = publish.indexOf("secrets.NPM_TOKEN");
+    const preflight = publish.slice(publish.indexOf("  npm-auth-preflight:"), publish.indexOf("  # R-P0-2:"));
+    expect(preflight).toContain("if: github.event_name == 'workflow_dispatch' && inputs.npm_auth_mode == 'token'");
+    expect(preflight).toContain("environment: npm-publish");
+    expect(preflight).toContain("permissions:");
+    expect(preflight).toContain("contents: read");
+    expect(preflight).toContain("npm whoami >/dev/null");
+    expect(preflight).not.toMatch(/\bnpm publish\b|\bgit push\b|\bgh api\b|checkout@/);
+    expect(publish.match(/secrets\.NPM_TOKEN/g)).toHaveLength(2);
+    const offset = publish.lastIndexOf("secrets.NPM_TOKEN");
     expect(offset).toBeGreaterThan(publish.indexOf("      - name: Publish to npm or verify"));
     expect(offset).toBeLessThan(publish.indexOf("      - name: Wait for public registry visibility"));
     expect(publish).toContain("github.event_name == 'workflow_dispatch' && inputs.npm_auth_mode == 'token'");

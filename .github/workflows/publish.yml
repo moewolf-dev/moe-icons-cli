@@ -49,6 +49,27 @@ concurrency:
   queue: max
 
 jobs:
+  npm-auth-preflight:
+    environment: npm-publish
+    permissions:
+      contents: read
+    if: github.event_name == 'workflow_dispatch' && inputs.npm_auth_mode == 'token'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Verify existing repository publisher token before release work
+        env:
+          NODE_AUTH_TOKEN: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_auth_mode == 'token' && secrets.NPM_TOKEN || '' }}
+        run: |
+          set -euo pipefail
+          test -n "$NODE_AUTH_TOKEN"
+          npm whoami >/dev/null
+          echo 'Existing npm publisher token authenticated; final publish enforces package permissions.'
+
   # R-P0-2: a manual dry-run still validates the tree but performs zero writes.
   validate:
     if: github.event_name == 'workflow_dispatch'
