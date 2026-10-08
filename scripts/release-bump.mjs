@@ -51,6 +51,7 @@ function main() {
   const pkg = readJson("package.json");
   const lock = readJson("package-lock.json");
   const files = shippedFileSet(pkg);
+  if (!Object.keys(files).some(name => name.startsWith("dist/"))) throw new Error("built dist is required before computing shipped payload hash; run npm run build");
   const payloadHash = computePayloadHash({
     files,
     packageJson: pkg,

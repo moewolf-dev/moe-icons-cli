@@ -155,6 +155,11 @@ jobs:
           else
             echo "blocked=0" >> "$GITHUB_OUTPUT"
           fi
+      - name: Build shipped files before comparing payload hashes
+        if: steps.switch.outputs.blocked == '0'
+        run: |
+          npm ci
+          npm run build
       - name: Compute payload hash and next patch
         id: decide
         if: steps.switch.outputs.blocked == '0'
