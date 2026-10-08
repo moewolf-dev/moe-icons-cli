@@ -184,7 +184,7 @@ jobs:
           echo "payload_hash=$HASH" >> "$GITHUB_OUTPUT"
 
   recover:
-    if: github.event_name == 'workflow_dispatch' && inputs.resume_run_id != ''
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.resume_run_id != '' && needs.validate.result == 'success' && (needs.npm-auth-preflight.result == 'success' || needs.npm-auth-preflight.result == 'skipped')
     needs: [validate, npm-auth-preflight]
     runs-on: ubuntu-latest
     timeout-minutes: 10
