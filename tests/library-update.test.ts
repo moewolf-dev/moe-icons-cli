@@ -25,6 +25,17 @@ describe("atomic library update", () => {
   function download(fixtureDir: string) { return { fetchFn: globalThis.fetch.bind(globalThis), readFileSync: (path: string) => new Uint8Array(readFileSync(path)), writeFileSync: (path: string, data: Uint8Array) => writeFileSync(path, data), mkdirSync: (path: string) => mkdirSync(path, { recursive: true }), existsSync, renameSync, rmSync, fixtureDir, cacheDir: cache, cliVersion: "0.1.0" }; }
   function deps(fixtureDir: string, fs = realFs) { return { fs, free: download(fixtureDir), auth: {} }; }
 
+  it("Pro updates send only the production descriptor request fields", async () => {
+    const config = JSON.parse(readFileSync(join(project, "moeicons.config.json"), "utf8"));
+    config.tier = "pro"; writeFileSync(join(project, "moeicons.config.json"), JSON.stringify(config));
+    const session = { accountId: "fixture", accessToken: "fixture-token", refreshToken: "fixture-refresh", expiresAt: Date.parse("2099-01-01"), scope: "openid", storedAt: 0 };
+    let sent: unknown;
+    const fetchFn: typeof fetch = async (_url, options) => { sent = JSON.parse(String(options?.body)); return new Response("invalid body", { status: 400 }); };
+    const auth = { tokenStore: { get: () => session, getActive: () => session, set() {}, delete() {}, clear() {} } };
+    await expect(runLibraryUpdateUseCase(context(project), { fs: realFs, auth, fetch: fetchFn }, { tier: "pro", version: "0.0.19", descriptorSha256: "a".repeat(64) })).rejects.toThrow("400");
+    expect(sent).toEqual({ version: "0.0.19", descriptorSha256: "a".repeat(64) });
+  });
+
   it("commits candidate catalog, generated files and metadata together", async () => {
     const next = writeFreeReleaseFixture(nextFixture, { version: "0.0.18", useBundledCatalog: true });
     const result = await runLibraryUpdateUseCase(context(project), deps(nextFixture), { tier: "free", version: next.version, descriptorSha256: next.descriptorSha });

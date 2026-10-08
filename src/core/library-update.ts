@@ -146,7 +146,7 @@ export async function runLibraryUpdateUseCase(
     manualMd = downloaded.manualMd;
     tierSource = downloaded.descriptor.free;
   } else {
-    const downloaded = await downloadProArtifact(context, deps.auth, expected, {
+    const downloaded = await downloadProArtifact(context, deps.auth, { version: expected.version, descriptorSha256: expected.descriptorSha256 }, {
       selection: { config: bootstrap.config, document },
       ...(deps.fetch ? { fetch: deps.fetch } : {}),
       ...(deps.allowedProHosts ? { allowedHosts: deps.allowedProHosts } : {}),
