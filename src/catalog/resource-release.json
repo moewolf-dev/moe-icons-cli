@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "resourceVersion": "0.0.18",
-  "privateDescriptorSha256": "6f060a80f83a1f79617a55a62d198ad7954ff7899be4641119f2ca4932b8f1af",
-  "publicDescriptorSha256": "4bef24d097bc5ef4da2f86943d6b59fd1f85a51c382a083009828a85624066f3",
-  "sourceCommit": "fd422d968bd8e72169884773d44e9d6e5cc64d56",
-  "generatorCommit": "e68efd02a0fa99a54432f370df24bfad3c822b70",
-  "freeCandidateArtifactId": "11291112767",
-  "upstreamRunId": "37169905649",
-  "correlationId": "37169905649-1-cli-pin",
+  "resourceVersion": "0.0.19",
+  "privateDescriptorSha256": "3f47ae8b977366ea5e5270696b1e450a25c1f17fab0b0d25f5402fa6ff935200",
+  "publicDescriptorSha256": "aa223d42e8cb30fb95515d842e5d2df28d215467516684484d7bbb340310798f",
+  "sourceCommit": "678b0ceec3ff1f5c925418365cecef6c083a26a0",
+  "generatorCommit": "07de3eeac3f48438e31ff907ed47ab87d8ddf909",
+  "freeCandidateArtifactId": "11529005082",
+  "upstreamRunId": "37726339120",
+  "correlationId": "37726339120-1-cli-pin",
   "binding": {
     "releasePolicyCommit": "5bf58a4875b166fd40c1c8f9f359758a7dc44576",
     "releasePolicySha256": "61272ec1393ed4d2ec62a0c73ded370fbc5c5348212bab13481e38394565a724",
@@ -16,7 +16,8 @@
     "releaseScope": "pro",
     "bitmapBatch": {
       "styleGroupIds": [
-        "moe-3d-metal"
+        "moe-3d-metal",
+        "moe-3d-plastic-green"
       ],
       "variantIds": [
         "moe-3d-metal-128-png",
@@ -24,11 +25,17 @@
         "moe-3d-metal-256-png",
         "moe-3d-metal-256-webp",
         "moe-3d-metal-512-png",
-        "moe-3d-metal-512-webp"
+        "moe-3d-metal-512-webp",
+        "moe-3d-plastic-green-128-png",
+        "moe-3d-plastic-green-128-webp",
+        "moe-3d-plastic-green-256-png",
+        "moe-3d-plastic-green-256-webp",
+        "moe-3d-plastic-green-512-png",
+        "moe-3d-plastic-green-512-webp"
       ],
       "batchId": "bitmap-wave-3"
     }
   },
-  "catalogSha256": "d0fa3232efc5ad2f12bae2d34fbc840738ca3f69116b5d4589971cac56c76d07",
-  "appliedAt": "2026-10-04T08:00:40.525Z"
+  "catalogSha256": "85097e8330cfe471326ecf9b350b64e1f53145cd26ef92703605c24242c67f24",
+  "appliedAt": "2026-10-08T08:39:31.692Z"
 }
