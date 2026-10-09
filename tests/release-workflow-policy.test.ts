@@ -9,6 +9,13 @@ import { join } from "node:path";
 describe("CLI publish leak gate", () => {
   const workflow = readFileSync(join(process.cwd(), ".github", "workflows", "publish.yml"), "utf8");
 
+  it("allows push publication after the manual-only auth preflight is skipped, while requiring successful upstream gates", () => {
+    const pack = workflow.split("\n  pack:")[1]?.split("\n  acceptance:")[0];
+    const acceptance = workflow.split("\n  acceptance:")[1]?.split("\n  publish:")[0];
+    expect(pack).toContain("if: always() && needs.decide.result == 'success' && needs.decide.outputs.should_release == '1'");
+    expect(acceptance).toContain("if: always() && needs.decide.result == 'success' && needs.pack.result == 'success'");
+  });
+
   it("runs scan-bundle on the candidate before upload and before npm publish", () => {
     expect(existsSync(join(process.cwd(), "scripts", "scan-bundle.mjs"))).toBe(true);
     const scanIndex = workflow.indexOf("scan-bundle.mjs");
