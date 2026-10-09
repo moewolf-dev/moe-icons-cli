@@ -99,6 +99,10 @@ describe("DEV-G08 legacy aggregate-archive seam cannot bypass shards", () => {
 describe("DEV-G08 frozen budget shape", () => {
   it("freezes concurrency 1 and all limits", () => {
     expect(BITMAP_SHARD_BUDGET.concurrency).toBe(1);
+    expect(BITMAP_SHARD_BUDGET.totalDownloadBytes).toBe(768 * 1024 * 1024);
+    expect(BITMAP_SHARD_BUDGET.compressedBytes).toBe(128 * 1024 * 1024);
+    expect(BITMAP_SHARD_BUDGET.expandedBytes).toBe(128 * 1024 * 1024);
+    expect(BITMAP_SHARD_BUDGET.tempDiskBytes).toBe(256 * 1024 * 1024);
     for (const value of Object.values(BITMAP_SHARD_BUDGET)) {
       if (typeof value === "number") expect(value).toBeGreaterThan(0);
     }

@@ -54,10 +54,13 @@ function batchForVariants(variantIds) {
     if (!byGroup.has(parsed.styleGroupId)) byGroup.set(parsed.styleGroupId, new Set());
     byGroup.get(parsed.styleGroupId).add(`${parsed.imageSize}-${parsed.format}`);
   }
-  const complete = ['128-png', '128-webp', '256-png', '256-webp', '512-png', '512-webp'];
-  return byGroup.size > 0 && [...byGroup.values()].every((variants) => complete.every((id) => variants.has(id)))
-    ? 'bitmap-wave-3'
-    : undefined;
+  const sizes = ['128', '256', '512'];
+  return byGroup.size > 0 && [...byGroup.values()].every((variants) => {
+    const formats = new Set([...variants].map((id) => id.split('-').at(-1)));
+    if ([...formats].some((format) => !['png', 'webp'].includes(format))) return false;
+    const expected = [...formats].flatMap((format) => sizes.map((size) => `${size}-${format}`));
+    return expected.length === variants.size && expected.every((id) => variants.has(id));
+  }) ? 'bitmap-wave-3' : undefined;
 }
 
 /** DEV-20-01: validate the nested entitlement binding. */
@@ -98,7 +101,7 @@ export function validateEventBinding(raw) {
       throw new Error("binding bitmapBatch.styleGroupIds do not match variantIds");
     }
     const expectedBatchId = batchForVariants(variantIds);
-    if (!expectedBatchId) throw new Error(`binding bitmapBatch.variantIds do not match a frozen C1/C2/C3 set: ${variantIds.join(",")}`);
+    if (!expectedBatchId) throw new Error(`binding bitmapBatch.variantIds must include 128/256/512 for each submitted PNG/WebP format: ${variantIds.join(",")}`);
     if (String(batch.batchId) !== expectedBatchId) {
       throw new Error(`binding bitmapBatch.batchId ${batch.batchId} != expected ${expectedBatchId}`);
     }

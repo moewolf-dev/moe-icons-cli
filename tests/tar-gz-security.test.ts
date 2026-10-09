@@ -38,7 +38,7 @@ function rawTar(name: string, typeflag: number, body = ""): Uint8Array {
 }
 
 describe("tar-gz extraction hardening (R3/R6)", () => {
-  it("allows the six-spec Pro release matrix with a finite 512 MiB cap", () => {
+  it("allows the six-spec Pro release matrix with a finite 768 MiB cap", () => {
     // Current production shape: 9 groups × 554 icons × about 12 files across
     // React/Vue/Vanilla/Assets, plus package and metadata entries.
     const currentProEntries = 9 * 554 * 12 + 128;
@@ -47,7 +47,7 @@ describe("tar-gz extraction hardening (R3/R6)", () => {
     // The six-spec bitmap candidate expands to ~205 MiB; the cap covers it with
     // headroom while remaining finite and bounded (no unbounded gunzip).
     expect(ICON_ARCHIVE_MAX_EXPANDED_BYTES).toBeGreaterThan(205 * 1024 * 1024);
-    expect(ICON_ARCHIVE_MAX_EXPANDED_BYTES).toBe(512 * 1024 * 1024);
+    expect(ICON_ARCHIVE_MAX_EXPANDED_BYTES).toBe(768 * 1024 * 1024);
   });
 
   it("fails closed during gunzip when the bounded output is exceeded", () => {

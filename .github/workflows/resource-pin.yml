@@ -243,9 +243,9 @@ jobs:
           retention-days: 14
 
       # A GITHUB_TOKEN push cannot trigger a push workflow. Dispatch the existing
-      # guarded token publisher after the pin receipt exists; do not wait here,
+      # guarded OIDC publisher after the pin receipt exists; do not wait here,
       # because both workflows share cli-auto-release concurrency.
-      - name: Dispatch guarded token publisher for the exact pushed pin
+      - name: Dispatch guarded OIDC publisher for the exact pushed pin
         if: (steps.apply.outputs.action == 'apply' || steps.apply.outputs.action == 'skip') && steps.switch.outputs.blocked == '0' && steps.dispatchcheck.outputs.write_allowed == '1' && github.event_name == 'repository_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -255,7 +255,7 @@ jobs:
           live="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
           test "$live" = "$pushed" || { echo "main drifted after resource pin; refusing publisher dispatch" >&2; exit 1; }
           gh workflow run publish.yml --repo "$GITHUB_REPOSITORY" --ref main \
-            -f npm_auth_mode=token -f dry_run=false -f break_glass=PUBLISH
+            -f npm_auth_mode=oidc -f dry_run=false -f break_glass=PUBLISH
 
       - name: Dry-run / blocked conclusion
         if: steps.switch.outputs.blocked == '1'
