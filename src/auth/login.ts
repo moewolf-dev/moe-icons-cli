@@ -25,6 +25,7 @@ export function buildAuthorizationUrl(
   const params = new URLSearchParams({
     client_id: config.clientId,
     response_type: "code",
+    ui_locales: "en",
     redirect_uri: `http://127.0.0.1:${attempt.port}${config.redirectPath}`,
     scope: config.scope,
     audience: config.audience,

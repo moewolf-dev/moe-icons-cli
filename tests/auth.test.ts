@@ -41,6 +41,7 @@ describe("buildAuthorizationUrl", () => {
     const state = createLoginState();
     const url = buildAuthorizationUrl(AUTH_CONFIG, { port: 41234, pkce, state });
     expect(url).toContain("client_id=client123");
+    expect(new URL(url).searchParams.get("ui_locales")).toBe("en");
     expect(url).toContain("code_challenge_method=S256");
     expect(url).toContain(`code_challenge=${encodeURIComponent(pkce.challenge)}`);
     expect(url).toContain(`state=${encodeURIComponent(state.state)}`);
