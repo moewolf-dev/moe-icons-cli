@@ -10,6 +10,7 @@ import {
   parseResourceIndex,
   planSelectedResources,
   downloadSelectedResources,
+  type ResourceFile,
 } from "../src/core/selected-resources.js";
 import { sha256Bytes } from "../src/project/install-metadata.js";
 import { selectedFixture } from "./helpers/selected-resource-fixture.js";
@@ -43,7 +44,58 @@ const fixture = () =>
       "react/moe-solid/ArrowBoldRight.d.ts": ["react/types.d.ts"],
     },
   );
+
+function planWithBudgetedDependencies(
+  data: ReturnType<typeof fixture>,
+  budget: "expandedBytes" | "payloadBytes",
+  excessBytes = 0,
+) {
+  const files: Record<string, ResourceFile> = structuredClone(data.index.files);
+  const index = { ...data.index, files };
+  const baseline = planSelectedResources(config, catalog, index);
+  const existingBytes = baseline.paths.reduce(
+    (sum, path) => sum + index.files[path]![budget === "expandedBytes" ? "size" : "compressedSize"],
+    0,
+  );
+  const limit = 768 * 1024 * 1024;
+  const dependencyCount = 24;
+  const dependencyPaths = Array.from(
+    { length: dependencyCount },
+    (_, i) => `react/generated/dependency-${i}.d.ts`,
+  );
+  const perDependency = 32 * 1024 * 1024;
+  const lastBytes = limit + excessBytes - existingBytes - perDependency * (dependencyCount - 1);
+  if (lastBytes < 1 || lastBytes > perDependency) throw new Error("invalid selected-resource budget fixture");
+  index.files["react/types.d.ts"] = {
+    ...index.files["react/types.d.ts"]!,
+    requires: dependencyPaths,
+  };
+  dependencyPaths.forEach((path, i) => {
+    const amount = i === dependencyCount - 1 ? lastBytes : perDependency;
+    index.files[path] = {
+      offset: 0,
+      compressedSize: budget === "payloadBytes" ? amount : 1,
+      compressedSha256: "a".repeat(64),
+      size: budget === "expandedBytes" ? amount : 1,
+      sha256: "b".repeat(64),
+      requires: [],
+    };
+  });
+  return planSelectedResources(config, catalog, index);
+}
 describe("selected resource immutable contract and configuration plan", () => {
+  it.each(["expandedBytes", "payloadBytes"] as const)(
+    "admits exactly 768 MiB of selected %s using bounded metadata only",
+    (budget) => {
+      expect(() => planWithBudgetedDependencies(fixture(), budget)).not.toThrow();
+    },
+  );
+  it.each(["expandedBytes", "payloadBytes"] as const)(
+    "rejects selected %s one byte above 768 MiB",
+    (budget) => {
+      expect(() => planWithBudgetedDependencies(fixture(), budget, 1)).toThrow(/768 MiB budget/);
+    },
+  );
   it("deduplicates fallback variants and does not select unused theme icons", () => {
     const data = fixture();
     const parsed = parseResourceIndex(data.indexBytes, data.refs, {
