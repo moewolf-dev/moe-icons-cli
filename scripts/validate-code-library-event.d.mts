@@ -1,6 +1,7 @@
 export interface ReleaseEventBinding {
   releasePolicyCommit: string;
   releasePolicySha256: string;
+  manifestSha256?: string;
   mediaContractVersion: string;
   sourceManifestSchemaVersion: string;
   releaseScope: "free" | "pro";

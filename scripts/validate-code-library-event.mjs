@@ -68,15 +68,17 @@ export function validateEventBinding(raw) {
   if (raw === undefined || raw === null) return null;
   if (typeof raw !== "object" || Array.isArray(raw)) throw new Error("event binding must be an object");
   for (const field of Object.keys(raw)) {
-    if (![...BINDING_REQUIRED, "bitmapBatch"].includes(field)) throw new Error(`event binding has unknown field "${field}"`);
+    if (![...BINDING_REQUIRED, "manifestSha256", "bitmapBatch"].includes(field)) throw new Error(`event binding has unknown field "${field}"`);
   }
   for (const field of BINDING_REQUIRED) {
     if (raw[field] === undefined || raw[field] === "") throw new Error(`event binding missing ${field}`);
   }
   const releasePolicyCommit = String(raw.releasePolicyCommit).toLowerCase();
   const releasePolicySha256 = String(raw.releasePolicySha256).toLowerCase();
+  const manifestSha256 = raw.manifestSha256 === undefined ? undefined : String(raw.manifestSha256).toLowerCase();
   if (!COMMIT.test(releasePolicyCommit)) throw new Error("invalid binding releasePolicyCommit");
   if (!SHA256.test(releasePolicySha256)) throw new Error("invalid binding releasePolicySha256");
+  if (manifestSha256 !== undefined && !SHA256.test(manifestSha256)) throw new Error("invalid binding manifestSha256");
   if (!SUPPORTED_VERSIONS.has(Number(raw.mediaContractVersion))) throw new Error(`unsupported binding mediaContractVersion ${raw.mediaContractVersion}`);
   if (!SUPPORTED_VERSIONS.has(Number(raw.sourceManifestSchemaVersion))) throw new Error(`unsupported binding sourceManifestSchemaVersion ${raw.sourceManifestSchemaVersion}`);
   const mediaVersion = Number(raw.mediaContractVersion);
@@ -110,6 +112,7 @@ export function validateEventBinding(raw) {
   return {
     releasePolicyCommit,
     releasePolicySha256,
+    ...(manifestSha256 ? { manifestSha256 } : {}),
     mediaContractVersion: String(raw.mediaContractVersion),
     sourceManifestSchemaVersion: String(raw.sourceManifestSchemaVersion),
     releaseScope: raw.releaseScope,

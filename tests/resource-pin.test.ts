@@ -112,6 +112,7 @@ const PIN = JSON.parse(
 const BINDING = {
   releasePolicyCommit: PIN.sourceCommit,
   releasePolicySha256: PIN.sha256,
+  manifestSha256: "c".repeat(64),
   mediaContractVersion: "2",
   sourceManifestSchemaVersion: "2",
   releaseScope: "pro",
@@ -126,10 +127,12 @@ describe("DEV-20-01 CLI pin binding", () => {
   it("validates the nested binding and matches the vendored PIN", () => {
     const binding = validateEventBinding(BINDING);
     expect(binding?.releaseScope).toBe("pro");
+    expect(binding?.manifestSha256).toBe("c".repeat(64));
     expect(binding?.bitmapBatch?.batchId).toBe("bitmap-wave-2");
     expect(bindingMatchesPolicy(binding, PIN)).toBe(true);
     expect(bindingMatchesPolicy(validateEventBinding({ ...BINDING, releasePolicyCommit: "c".repeat(40) }), PIN)).toBe(false);
     expect(() => validateEventBinding({ ...BINDING, releasePolicyCommit: "nope" })).toThrow(/releasePolicyCommit/);
+    expect(() => validateEventBinding({ ...BINDING, manifestSha256: "bad" })).toThrow(/manifestSha256/);
     expect(() => validateEventBinding({ ...BINDING, releaseScope: "ent" })).toThrow(/releaseScope/);
     expect(() => validateEventBinding({ ...BINDING, bitmapBatch: { ...BINDING.bitmapBatch, batchId: "wave" } })).toThrow(/batchId/);
   });
