@@ -7,21 +7,48 @@ const RECOVERY_MARKERS = [
   'did not become installable within',
   'npm accepted submission is not yet publicly available; keep Release draft',
 ];
+const POST_VISIBILITY_FINALIZATION_STEPS = new Set([
+  'Finalize the Release',
+  'Write the canonical publish receipt',
+  'Upload the publish receipt',
+  'Preserve immutable public publish receipt for downstream replay',
+]);
 
 export function shouldAutoResume({ parentRun, jobs, failedLogs, priorResumeCount }) {
   if (parentRun?.path !== PUBLISH_WORKFLOW || parentRun?.head_branch !== 'main' || parentRun?.conclusion !== 'failure') {
     return { resume: false, reason: 'not a failed main publish workflow run' };
   }
+  if (/\bresume:\s*\d+\b/.test(String(parentRun.display_title || ''))) {
+    return { resume: false, reason: 'this publish run is already an automatic resume' };
+  }
   const publishJob = (jobs || []).find((job) => job.name === 'publish' && job.conclusion === 'failure');
   if (!publishJob) return { resume: false, reason: 'publish job did not fail' };
-  const registryStep = (publishJob.steps || []).find((step) =>
+  const steps = publishJob.steps || [];
+  const failedStep = steps.find((step) => step.conclusion === 'failure');
+  if (!failedStep) return { resume: false, reason: 'publish failure step is unavailable' };
+  const succeeded = (name) => steps.some((step) => step.name === name && step.conclusion === 'success');
+  const registryStep = steps.find((step) =>
     step.name === 'Wait for public registry visibility and smoke npx install' && step.conclusion === 'failure');
-  if (!registryStep) return { resume: false, reason: 'failure was outside registry visibility verification' };
-  if (!RECOVERY_MARKERS.some((marker) => String(failedLogs || '').includes(marker))) {
-    return { resume: false, reason: 'failure log is not a recognized registry visibility timeout' };
+  let recoveryReason;
+  if (registryStep && failedStep.name === registryStep.name) {
+    if (!succeeded('Publish to npm or verify the existing registry package')) {
+      return { resume: false, reason: 'immutable package publication step did not succeed' };
+    }
+    if (!RECOVERY_MARKERS.some((marker) => String(failedLogs || '').includes(marker))) {
+      return { resume: false, reason: 'failure log is not a recognized registry visibility timeout' };
+    }
+    recoveryReason = 'registry visibility failed after immutable npm publication';
+  } else if (POST_VISIBILITY_FINALIZATION_STEPS.has(failedStep.name)) {
+    if (!succeeded('Publish to npm or verify the existing registry package') ||
+        !succeeded('Wait for public registry visibility and smoke npx install')) {
+      return { resume: false, reason: 'npm publication and public visibility were not both verified' };
+    }
+    recoveryReason = `public npm package verified; resume failed finalization step: ${failedStep.name}`;
+  } else {
+    return { resume: false, reason: 'failure was outside verified publication finalization' };
   }
   if (priorResumeCount >= 1) return { resume: false, reason: 'bounded automatic resume already used' };
-  return { resume: true, reason: 'registry visibility failed after immutable npm publication' };
+  return { resume: true, reason: recoveryReason };
 }
 
 function ghJson(args) {

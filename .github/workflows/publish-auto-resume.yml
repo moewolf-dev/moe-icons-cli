@@ -28,7 +28,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-      - name: Resume one exact accepted candidate after registry visibility timeout
+      - name: Resume the exact accepted candidate after visibility or finalization failure
         env:
           GITHUB_TOKEN: ${{ github.token }}
           WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}

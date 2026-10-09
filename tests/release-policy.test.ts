@@ -160,7 +160,10 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
     const jobs = [{
       name: "publish",
       conclusion: "failure",
-      steps: [{ name: "Wait for public registry visibility and smoke npx install", conclusion: "failure" }],
+      steps: [
+        { name: "Publish to npm or verify the existing registry package", conclusion: "success" },
+        { name: "Wait for public registry visibility and smoke npx install", conclusion: "failure" },
+      ],
     }];
     const failedLogs = "npm package @moewolf/moe-icons-cli@0.0.11 did not become installable within 1800000ms";
     expect(shouldAutoResume({ parentRun, jobs, failedLogs, priorResumeCount: 0 })).toMatchObject({ resume: true });
@@ -173,5 +176,43 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
     expect(workflow).toContain("workflows: [Publish CLI]");
     expect(workflow).toContain("actions: write");
     expect(workflow).not.toMatch(/secrets\.NPM_TOKEN|NODE_AUTH_TOKEN/);
+  });
+
+  it("auto-resumes verified npm publication when Release or receipt finalization fails", () => {
+    const parentRun = { path: ".github/workflows/publish.yml", head_branch: "main", conclusion: "failure" };
+    const priorSuccess = [
+      { name: "Publish to npm or verify the existing registry package", conclusion: "success" },
+      { name: "Wait for public registry visibility and smoke npx install", conclusion: "success" },
+    ];
+    const finalizationSteps = [
+      "Finalize the Release",
+      "Write the canonical publish receipt",
+      "Upload the publish receipt",
+      "Preserve immutable public publish receipt for downstream replay",
+    ];
+    for (const name of finalizationSteps) {
+      const jobs = [{ name: "publish", conclusion: "failure", steps: [...priorSuccess, { name, conclusion: "failure" }] }];
+      expect(shouldAutoResume({ parentRun, jobs, priorResumeCount: 0 })).toMatchObject({ resume: true });
+      expect(shouldAutoResume({ parentRun, jobs, priorResumeCount: 1 })).toMatchObject({ resume: false });
+    }
+
+    const notYetPublished = [{ name: "publish", conclusion: "failure", steps: [
+      { name: "Publish to npm or verify the existing registry package", conclusion: "failure" },
+      { name: "Finalize the Release", conclusion: "skipped" },
+    ] }];
+    expect(shouldAutoResume({ parentRun, jobs: notYetPublished, priorResumeCount: 0 })).toMatchObject({ resume: false });
+
+    expect(shouldAutoResume({
+      parentRun: { ...parentRun, display_title: "Publish CLI resume:123456" },
+      jobs: [{ name: "publish", conclusion: "failure", steps: [...priorSuccess, { name: "Finalize the Release", conclusion: "failure" }] }],
+      priorResumeCount: 0,
+    })).toMatchObject({ resume: false, reason: "this publish run is already an automatic resume" });
+
+    const visibilityUnverified = [{ name: "publish", conclusion: "failure", steps: [
+      { name: "Publish to npm or verify the existing registry package", conclusion: "success" },
+      { name: "Wait for public registry visibility and smoke npx install", conclusion: "failure" },
+      { name: "Finalize the Release", conclusion: "skipped" },
+    ] }];
+    expect(shouldAutoResume({ parentRun, jobs: visibilityUnverified, priorResumeCount: 0 })).toMatchObject({ resume: false });
   });
 });
