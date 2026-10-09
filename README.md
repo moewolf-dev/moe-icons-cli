@@ -281,6 +281,12 @@ Log out before switching storage methods. Official production refresh uses the
 existing public Auth0 configuration; custom/local environments must provide
 matching issuer and client ID. Account and refresh requests have a deadline
 covering headers and body. Revoked refresh credentials require a new login.
+Overlapping CLI processes coordinate refreshes and reuse the same renewed
+session. A cancelled waiter does not cancel the refresh owned by another process.
+After a process is forcibly stopped during refresh, a remaining
+`session-refresh.lock` in the selected store directory (or the CLI state directory
+for native credentials) reports an error. Confirm the PID in its `owner.json`
+has stopped before removing that lock directory and retrying.
 
 The VS Code extension reads credentials on its own host. For Remote SSH, WSL
 or a container, run the CLI login on that host; local credentials are not copied.

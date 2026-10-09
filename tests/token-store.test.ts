@@ -72,4 +72,19 @@ describe("credential stores", () => {
     expect(store?.getActive()).toEqual(SESSION);
     expect(execFile.mock.calls.some((call) => JSON.stringify(call[1]).includes("refresh"))).toBe(false);
   });
+  it("Windows deletion distinguishes a missing record from access or removal errors", () => {
+    let failure = 45;
+    const execFile = vi.fn((_command: string, args: readonly string[]) => {
+      const script = args.at(-1) ?? "";
+      if (script.includes("[Console]::Out.Write")) return JSON.stringify(SESSION);
+      expect(script).toContain("exit 44");
+      expect(script).toContain("exit 45");
+      throw Object.assign(new Error("fixture deletion failed"), { status: failure });
+    });
+    const store = createSystemTokenStore({ platform: "win32", execFile: execFile as never })!;
+    expect(() => store.clear()).toThrow(/cannot clear system credentials/);
+    expect(() => store.delete(SESSION.accountId)).toThrow(/cannot clear system credentials/);
+    failure = 44;
+    expect(() => store.clear()).not.toThrow();
+  });
 });

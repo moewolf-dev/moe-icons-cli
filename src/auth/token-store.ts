@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync, mkdirSync, chmodSync, lstatSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { missingCredential } from "./session-policy.cjs";
+import { missingCredential, stateRoot } from "./session-policy.cjs";
+import { withRefreshLock } from "./refresh-lock.js";
 import { CliError } from "../errors/index.js";
 import { execFileSync } from "node:child_process";
 
@@ -25,6 +26,7 @@ export interface TokenStore {
   set(session: StoredSession): void;
   delete(accountId: string): void;
   clear(): void;
+  withRefreshLock?<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T>;
 }
 
 function parseSession(value: string): StoredSession | undefined {
@@ -68,6 +70,7 @@ export function createFileTokenStore(options: { rootDir?: string } = {}): TokenS
   }
 
   return {
+    withRefreshLock: (operation, signal) => withRefreshLock(root, operation, signal),
     get(accountId: string): StoredSession | undefined {
       return readAll()[accountId];
     },
@@ -116,7 +119,7 @@ export function createSystemTokenStore(options: {
     const prefix = "[void][Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime];$v=[Windows.Security.Credentials.PasswordVault]::new();";
     read = () => invoke("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `${prefix}try{$c=$v.Retrieve('${service}','${account}');$c.RetrievePassword();[Console]::Out.Write($c.Password)}catch{$e=$_.Exception;while($e){if($e.HResult -eq -2147023728){exit 44};$e=$e.InnerException};exit 45}`]);
     write = (value) => { invoke("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `${prefix}$p=[Console]::In.ReadToEnd();try{$v.Remove($v.Retrieve('${service}','${account}'))}catch{};$v.Add([Windows.Security.Credentials.PasswordCredential]::new('${service}','${account}',$p))`], value); };
-    remove = () => { invoke("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `${prefix}try{$v.Remove($v.Retrieve('${service}','${account}'))}catch{}`]); };
+    remove = () => { invoke("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `${prefix}try{$v.Remove($v.Retrieve('${service}','${account}'))}catch{$e=$_.Exception;while($e){if($e.HResult -eq -2147023728){exit 44};$e=$e.InnerException};exit 45}`]); };
   } else {
     return undefined;
   }
@@ -126,10 +129,11 @@ export function createSystemTokenStore(options: {
     catch (error) { if (missingCredential(platform, error as never)) return undefined; throw new CliError("AUTH_ERROR", "system credential storage unavailable; retry or check its permissions"); }
   };
   return {
+    withRefreshLock: (operation, signal) => withRefreshLock(stateRoot(process.env), operation, signal),
     get: (accountId) => { const value = active(); return value?.accountId === accountId ? value : undefined; },
     getActive: active,
     set: (session) => { try { write(JSON.stringify(session)); } catch { throw new CliError("AUTH_ERROR", "cannot save system credentials; check credential store permissions"); } },
-    delete: (accountId) => { if (active()?.accountId === accountId) { try { remove(); } catch { /* already absent */ } } },
+    delete: (accountId) => { if (active()?.accountId === accountId) { try { remove(); } catch (error) { if (!missingCredential(platform, error as never)) throw new CliError("AUTH_ERROR", "cannot clear system credentials; check credential store permissions"); } } },
     clear: () => { try { remove(); } catch (error) { if (!missingCredential(platform,error as never)) throw new CliError("AUTH_ERROR", "cannot clear system credentials; check credential store permissions"); } },
   };
 }

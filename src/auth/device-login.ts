@@ -113,31 +113,70 @@ export async function refreshAuth0Session(
   session: StoredSession,
   deps: { fetch: typeof fetch; tokenStore: TokenStore; now: () => number; signal?: AbortSignal },
 ): Promise<StoredSession> {
-  const response = await boundedResponse(deps.fetch, `${config.auth0Issuer.replace(/\/$/, "")}/oauth/token`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      grant_type: "refresh_token",
-      client_id: config.auth0ClientId,
-      refresh_token: session.refreshToken,
-    }),
-    ...(deps.signal ? { signal: deps.signal } : {}),
-  });
-  if (response.status >= 500 || response.status === 429) throw new CliError("NETWORK_ERROR", "Auth0 refresh temporarily unavailable; retry");
-  const body = (await response.json()) as Record<string, unknown>;
-  if (!response.ok || typeof body.access_token !== "string") {
-    throw new CliError("AUTH_ERROR", "Auth0 refresh failed");
-  }
-  if (body.expires_in !== undefined && (typeof body.expires_in !== "number" || !Number.isSafeInteger(body.expires_in) || body.expires_in <= 0)) throw new CliError("VALIDATION_ERROR", "invalid Auth0 token lifetime");
-  const updated: StoredSession = {
-    ...session,
-    accessToken: body.access_token,
-    refreshToken: typeof body.refresh_token === "string" ? body.refresh_token : session.refreshToken,
-    expiresAt: deps.now() + (typeof body.expires_in === "number" ? body.expires_in : 3600) * 1000,
-    storedAt: deps.now(),
+  const perform = async (): Promise<StoredSession> => {
+    const current = deps.tokenStore.getActive();
+    if (!current || current.accountId !== session.accountId)
+      throw new CliError(
+        "AUTH_ERROR",
+        "session changed during refresh; retry with the current account",
+      );
+    if (current.accessToken !== session.accessToken || current.storedAt !== session.storedAt) {
+      if (current.expiresAt > deps.now()) return current;
+      throw new CliError(
+        "NETWORK_ERROR",
+        "session changed during refresh; retry with the current account",
+      );
+    }
+    const response = await boundedResponse(
+      deps.fetch,
+      `${config.auth0Issuer.replace(/\/$/, "")}/oauth/token`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          grant_type: "refresh_token",
+          client_id: config.auth0ClientId,
+          refresh_token: session.refreshToken,
+        }),
+        ...(deps.signal ? { signal: deps.signal } : {}),
+      },
+    );
+    if (response.status >= 500 || response.status === 429)
+      throw new CliError("NETWORK_ERROR", "Auth0 refresh temporarily unavailable; retry");
+    const body = (await response.json()) as Record<string, unknown>;
+    if (!response.ok || typeof body.access_token !== "string") {
+      throw new CliError("AUTH_ERROR", "Auth0 refresh failed");
+    }
+    if (
+      body.expires_in !== undefined &&
+      (typeof body.expires_in !== "number" ||
+        !Number.isSafeInteger(body.expires_in) ||
+        body.expires_in <= 0)
+    )
+      throw new CliError("VALIDATION_ERROR", "invalid Auth0 token lifetime");
+    const updated: StoredSession = {
+      ...session,
+      accessToken: body.access_token,
+      refreshToken:
+        typeof body.refresh_token === "string" ? body.refresh_token : session.refreshToken,
+      expiresAt: deps.now() + (typeof body.expires_in === "number" ? body.expires_in : 3600) * 1000,
+      storedAt: deps.now(),
+    };
+    const latest = deps.tokenStore.getActive();
+    if (
+      !latest ||
+      latest.accountId !== session.accountId ||
+      latest.accessToken !== session.accessToken ||
+      latest.storedAt !== session.storedAt
+    )
+      throw new CliError(
+        "AUTH_ERROR",
+        "session changed during refresh; retry with the current account",
+      );
+    deps.tokenStore.set(updated);
+    return updated;
   };
-  const latest = deps.tokenStore.getActive();
-  if (!latest || latest.accessToken !== session.accessToken || latest.storedAt !== session.storedAt) throw new CliError("AUTH_ERROR", "session changed during refresh; retry with the current account");
-  deps.tokenStore.set(updated);
-  return updated;
+  return deps.tokenStore.withRefreshLock
+    ? deps.tokenStore.withRefreshLock(perform, deps.signal)
+    : perform();
 }
