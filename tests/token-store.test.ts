@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, symlinkSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFileTokenStore, createSystemTokenStore, type StoredSession } from "../src/auth/token-store.js";
@@ -20,6 +20,23 @@ describe("credential stores", () => {
       expect(readFileSync(join(root, "token-store.json"), "utf8")).toContain("refresh");
       store.clear();
       expect(store.getActive()).toBeUndefined();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("does not treat a dangling symlink or damaged file as signed out or overwrite it on logout", () => {
+    const root = mkdtempSync(join(tmpdir(), "moeicons-token-invalid-"));
+    const file = join(root, "token-store.json");
+    const store = createFileTokenStore({ rootDir: root });
+    try {
+      symlinkSync(join(root, "absent-target"), file);
+      expect(() => store.getActive()).toThrow(/credential storage unavailable/);
+      expect(() => store.clear()).toThrow(/credential storage unavailable/);
+      expect(lstatSync(file).isSymbolicLink()).toBe(true);
+      rmSync(file);
+      const damaged = '{"fixture":"invalid"}';
+      writeFileSync(file, damaged, { mode: 0o600 });
+      expect(() => store.clear()).toThrow(/credential storage unavailable/);
+      expect(readFileSync(file, "utf8")).toBe(damaged);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 

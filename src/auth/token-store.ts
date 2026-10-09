@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, lstatSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, chmodSync, lstatSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { missingCredential } from "./session-policy.cjs";
@@ -46,9 +46,13 @@ export function createFileTokenStore(options: { rootDir?: string } = {}): TokenS
   const file = join(root, "token-store.json");
 
   function readAll(): Record<string, StoredSession> {
-    if (!existsSync(file)) return {};
+    let meta: ReturnType<typeof lstatSync>;
+    try { meta = lstatSync(file); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+      throw new CliError("AUTH_ERROR", "file credential storage unavailable; check permissions or repair the store");
+    }
     try {
-      const meta = lstatSync(file);
       if (!meta.isFile() || meta.isSymbolicLink() || meta.size > 1_000_000 || (process.platform !== "win32" && ((meta.mode & 0o077) !== 0 || typeof process.getuid === "function" && meta.uid !== process.getuid()))) throw new Error("insecure store");
       const raw: unknown = JSON.parse(readFileSync(file, "utf8"));
       if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("invalid store");
@@ -80,7 +84,7 @@ export function createFileTokenStore(options: { rootDir?: string } = {}): TokenS
       delete all[accountId];
       writeAll(all);
     },
-    clear(): void { writeAll({}); },
+    clear(): void { readAll(); writeAll({}); },
   };
 }
 
