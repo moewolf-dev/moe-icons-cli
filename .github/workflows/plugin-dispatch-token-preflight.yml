@@ -1,0 +1,21 @@
+name: Plugin dispatch token preflight (non-publishing)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+      - name: Verify PLUGIN_DISPATCH_TOKEN against an unhandled probe event
+        env:
+          PLUGIN_DISPATCH_TOKEN: ${{ secrets.PLUGIN_DISPATCH_TOKEN }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: node scripts/preflight-plugin-dispatch-token.mjs
