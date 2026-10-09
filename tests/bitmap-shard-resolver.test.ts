@@ -100,6 +100,21 @@ describe("bitmap shard resolver (DEV-G07)", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("keeps explicitly catalogued 64px variants usable for historical releases", () => {
+    const historicalCatalog: IconCatalog = {
+      ...CATALOG,
+      styleGroups: CATALOG.styleGroups.map((group) => group.id === "moe-3d-metal"
+        ? { ...group, imageSizes: [64], variants: ["moe-3d-metal-64-png"], formats: ["png"] }
+        : group),
+    };
+    const result = resolveBitmapTuples(config({ legacy: { styleGroup: "moe-3d-metal", format: "png", imageSize: 64 } }), historicalCatalog);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.tuples.map((tuple) => `${tuple.styleGroupId}/${tuple.imageSize.width}/${tuple.format}`)).toEqual([
+      "moe-3d-metal/64/png",
+    ]);
+  });
+
   it("plans one immutable request per tuple in canonical order", () => {
     const requests = planBitmapShardRequests([
       { styleGroupId: "moe-3d-metal", imageSize: { width: 256, height: 256 }, format: "png" },
