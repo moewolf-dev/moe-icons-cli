@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyRemotePolicy } from "../scripts/verify-release-policy-remote.mjs";
+import { waitForRegistryPackage } from "../scripts/wait-for-registry-package.mjs";
 
 async function withServer(
   handler: (req: http.IncomingMessage, res: http.ServerResponse) => void,
@@ -113,5 +114,43 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
     expect(publish).toMatch(/id-token:\s*write/);
     expect(publish).toMatch(/--provenance/);
     expect(publish).toMatch(/environment:\s*npm-publish/);
+  });
+
+  it("retries npm metadata and tarball visibility failures within a bounded window", async () => {
+    let time = 0;
+    const sleeps: number[] = [];
+    const commands: string[] = [];
+    const result = await waitForRegistryPackage({
+      packageName: "@moewolf/moe-icons-cli",
+      version: "0.0.11",
+      maxWaitMs: 60_000,
+      retryDelaysMs: [1000, 2000],
+      now: () => time,
+      sleep: async (milliseconds) => {
+        sleeps.push(milliseconds);
+        time += milliseconds;
+      },
+      runCommand: (command, args) => {
+        commands.push(`${command} ${args.join(" ")}`);
+        if (commands.length === 1) return { status: 1, stderr: "npm error E404" };
+        if (commands.length === 3) return { status: 1, stderr: "npm error 404 Not Found tarball" };
+        return { status: 0, stdout: "0.0.11\n" };
+      },
+    });
+    expect(result).toMatchObject({ version: "0.0.11", attempts: 3, smokeOutput: "0.0.11" });
+    expect(sleeps).toEqual([1000, 2000]);
+    expect(commands).toHaveLength(5);
+    expect(commands[2]).toContain("npx --yes --prefer-online");
+  });
+
+  it("stops immediately for non-transient npm authorization failures", async () => {
+    const runCommand = vi.fn(() => ({ status: 1, stderr: "npm error E401" }));
+    await expect(waitForRegistryPackage({
+      packageName: "@moewolf/moe-icons-cli",
+      version: "0.0.11",
+      runCommand,
+      sleep: async () => { throw new Error("unexpected retry"); },
+    })).rejects.toThrow(/failed permanently/);
+    expect(runCommand).toHaveBeenCalledTimes(1);
   });
 });

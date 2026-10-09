@@ -496,7 +496,7 @@ jobs:
     needs: [decide, pack, acceptance, recover]
     if: always() && (needs.acceptance.result == 'success' || needs.recover.result == 'success')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     environment: npm-publish
     steps:
       # FIX-29-B: check out the exact candidate commit so the scanner script is
@@ -621,21 +621,15 @@ jobs:
             npm publish "$tgz" --access public --provenance --loglevel verbose
           fi
       - name: Wait for public registry visibility and smoke npx install
+        timeout-minutes: 35
+        env:
+          RELEASE_TAG: ${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}
         run: |
           set -euo pipefail
-          version="${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}"
-          version="${version#v}"
-          visible=false
-          for attempt in $(seq 1 30); do
-            if npm view "@moewolf/moe-icons-cli@${version}" version --prefer-online >/dev/null 2>&1; then visible=true; break; fi
-            sleep 10
-          done
-          test "$visible" = true || { echo "npm accepted submission is not yet publicly available; keep Release draft" >&2; exit 1; }
+          version="${RELEASE_TAG#v}"
           unset NODE_AUTH_TOKEN
           export NPM_CONFIG_USERCONFIG=/dev/null
-          mkdir -p "$RUNNER_TEMP/registry-smoke"
-          cd "$RUNNER_TEMP/registry-smoke"
-          npx --yes --prefer-online "@moewolf/moe-icons-cli@${version}" --version
+          node scripts/wait-for-registry-package.mjs "@moewolf/moe-icons-cli" "$version"
       - name: Finalize the Release
         env:
           GH_TOKEN: ${{ github.token }}
