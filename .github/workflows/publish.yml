@@ -1,4 +1,5 @@
 name: Publish CLI
+run-name: Publish CLI ${{ inputs.resume_run_id != '' && format('resume:{0}', inputs.resume_run_id) || '' }}
 
 # E2E-G1/G1A/G2/G3/G4 (ICON-E2E-0907) + P0-5/P0-6.
 #   1. push to protected `main` when shipped bytes (payloadHash) changed;

@@ -1,0 +1,35 @@
+name: Auto resume transient CLI publication
+
+on:
+  workflow_run:
+    workflows: [Publish CLI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: cli-publish-auto-resume-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  resume:
+    if: github.repository == 'moewolf-dev/moe-icons-cli' && github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          sparse-checkout: scripts/auto-resume-publish.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Resume one exact accepted candidate after registry visibility timeout
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: node scripts/auto-resume-publish.mjs

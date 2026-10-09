@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyRemotePolicy } from "../scripts/verify-release-policy-remote.mjs";
 import { waitForRegistryPackage } from "../scripts/wait-for-registry-package.mjs";
+import { shouldAutoResume } from "../scripts/auto-resume-publish.mjs";
 
 async function withServer(
   handler: (req: http.IncomingMessage, res: http.ServerResponse) => void,
@@ -152,5 +153,25 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
       sleep: async () => { throw new Error("unexpected retry"); },
     })).rejects.toThrow(/failed permanently/);
     expect(runCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-resumes only one exact publish candidate after a recognized registry timeout", () => {
+    const parentRun = { path: ".github/workflows/publish.yml", head_branch: "main", conclusion: "failure" };
+    const jobs = [{
+      name: "publish",
+      conclusion: "failure",
+      steps: [{ name: "Wait for public registry visibility and smoke npx install", conclusion: "failure" }],
+    }];
+    const failedLogs = "npm package @moewolf/moe-icons-cli@0.0.11 did not become installable within 1800000ms";
+    expect(shouldAutoResume({ parentRun, jobs, failedLogs, priorResumeCount: 0 })).toMatchObject({ resume: true });
+    expect(shouldAutoResume({ parentRun, jobs, failedLogs, priorResumeCount: 1 })).toMatchObject({ resume: false });
+    expect(shouldAutoResume({ parentRun: { ...parentRun, head_branch: "pull/9" }, jobs, failedLogs, priorResumeCount: 0 })).toMatchObject({ resume: false });
+    expect(shouldAutoResume({ parentRun, jobs: [{ name: "pack", conclusion: "failure" }], failedLogs, priorResumeCount: 0 })).toMatchObject({ resume: false });
+    expect(shouldAutoResume({ parentRun, jobs, failedLogs: "npx package smoke failed permanently", priorResumeCount: 0 })).toMatchObject({ resume: false });
+
+    const workflow = fs.readFileSync(path.join(root, ".github", "workflows", "publish-auto-resume.yml"), "utf8");
+    expect(workflow).toContain("workflows: [Publish CLI]");
+    expect(workflow).toContain("actions: write");
+    expect(workflow).not.toMatch(/secrets\.NPM_TOKEN|NODE_AUTH_TOKEN/);
   });
 });
