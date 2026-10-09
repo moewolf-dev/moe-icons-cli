@@ -14,6 +14,8 @@ import { checkVersionPublished } from "../scripts/release-preflight.mjs";
 const script = resolve("scripts/release-preflight.mjs");
 import packageJson from "../package.json" with { type: "json" };
 const PACKAGE_VERSION = packageJson.version;
+const [major, minor, patch] = PACKAGE_VERSION.split(".").map(Number);
+const OTHER_VERSION = `${major}.${minor}.${patch + 1}`;
 
 describe("release-preflight", () => {
   describe("checkVersionPublished (mock fetch)", () => {
@@ -22,7 +24,7 @@ describe("release-preflight", () => {
         version: PACKAGE_VERSION,
         fetchFn: async () =>
           new Response(
-            JSON.stringify({ name: "@moewolf/moe-icons-cli", versions: { "0.0.9": {}, "0.1.1": {} } }),
+            JSON.stringify({ name: "@moewolf/moe-icons-cli", versions: { [OTHER_VERSION]: {} } }),
             { status: 200 },
           ),
       });
