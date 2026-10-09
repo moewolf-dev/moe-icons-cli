@@ -18,6 +18,10 @@ on:
         type: choice
         options: [oidc, token]
         default: oidc
+      auth_audit_only:
+        description: "Inspect npm trusted publisher metadata with the existing token; do not run validation or publish"
+        type: boolean
+        default: false
       resume_run_id:
         description: "Recover an already accepted immutable candidate from this repository run; never rebuild or bump"
         required: false
@@ -64,15 +68,33 @@ jobs:
       - name: Verify existing repository publisher token before release work
         env:
           NODE_AUTH_TOKEN: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_auth_mode == 'token' && secrets.NPM_TOKEN || '' }}
+          AUTH_AUDIT_ONLY: ${{ inputs.auth_audit_only }}
         run: |
           set -euo pipefail
           test -n "$NODE_AUTH_TOKEN"
           npm whoami >/dev/null
+          if [ "$AUTH_AUDIT_ONLY" = true ]; then
+            # Read-only: expose publisher metadata, never the repository token.
+            npm trust list @moewolf/moe-icons-cli --json > "$RUNNER_TEMP/npm-trust.json"
+            node - "$RUNNER_TEMP/npm-trust.json" <<'JS'
+          const fs = require('node:fs');
+          const data = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const entries = Array.isArray(data) ? data : Array.isArray(data.publishers) ? data.publishers : Array.isArray(data.trust) ? data.trust : [];
+          const summary = entries.map(entry => ({
+            provider: entry.provider ?? entry.type ?? null,
+            repository: entry.repository ?? entry.repo ?? null,
+            workflow: entry.workflow ?? entry.file ?? entry.workflowFile ?? null,
+            environment: entry.environment ?? entry.env ?? null,
+            publishAllowed: entry.publishAllowed ?? entry.allowPublish ?? entry.allow_publish ?? null,
+          }));
+          console.log(JSON.stringify({ publisherCount: entries.length, publishers: summary }));
+          JS
+          fi
           echo 'Existing npm publisher token authenticated; final publish enforces package permissions.'
 
   # R-P0-2: a manual dry-run still validates the tree but performs zero writes.
   validate:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.auth_audit_only != true
     runs-on: [self-hosted, Linux, X64, moe-ci-server]
     timeout-minutes: 20
     steps:
@@ -124,7 +146,7 @@ jobs:
 
   decide:
     needs: npm-auth-preflight
-    if: always() && inputs.resume_run_id == '' && (needs.npm-auth-preflight.result == 'success' || needs.npm-auth-preflight.result == 'skipped')
+    if: always() && inputs.auth_audit_only != true && inputs.resume_run_id == '' && (needs.npm-auth-preflight.result == 'success' || needs.npm-auth-preflight.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -189,7 +211,7 @@ jobs:
           echo "payload_hash=$HASH" >> "$GITHUB_OUTPUT"
 
   recover:
-    if: always() && github.event_name == 'workflow_dispatch' && inputs.resume_run_id != '' && needs.validate.result == 'success' && (needs.npm-auth-preflight.result == 'success' || needs.npm-auth-preflight.result == 'skipped')
+    if: always() && inputs.auth_audit_only != true && github.event_name == 'workflow_dispatch' && inputs.resume_run_id != '' && needs.validate.result == 'success' && (needs.npm-auth-preflight.result == 'success' || needs.npm-auth-preflight.result == 'skipped')
     needs: [validate, npm-auth-preflight]
     runs-on: ubuntu-latest
     timeout-minutes: 10
