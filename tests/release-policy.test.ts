@@ -202,6 +202,12 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
     ] }];
     expect(shouldAutoResume({ parentRun, jobs: notYetPublished, priorResumeCount: 0 })).toMatchObject({ resume: false });
 
+    expect(shouldAutoResume({
+      parentRun: { ...parentRun, display_title: "Publish CLI resume:123456" },
+      jobs: [{ name: "publish", conclusion: "failure", steps: [...priorSuccess, { name: "Finalize the Release", conclusion: "failure" }] }],
+      priorResumeCount: 0,
+    })).toMatchObject({ resume: false, reason: "this publish run is already an automatic resume" });
+
     const visibilityUnverified = [{ name: "publish", conclusion: "failure", steps: [
       { name: "Publish to npm or verify the existing registry package", conclusion: "success" },
       { name: "Wait for public registry visibility and smoke npx install", conclusion: "failure" },

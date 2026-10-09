@@ -18,6 +18,9 @@ export function shouldAutoResume({ parentRun, jobs, failedLogs, priorResumeCount
   if (parentRun?.path !== PUBLISH_WORKFLOW || parentRun?.head_branch !== 'main' || parentRun?.conclusion !== 'failure') {
     return { resume: false, reason: 'not a failed main publish workflow run' };
   }
+  if (/\bresume:\s*\d+\b/.test(String(parentRun.display_title || ''))) {
+    return { resume: false, reason: 'this publish run is already an automatic resume' };
+  }
   const publishJob = (jobs || []).find((job) => job.name === 'publish' && job.conclusion === 'failure');
   if (!publishJob) return { resume: false, reason: 'publish job did not fail' };
   const steps = publishJob.steps || [];
