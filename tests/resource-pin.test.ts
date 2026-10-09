@@ -159,11 +159,22 @@ describe("FIX-22-A CLI binding batch strictness", () => {
     expect(() => validateEventBinding({ ...BINDING, sourceManifestSchemaVersion: "999" })).toThrow(/sourceManifestSchemaVersion/);
     expect(() =>
       validateEventBinding({ ...BINDING, bitmapBatch: { styleGroupIds: ["moe-3d-metal"], variantIds: ["moe-3d-metal-128-png"], batchId: "bitmap-wave-1" } }),
-    ).toThrow(/frozen C1\/C2\/C3/);
+    ).toThrow(/must include 128\/256\/512/);
     expect(() =>
       validateEventBinding({ ...BINDING, bitmapBatch: { styleGroupIds: ["moe-wrong"], variantIds: ["moe-3d-metal-256-webp"], batchId: "bitmap-wave-1" } }),
     ).toThrow(/styleGroupIds/);
     expect(() => validateEventBinding({ ...BINDING, extra: 1 })).toThrow(/unknown field/);
+  });
+
+  it("D01 accepts PNG-only and WebP-only complete size sets", async () => {
+    const { validateEventBinding } = await import("../scripts/validate-code-library-event.mjs");
+    for (const format of ["png", "webp"]) {
+      const variantIds = [128, 256, 512].map((size) => `moe-new-collection-${size}-${format}`);
+      const result = validateEventBinding({ ...BINDING, bitmapBatch: {
+        styleGroupIds: ["moe-new-collection"], variantIds, batchId: "bitmap-wave-3",
+      } });
+      expect(result?.bitmapBatch?.variantIds).toHaveLength(3);
+    }
   });
 });
 

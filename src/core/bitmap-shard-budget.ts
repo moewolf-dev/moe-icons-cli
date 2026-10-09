@@ -14,8 +14,8 @@
  * the measured 89.5/90.0 MiB worst case with headroom; `AUD-FIX-30` records the
  * production freeze. No consumer may invent its own limit — every shard
  * download/expand path takes its numbers from here, and the legacy
- * `ICON_ARCHIVE_MAX_EXPANDED_BYTES` 512 MiB aggregate cap is deliberately not a
- * shard budget.
+ * `ICON_ARCHIVE_MAX_EXPANDED_BYTES` 768 MiB aggregate cap is deliberately not a
+ * shard budget. Per-shard and temporary-disk bounds remain independently set.
  */
 export interface BitmapShardBudget {
   /** Largest signed compressed shard archive accepted for one tuple. */
@@ -43,7 +43,7 @@ export const BITMAP_SHARD_BUDGET: BitmapShardBudget = Object.freeze({
   expandedBytes: 128 * 1024 * 1024,
   entries: 2000,
   singleFileBytes: 16 * 1024 * 1024,
-  totalDownloadBytes: 512 * 1024 * 1024,
+  totalDownloadBytes: 768 * 1024 * 1024,
   tempDiskBytes: 256 * 1024 * 1024,
   concurrency: 1,
   descriptorTimeoutMs: 5_000,

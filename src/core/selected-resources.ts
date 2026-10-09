@@ -236,9 +236,9 @@ export function planSelectedResources(
   const paths = [...chosen].sort();
   const payloadBytes = paths.reduce((sum, p) => sum + index.files[p]!.compressedSize, 0);
   const expandedBytes = paths.reduce((sum, p) => sum + index.files[p]!.size, 0);
-  if (paths.length > 20000 || expandedBytes > 512 * 1024 * 1024 || payloadBytes > 512 * 1024 * 1024)
+  if (paths.length > 20000 || expandedBytes > 768 * 1024 * 1024 || payloadBytes > 768 * 1024 * 1024)
     return fail(
-      "selected resources exceed 20,000 files/512 MiB budget; reduce icons/themes or explicitly use downloadMode=full",
+      "selected resources exceed 20,000 files/768 MiB budget; reduce icons/themes or explicitly use downloadMode=full",
     );
   return { paths, payloadBytes, expandedBytes, fallbacks: [...fallbacks].sort() };
 }

@@ -93,17 +93,18 @@ describe("CLI single version owner", () => {
     expect(pinWorkflow).not.toMatch(/for resources/);
   });
 
-  it("dispatches the guarded token publisher after uploading the exact pin receipt", () => {
+  it("dispatches the guarded OIDC publisher after uploading the exact pin receipt", () => {
     const upload = pinWorkflow.indexOf("name: Upload the pin receipt");
-    const dispatch = pinWorkflow.indexOf("name: Dispatch guarded token publisher");
+    const dispatch = pinWorkflow.indexOf("name: Dispatch guarded OIDC publisher");
     expect(dispatch).toBeGreaterThan(upload);
     expect(pinWorkflow).toMatch(/actions: write/);
-    expect(pinWorkflow).toMatch(/npm_auth_mode=token -f dry_run=false -f break_glass=PUBLISH/);
+    expect(pinWorkflow).toMatch(/npm_auth_mode=oidc -f dry_run=false -f break_glass=PUBLISH/);
+    expect(pinWorkflow).not.toMatch(/npm_auth_mode=token/);
     expect(pinWorkflow).toContain('test "$live" = "$pushed"');
   });
 
   it("continues validated identical pins while excluding blocked and dry-run events", () => {
-    for (const name of ["Write the pin receipt", "Upload the pin receipt", "Dispatch guarded token publisher for the exact pushed pin"]) {
+    for (const name of ["Write the pin receipt", "Upload the pin receipt", "Dispatch guarded OIDC publisher for the exact pushed pin"]) {
       const block = pinWorkflow.split(`- name: ${name}`)[1]?.split("\n      - ")[0];
       expect(block).toContain("steps.apply.outputs.action == 'skip'");
       expect(block).toContain("steps.switch.outputs.blocked == '0'");

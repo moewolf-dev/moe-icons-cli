@@ -7,13 +7,13 @@ const BLOCK = 512;
  * Combined release archives contain all four target trees. The current Pro
  * contract is roughly 60k regular files (9 groups × 554 icons), so the former
  * 20k cap rejected valid official packages. The six-spec bitmap matrix expands
- * to ~205 MiB (tar stream ~257 MiB), so the expanded ceiling covers that with
- * headroom while staying finite for zip-bomb protection. `extractTarGz` enforces
+ * to ~205 MiB (tar stream ~257 MiB). The 768 MiB expanded ceiling supports the
+ * release capacity contract while staying finite for zip-bomb protection. `extractTarGz` enforces
  * the same bound during gunzip via `maxOutputLength`, before the tar stream is
  * materialised.
  */
 export const ICON_ARCHIVE_MAX_ENTRIES = 100_000;
-export const ICON_ARCHIVE_MAX_EXPANDED_BYTES = 512 * 1024 * 1024;
+export const ICON_ARCHIVE_MAX_EXPANDED_BYTES = 768 * 1024 * 1024;
 
 /** True when a zlib gunzip failure means the bounded output was exceeded. */
 function isOutputLimitError(error: unknown): boolean {
