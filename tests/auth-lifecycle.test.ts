@@ -37,6 +37,11 @@ describe('default authentication lifecycle',()=>{
   try{symlinkSync(join(root,'absent'),join(root,'session-store.json'));expect(await runSessionStatusUseCase(context({MOEICONS_STATE_DIR:root,MOEICONS_DISABLE_SYSTEM_KEYCHAIN:'1'}))).toMatchObject({kind:'unknown'});}
   finally{rmSync(root,{recursive:true,force:true});}
  });
+ it('keeps an invalid refresh lock unknown rather than reporting signed out',async()=>{
+  const root=mkdtempSync(join(tmpdir(),'moe-refresh-lock-invalid-'));
+  try{const store=createFileTokenStore({rootDir:root});store.set({accountId:'fixture',accessToken:'old',refreshToken:'fixture',expiresAt:0,scope:'openid',storedAt:1});symlinkSync(join(root,'absent'),join(root,'session-refresh.lock'));const request=vi.fn();expect(await runSessionStatusUseCase(context({}),{tokenStore:store,fetch:request})).toMatchObject({kind:'unknown'});expect(request).not.toHaveBeenCalled();}
+  finally{rmSync(root,{recursive:true,force:true});}
+ });
  it('remembers approved default file storage across new contexts and clears it on logout',async()=>{
   const root=mkdtempSync(join(tmpdir(),'moe-session-lifecycle-'));
   try {

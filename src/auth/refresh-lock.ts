@@ -33,7 +33,7 @@ export async function withRefreshLock<T>(
         const metadata = lstatSync(path);
         if (!metadata.isDirectory() || metadata.isSymbolicLink())
           throw new CliError(
-            "AUTH_ERROR",
+            "NETWORK_ERROR",
             "invalid session refresh lock; repair credential storage",
           );
         const owner = JSON.parse(readFileSync(join(path, "owner.json"), "utf8")) as {
