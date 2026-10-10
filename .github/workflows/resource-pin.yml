@@ -146,9 +146,12 @@ jobs:
           echo "::add-mask::$GH_TOKEN"
           [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
           mkdir -p "$RUNNER_TEMP/candidate"
-          gh api "repos/moewolf-dev/moe-icons-code-library/actions/artifacts/${ARTIFACT_ID}/zip" > "$RUNNER_TEMP/candidate.zip"
-          unzip -q "$RUNNER_TEMP/candidate.zip" -d "$RUNNER_TEMP/candidate"
-          gh api "repos/moewolf-dev/moe-icons-code-library/actions/artifacts/${ARTIFACT_ID}" > "$RUNNER_TEMP/candidate-artifact.json"
+          node - "$RUNNER_TEMP/cli-pin-event.validated.json" "$RUNNER_TEMP" <<'NODE'
+          const fs=require('node:fs'),p=require('node:path'),{retrieve}=require('./scripts/durable-release-artifact.cjs');
+          const e=JSON.parse(fs.readFileSync(process.argv[2])),root=process.argv[3];
+          retrieve({id:process.env.ARTIFACT_ID,version:e.resourceVersion,runId:e.upstreamRunId,headSha:e.generatorCommit},p.join(root,'candidate.zip')).then(meta=>fs.writeFileSync(p.join(root,'candidate-artifact.json'),JSON.stringify(meta))).catch(error=>{console.error(error.message);process.exitCode=1;});
+          NODE
+          python3 scripts/unpack-release-artifact.py "$RUNNER_TEMP/candidate.zip" "$RUNNER_TEMP/candidate"
           node scripts/verify-pin-candidate.mjs "$RUNNER_TEMP/cli-pin-event.validated.json" \
             "$RUNNER_TEMP/candidate-artifact.json" "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/catalog.json" \
             > "$RUNNER_TEMP/catalog-proof.json"

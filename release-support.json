@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "maxAggregateInputBytes": 805306368,
+  "bitmapFormats": [
+    "png",
+    "webp"
+  ],
+  "manifestDigestBinding": true
+}
