@@ -99,9 +99,14 @@ async function retrieve(expected,file){
  assert.ok([REPO,CLI_REPO].includes(repository),'trusted artifact repository');
  let metadata;
  try{metadata=json(`repos/${repository}/actions/artifacts/${expected.id}`);}catch(error){if(!unavailable(error))throw error;}
- if(metadata && !metadata.expired){
+ if(metadata && !metadata.expired && (!metadata.expires_at || Date.parse(metadata.expires_at)>Date.now())){
   const current=json(`repos/${repository}/actions/runs/${expected.runId}`);
-  const attempt=expected.attempt || current.run_attempt;
+  let originalAttempt=expected.attempt;
+  if(!originalAttempt && repository===REPO){
+   try{originalAttempt=readRecord(expected).record.runAttempt;}
+   catch(error){if(error.message!=='No exact immutable private candidate record exists')throw error;}
+  }
+  const attempt=originalAttempt || current.run_attempt;
   const run=json(`repos/${repository}/actions/runs/${expected.runId}/attempts/${attempt}`);
   if(repository===CLI_REPO){
    assert.equal(String(metadata.id),String(expected.id),'CLI artifact ID');assert.equal(metadata.name,`moeicons-cli-${expected.headSha}`,'CLI artifact name');
