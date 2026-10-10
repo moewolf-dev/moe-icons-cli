@@ -1,3 +1,4 @@
+import { workflowRunPathMatches } from './workflow-run-path.cjs';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
@@ -15,7 +16,7 @@ const POST_VISIBILITY_FINALIZATION_STEPS = new Set([
 ]);
 
 export function shouldAutoResume({ parentRun, jobs, failedLogs, priorResumeCount }) {
-  if (parentRun?.path !== PUBLISH_WORKFLOW || parentRun?.head_branch !== 'main' || parentRun?.conclusion !== 'failure') {
+  if (!workflowRunPathMatches(parentRun, PUBLISH_WORKFLOW) || parentRun?.head_branch !== 'main' || parentRun?.conclusion !== 'failure') {
     return { resume: false, reason: 'not a failed main publish workflow run' };
   }
   if (/\bresume:\s*\d+\b/.test(String(parentRun.display_title || ''))) {

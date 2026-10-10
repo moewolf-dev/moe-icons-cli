@@ -1,10 +1,11 @@
+import { workflowRunPathMatches } from './workflow-run-path.cjs';
 import {readFileSync,readdirSync,appendFileSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 export function verifyRecoveryIdentity({run,jobs,pkg,manifest,sha,repository,runId}) {
-  if (String(run.id)!==String(runId)||run.repository?.full_name!==repository||run.head_branch!=='main'||run.path!=='.github/workflows/publish.yml'||run.status!=='completed'||run.conclusion!=='failure') throw Error('not a failed main publish workflow from this repository');
+  if (String(run.id)!==String(runId)||run.repository?.full_name!==repository||run.head_branch!=='main'||!workflowRunPathMatches(run, '.github/workflows/publish.yml')||run.status!=='completed'||run.conclusion!=='failure') throw Error('not a failed main publish workflow from this repository');
   if (jobs.total_count>100) throw Error('job history exceeds verified page');
   const successful=name=>jobs.jobs.filter(j=>j.name===name&&j.status==='completed'&&j.conclusion==='success').sort((a,b)=>b.id-a.id)[0];
   // Push releases validate inside pack; only manual entrypoints have a validate job.
