@@ -97,9 +97,9 @@ function readRecord(expected) {
 async function retrieve(expected,file){
  validateInput(expected);const repository=expected.repository || REPO;
  assert.ok([REPO,CLI_REPO].includes(repository),'trusted artifact repository');
- let metadata;
- try{metadata=json(`repos/${repository}/actions/artifacts/${expected.id}`);}catch(error){if(!unavailable(error))throw error;}
- if(metadata && !metadata.expired && (!metadata.expires_at || Date.parse(metadata.expires_at)>Date.now())){
+ let metadata,actionsDownloadError;
+ if(!expected.preferPrivate)try{metadata=json(`repos/${repository}/actions/artifacts/${expected.id}`);}catch(error){if(!unavailable(error))throw error;}
+ if(!expected.preferPrivate && metadata && !metadata.expired && (!metadata.expires_at || Date.parse(metadata.expires_at)>Date.now())){
   const current=json(`repos/${repository}/actions/runs/${expected.runId}`);
   let originalAttempt=expected.attempt;
   if(!originalAttempt && repository===REPO){
@@ -122,9 +122,12 @@ async function retrieve(expected,file){
    metadata.expires_at=metadata.originalActionsExpiresAt;
   }
   metadata.storage='actions';
-  if(file)await download(`repos/${repository}/actions/artifacts/${expected.id}/zip`,file,metadata);
-  return metadata;
+  if(file){
+   try{await download(`repos/${repository}/actions/artifacts/${expected.id}/zip`,file,metadata);return metadata;}
+   catch(error){if(!error.cause?.transient)throw error;actionsDownloadError=error;}
+  }else return metadata;
  }
+ try{
  const {record,release,run,jobs}=readRecord(expected);
  metadata=artifactRecord(record,expected,run,jobs);
  if(repository===CLI_REPO){
@@ -137,6 +140,10 @@ async function retrieve(expected,file){
  assert.ok(asset && asset.size===metadata.size_in_bytes,'durable archive size');
  if(file)await download(`repos/${REPO}/releases/assets/${asset.id}`,file,metadata);
  return metadata;
+ }catch(error){
+  if(actionsDownloadError)throw new Error(`${actionsDownloadError.message}; exact private backup recovery failed: ${error.message}`,{cause:actionsDownloadError});
+  throw error;
+ }
 }
 async function persist({version,runId,attempt,headSha,ids,directory,cliCandidate,clitest}){
  assert.equal(json(`repos/${REPO}`).private,true,'Pro durable storage must remain private');
@@ -224,7 +231,7 @@ module.exports={artifactRecord,retrieve,persist,download,readRecord,saveProgress
 if(require.main===module){
  const args=process.argv.slice(2),arg=name=>args[args.indexOf(name)+1];
  const task=args[0];
- const expected={id:arg('--id'),version:arg('--version'),runId:arg('--run'),attempt:args.includes('--attempt')?arg('--attempt'):undefined,headSha:arg('--head'),digest:args.includes('--digest')?arg('--digest'):undefined,repository:args.includes('--repository')?arg('--repository'):REPO,libraryRunId:args.includes('--library-run')?arg('--library-run'):undefined,libraryAttempt:args.includes('--library-attempt')?arg('--library-attempt'):undefined,libraryHeadSha:args.includes('--library-head')?arg('--library-head'):undefined};
+ const expected={preferPrivate:args.includes('--prefer-private'),id:arg('--id'),version:arg('--version'),runId:arg('--run'),attempt:args.includes('--attempt')?arg('--attempt'):undefined,headSha:arg('--head'),digest:args.includes('--digest')?arg('--digest'):undefined,repository:args.includes('--repository')?arg('--repository'):REPO,libraryRunId:args.includes('--library-run')?arg('--library-run'):undefined,libraryAttempt:args.includes('--library-attempt')?arg('--library-attempt'):undefined,libraryHeadSha:args.includes('--library-head')?arg('--library-head'):undefined};
  const run=task==='persist'?persist({...expected,ids:arg('--ids').split(','),directory:arg('--directory'),cliCandidate:args.includes('--cli-candidate')?JSON.parse(fs.readFileSync(arg('--cli-candidate'),'utf8')):undefined,clitest:args.includes('--clitest')?JSON.parse(arg('--clitest')):undefined}):retrieve(expected,args.includes('--zip')?arg('--zip'):null).then(metadata=>{if(args.includes('--metadata'))fs.writeFileSync(arg('--metadata'),JSON.stringify(metadata,null,2)+'\n',{mode:0o600});return metadata;});
  run.then(()=>console.log('Exact resource artifact provenance and bytes verified')).catch(error=>{console.error(error.message);process.exitCode=1;});
 }
