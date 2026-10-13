@@ -47,7 +47,7 @@ function artifactRecord(record,expected,run,jobs){
 async function downloadOnce(route,file,metadata){
  assert.match(route,new RegExp(`^repos/moewolf-dev/moe-icons-(?:code-library|cli)/(?:actions/artifacts/[1-9][0-9]*/zip|releases/assets/[1-9][0-9]*)$`),'trusted artifact download route');
  fs.mkdirSync(path.dirname(file),{recursive:true});
- const child=spawn('gh',['api',route,'-H','Accept: application/octet-stream'],{stdio:['ignore','pipe','pipe']});
+ const child=spawn('gh',['api',route,'-H',`Accept: ${route.includes('/actions/artifacts/') ? 'application/json' : 'application/octet-stream'}`],{stdio:['ignore','pipe','pipe']});
  let stderr='';child.stderr.on('data',chunk=>{if(stderr.length<16384)stderr+=chunk.toString();});let size=0;const hash=crypto.createHash('sha256');let timedOut=false;
  const timer=setTimeout(()=>{timedOut=true;child.kill('SIGTERM');},10*60*1000);
  const completed=new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',code=>code===0?resolve():reject(new Error('artifact download failed',{cause:{transient:timedOut || transient({message:stderr})}})));});
