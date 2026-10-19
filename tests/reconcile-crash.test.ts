@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -7,7 +8,20 @@ import { pathToFileURL } from "node:url";
 import { recoverManagedReconcile } from "../src/project/install.js";
 import { main } from "../src/cli.js";
 
-const moduleUrl = pathToFileURL(resolve("dist/project/install.js")).href;
+const buildRoot = fs.mkdtempSync(join(process.cwd(), ".tmp-reconcile-build-"));
+try {
+  execFileSync(process.execPath, ["node_modules/typescript/bin/tsc", "-p", "tsconfig.build.json", "--outDir", buildRoot], {
+    cwd: process.cwd(),
+    stdio: "pipe",
+  });
+  fs.cpSync("src/core/small-pack", join(buildRoot, "core/small-pack"), { recursive: true });
+} catch (error) {
+  fs.rmSync(buildRoot, { recursive: true, force: true });
+  throw error;
+}
+afterAll(() => fs.rmSync(buildRoot, { recursive: true, force: true }));
+
+const moduleUrl = pathToFileURL(resolve(buildRoot, "project/install.js")).href;
 const child = `
 import * as fs from 'node:fs';
 import { executeManagedReconcile } from ${JSON.stringify(moduleUrl)};
