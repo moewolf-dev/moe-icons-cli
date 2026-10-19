@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "sourceRepo": "moewolf-dev/moe-icons-code-library",
   "sourceDir": "config-package",
-  "sourceCommit": "76d9924b2114afc317d0a630cde536fb035a908c",
+  "sourceCommit": "8a14d3e05a6073896708413bef31b3793b718021",
   "sourceCommitExact": true,
   "files": {
     "render-config.cjs": {
@@ -14,8 +14,8 @@
       "sha256": "36c35b686335eab4e7db002afb631aa631c80f66656f137b1e2437317b126b0f"
     },
     "moeicons-config.schema.json": {
-      "size": 4769,
-      "sha256": "0e15c0cf7c282abad7d7399e4a52b7804dc8211b427490fca5efc6c53d9319df"
+      "size": 4854,
+      "sha256": "aa0a688104fd66431d91bb089ae70c3306cc289b0a4d5a24c9786062b6ae56ab"
     },
     "moeicons.config.jsonc": {
       "size": 1207,

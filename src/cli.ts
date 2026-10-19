@@ -46,6 +46,7 @@ import {
   runLogoutUseCase,
   runRemoteAccountUseCase,
   runSessionStatusUseCase,
+  runAccessTokenUseCase,
   type AuthUseCaseDependencies,
 } from "./core/auth.js";
 import { formatLibraryVersionStatus, getLibraryVersionStatus } from "./core/manage.js";
@@ -55,13 +56,11 @@ import { runProInstallUseCase } from "./core/pro-install.js";
 import { resolveLocalTestContext } from "./core/local-test-env.js";
 import { runLibraryUpdateUseCase } from "./core/library-update.js";
 import { runMetadataSyncUseCase } from "./core/metadata-sync.js";
+import { fetchFreeStablePackageSet } from "./core/free-small-package-download.js";
+import { fetchProStablePackageSet } from "./core/pro-small-package-download.js";
+import { decideUpdate } from "./core/update-policy.js";
 import { runBootstrapUseCase } from "./core/bootstrap.js";
-import { fetchProDescriptor } from "./core/pro-download.js";
-import {
-  proResourceState,
-  runProPredownloadUseCase,
-  runProResourceWarmupUseCase,
-} from "./core/pro-resources.js";
+import { runProPreviewPackageWarmupUseCase } from "./core/pro-resources.js";
 import { formatBytes } from "./metadata/version.js";
 import { isLocalTestVersion } from "./core/release-descriptor.js";
 import type { FreeDownloadIo } from "./core/free-download.js";
@@ -166,6 +165,9 @@ function freeDownloadDeps(runtime: CliRuntime): Omit<FreeDownloadIo, "signal"> {
     },
     ...(runtime.env.MOEICONS_FREE_RELEASE_DIR
       ? { fixtureDir: runtime.env.MOEICONS_FREE_RELEASE_DIR }
+      : {}),
+    ...(runtime.env.MOEICONS_FREE_PACKAGE_SET_FIXTURE_ORIGIN
+      ? { fixtureBaseUrl: runtime.env.MOEICONS_FREE_PACKAGE_SET_FIXTURE_ORIGIN }
       : {}),
     cacheDir: runtime.env.MOEICONS_CACHE_DIR ?? join(homedir(), ".moeicons", "cache"),
     cliVersion: versionString(),
@@ -343,68 +345,38 @@ async function runLogin(runtime: CliRuntime, json: boolean, yes: boolean): Promi
   });
   if (json) writeJson(runtime, { ok: true, environment, account: session });
   else runtime.stdout(`Environment: ${environment}\nLogged in as ${session.accountId}\n`);
-  if (!json && runtime.isTTY()) await offerProPredownload(runtime);
+  if (!json && runtime.isTTY()) await offerProPreviewWarmup(runtime);
   return 0;
 }
 
 /**
- * After a successful interactive login, offer to pre-download the full Pro
- * code + metadata. Cancelling or a failed probe never logs the user out.
+ * After login, offer an explicit bounded warm-up of default Pro preview units.
+ * Cancelling or a failed probe never logs the user out.
  */
-async function offerProPredownload(runtime: CliRuntime): Promise<void> {
+async function offerProPreviewWarmup(runtime: CliRuntime): Promise<void> {
   const context = commandContext(runtime, { json: false, yes: false });
+  const progress = startResourceProgress(context, "Warming Pro preview packages");
   try {
-    const versions = await fetchLibraryVersions({
+    const result = await runProPreviewPackageWarmupUseCase(context, runtime.auth ?? {}, {
       ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
-      signal: context.signal,
-      env: runtime.env,
+      onPlan: async (plan) => {
+        progress.phase(`${plan.groups} preview groups · ${plan.packages} packages · ${formatBytes(plan.compressedBytes)}`);
+        const accepted = await context.ui.confirm(
+          `Warm ${plan.groups} Pro preview groups (${formatBytes(plan.compressedBytes)} compressed package data)?`,
+          context.signal,
+        );
+        if (accepted !== true) throw new CliError("CANCELLED", "Pro preview warm-up cancelled");
+      },
     });
-    if (!versions.pro) {
-      runtime.stdout("No Pro release is published yet.\n");
+    progress.stop("Pro preview package warm-up complete");
+    runtime.stdout(`Warmed ${result.groups} Pro preview groups (${result.downloaded} downloaded, ${result.reused} cached).\n`);
+  } catch (error) {
+    progress.stop("Pro preview warm-up stopped");
+    if (error instanceof CliError && error.code === "CANCELLED") {
+      runtime.stdout("Skipped Pro preview warm-up; project installs still fetch only configured packages.\n");
       return;
     }
-    const descriptor = await fetchProDescriptor(
-      context,
-      runtime.auth ?? {},
-      { version: versions.pro.version, descriptorSha256: versions.pro.descriptorSha256 },
-      runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {},
-    );
-    const sizes = `${formatBytes(descriptor.size)} code + ${
-      descriptor.metadata ? formatBytes(descriptor.metadata.size) : "0 B"
-    } metadata`;
-    runtime.stdout(`Pro ${versions.pro.version} available (${sizes}).\n`);
-    const accepted = await context.ui.confirm(
-      "Download Pro resources now? (code + metadata)",
-      context.signal,
-    );
-    if (accepted !== true) {
-      runtime.stdout("Skipped Pro download; you can download it later from the home screen.\n");
-      return;
-    }
-    const progress = startResourceProgress(context, "Downloading Pro resources");
-    try {
-      const result = await runProPredownloadUseCase(context, runtime.auth ?? {}, {
-        ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
-        onProgress: ({ downloadedBytes, totalBytes }) =>
-          progress.bytes({ downloadedBytes, ...(totalBytes !== undefined ? { totalBytes } : {}) }),
-      });
-      const warmed = await warmProBitmapShards(
-        runtime,
-        result,
-        runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {},
-        progress,
-      );
-      progress.stop("Pro resources downloaded");
-      runtime.stdout(`Cached Pro ${result.version} code + metadata.\n`);
-      if (warmed) runtime.stdout(`${warmed}\n`);
-    } catch (error) {
-      progress.stop("Pro download stopped");
-      runtime.stderr(
-        `warning: Pro download failed (${error instanceof Error ? error.message : String(error)}). You can retry from the home screen.\n`,
-      );
-    }
-  } catch {
-    // A failed probe must not make login fail.
+    runtime.stderr(`warning: Pro preview warm-up skipped (${error instanceof Error ? error.message : String(error)}).\n`);
   }
 }
 
@@ -437,111 +409,35 @@ function startResourceProgress(context: CommandContext, label: string) {
   };
 }
 
-/**
- * W2-A: best-effort warm-up of the default bitmap shard set after the Pro code
- * and metadata are cached. Never fails the surrounding download.
- */
-async function warmProBitmapShards(
-  runtime: CliRuntime,
-  result: {
-    version: string;
-    descriptorSha256: string;
-    metadataSha256?: string;
-    catalogSha256: string;
-  },
-  fetchDeps: { fetch?: typeof fetch },
-  progress: ReturnType<typeof startResourceProgress>,
-): Promise<string | undefined> {
-  if (!result.metadataSha256) return undefined;
-  try {
-    const warm = await runProResourceWarmupUseCase(
-      commandContext(runtime, { json: false, yes: false }),
-      runtime.auth ?? {},
-      {
-        version: result.version,
-        descriptorSha256: result.descriptorSha256,
-        metadataSha256: result.metadataSha256,
-        catalogSha256: result.catalogSha256,
-        ...fetchDeps,
-        onPlan: (plan) =>
-          progress.phase(
-            `Default bitmap shards: ${plan.missing.length} to download, ${plan.reused} cached`,
-          ),
-        onProgress: (event) =>
-          progress.phase(
-            `Shard ${event.index}/${event.total} ${event.phase} — ${event.tuple.styleGroupId} ${event.tuple.imageSize.width}x${event.tuple.imageSize.height} ${event.tuple.format}`,
-          ),
-      },
-    );
-    return `Warmed ${warm.shards} default bitmap shards (${warm.downloaded} downloaded, ${warm.reused} cached).`;
-  } catch (error) {
-    runtime.stderr(
-      `warning: default bitmap shard warm-up skipped (${error instanceof Error ? error.message : String(error)}).\n`,
-    );
-    return undefined;
-  }
-}
-
-/**
- * Home-screen Pro resources flow: show the current cache state and drive the
- * matching action (download / update / repair / verify). Requires auth.
- */
+/** The Pro resource action warms only separately addressed 128-WebP tuple packages. */
 async function runProResources(runtime: CliRuntime, yes: boolean): Promise<number> {
   const context = commandContext(runtime, { json: false, yes });
-  const fetchDeps = runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {};
-  const state = await proResourceState(context, runtime.auth ?? {}, fetchDeps);
-  if (state.kind === "unavailable") {
-    runtime.stdout(`Pro resources unavailable: ${state.reason}\n`);
-    return 0;
-  }
-  let action = "";
-  if (state.kind === "current") {
-    runtime.stdout(`Pro resources are up to date (v${state.version}).\n`);
-    return 0;
-  }
-  if (state.kind === "not-cached") {
-    runtime.stdout(
-      `Pro ${state.version}: ${formatBytes(state.codeBytes)} code + ${formatBytes(state.metadataBytes)} metadata.\n`,
-    );
-    action = "Download";
-  } else if (state.kind === "outdated") {
-    runtime.stdout(
-      `Pro ${state.version} → ${state.latestVersion}: ${formatBytes(state.codeBytes)} code + ${formatBytes(state.metadataBytes)} metadata.\n`,
-    );
-    action = "Update";
-  } else {
-    runtime.stdout(`Pro ${state.version} cache is corrupt; re-downloading.\n`);
-    action = "Repair";
-  }
-  const confirmed = await context.ui.confirm(
-    `${action} Pro resources now? (code + metadata)`,
-    context.signal,
-  );
-  if (confirmed !== true) {
-    runtime.stdout("Cancelled; Pro resources were not downloaded.\n");
-    return 0;
-  }
-  const progress = startResourceProgress(context, "Downloading Pro resources");
+  const progress = startResourceProgress(context, "Warming Pro preview packages");
   try {
-    const result = await runProPredownloadUseCase(context, runtime.auth ?? {}, {
-      ...fetchDeps,
-      force: state.kind === "corrupt",
-      onProgress: ({ downloadedBytes, totalBytes }) =>
-        progress.bytes({ downloadedBytes, ...(totalBytes !== undefined ? { totalBytes } : {}) }),
+    const result = await runProPreviewPackageWarmupUseCase(context, runtime.auth ?? {}, {
+      ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
+      onPlan: async (plan) => {
+        progress.phase(`${plan.groups} preview groups · ${plan.packages} packages · ${formatBytes(plan.compressedBytes)}`);
+        const confirmed = await context.ui.confirm(
+          `Warm ${plan.groups} Pro preview groups (${formatBytes(plan.compressedBytes)} compressed package data)?`,
+          context.signal,
+        );
+        if (confirmed !== true) throw new CliError("CANCELLED", "Pro preview warm-up cancelled");
+      },
     });
-    const warmed = await warmProBitmapShards(runtime, result, fetchDeps, progress);
-    progress.stop("Pro resources downloaded");
-    runtime.stdout(`Cached Pro ${result.version} code + metadata.\n`);
-    if (warmed) runtime.stdout(`${warmed}\n`);
+    progress.stop("Pro preview package warm-up complete");
+    runtime.stdout(`Warmed ${result.groups} Pro preview groups (${result.downloaded} downloaded, ${result.reused} cached).\n`);
     return 0;
   } catch (error) {
-    progress.stop("Pro download stopped");
+    progress.stop("Pro preview warm-up stopped");
+    if (error instanceof CliError && error.code === "CANCELLED") {
+      runtime.stdout("Cancelled; no Pro preview packages were downloaded.\n");
+      return 0;
+    }
     if (error instanceof CliError && (error.code === "FORBIDDEN" || error.code === "AUTH_ERROR")) {
       throw error;
     }
-    runtime.stderr(
-      `warning: Pro download failed (${error instanceof Error ? error.message : String(error)}). Retry from this menu.\n`,
-    );
+    runtime.stderr(`Pro preview warm-up failed (${error instanceof Error ? error.message : String(error)}).\n`);
     return 0;
   }
 }
@@ -799,17 +695,9 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
       session: session.kind,
       ...(historyLine ? { historyLine } : {}),
       getLibraryStatus: getStatus,
-      getProResourceLabel: async () => {
-        if (session.kind !== "authenticated") return undefined;
-        const state = await proResourceState(context, runtime.auth ?? {}, {
-          ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
-        }).catch(() => undefined);
-        if (!state || state.kind === "unavailable") return undefined;
-        if (state.kind === "not-cached") return "Download Pro resources";
-        if (state.kind === "outdated")
-          return `Update Pro resources (${state.version} → ${state.latestVersion})`;
-        if (state.kind === "corrupt") return "Repair Pro resources";
-        return "Pro resources are up to date";
+      getProResourceLabel: () => {
+        if (session.kind !== "authenticated") return Promise.resolve(undefined);
+        return Promise.resolve("Warm default Pro previews");
       },
     });
 
@@ -966,6 +854,8 @@ async function runLibraryUpdate(
   version: string,
   descriptorSha256: string,
   json = false,
+  packageSetSha256?: string,
+  preflightIdentityBytes?: number,
 ): Promise<number> {
   const context = commandContext(runtime, { json, yes: false });
   // W3-A: a single progress surface. `task` is deliberately NOT used here: the
@@ -993,18 +883,21 @@ async function runLibraryUpdate(
         onProgress: ({ downloadedBytes, totalBytes }) =>
           progress.bytes({ downloadedBytes, ...(totalBytes !== undefined ? { totalBytes } : {}) }),
       },
-      { tier, version, descriptorSha256 },
+      { tier, version, descriptorSha256, ...(packageSetSha256 ? { packageSetSha256 } : {}) },
     );
+    const output = preflightIdentityBytes === undefined
+      ? result
+      : { ...result, networkBytes: (result.networkBytes ?? 0) + preflightIdentityBytes };
     progress.stop("Icon library update complete");
-    if (json) writeJson(runtime, { ok: true, ...result });
+    if (json) writeJson(runtime, { ok: true, ...output });
     else {
       runtime.stdout(
-        `Updated ${tier} artifact to ${result.artifactVersion}; reconciled ${result.files.length} generated files.\n`,
+        `Updated ${tier} artifact to ${output.artifactVersion}; reconciled ${output.files.length} generated files.\n`,
       );
       runtime.stdout(
-        `Download mode: ${result.downloadMode}${result.selectedFiles !== undefined ? `; ${result.selectedFiles} resource files; ${result.networkBytes} resource bytes received` : ""}.\n`,
+        `Download mode: ${output.downloadMode}${output.selectedFiles !== undefined ? `; ${output.selectedFiles} resource files; ${output.networkBytes} resource bytes received` : ""}.\n`,
       );
-      for (const note of result.downloadNotes) runtime.stdout(`${note}\n`);
+      for (const note of output.downloadNotes) runtime.stdout(`${note}\n`);
     }
     return 0;
   } catch (error) {
@@ -1081,6 +974,37 @@ async function runUpdate(
   if (status.kind === "check-failed") throw new CliError("NETWORK_ERROR", status.message);
   if (status.kind === "installation-invalid")
     throw new CliError("VALIDATION_ERROR", status.message);
+  if (status.kind === "package-set-update-check-required") {
+    const tier = status.metadata.candidate.tier;
+    const identity = tier === "free"
+      ? await fetchFreeStablePackageSet({
+          ...(runtime.env.MOEICONS_API_BASE_URL ? { apiBaseUrl: runtime.env.MOEICONS_API_BASE_URL } : {}),
+          ...(runtime.auth?.fetch ? { fetchFn: runtime.auth.fetch } : {}),
+          signal: context.signal,
+        })
+      : await fetchProStablePackageSet({
+          accessToken: await runAccessTokenUseCase(context, runtime.auth ?? {}),
+          ...(runtime.env.MOEICONS_API_BASE_URL ? { apiBaseUrl: runtime.env.MOEICONS_API_BASE_URL } : {}),
+          ...(runtime.auth?.fetch ? { fetchFn: runtime.auth.fetch } : {}),
+          signal: context.signal,
+        });
+    const current = status.metadata.candidate;
+    const decision = decideUpdate({ installedTier: tier, remoteTier: tier, installedVersion: current.fullVersion, remoteVersion: identity.fullVersion });
+    if (decision.kind === "current") {
+      if (current.packageSetSha256 !== identity.packageSetSha256 || current.candidateRootSha256 !== identity.candidateRootSha256)
+        throw new CliError("VALIDATION_ERROR", "published package-set identity changed for the installed version; refusing replacement");
+      if (json) writeJson(runtime, { ok: true, status: "current", version: current.fullVersion, packageSetSha256: current.packageSetSha256 });
+      else runtime.stdout(`Current: ${current.fullVersion} / Latest: ${identity.fullVersion} / Status: up to date\n`);
+      return 0;
+    }
+    if (decision.kind !== "update") {
+      const label = decision.reason === "channel-mismatch" ? "prerelease channel differs" : "remote version is older";
+      if (json) writeJson(runtime, { ok: true, status: decision.reason === "channel-mismatch" ? "channel-mismatch" : "remote-older", currentVersion: current.fullVersion, latestVersion: identity.fullVersion });
+      else runtime.stdout(`Current: ${current.fullVersion} / Latest: ${identity.fullVersion} / Status: ${label}\n`);
+      return 0;
+    }
+    return runLibraryUpdate(runtime, tier, identity.fullVersion, identity.packageSetSha256, json, identity.packageSetSha256, identity.networkBytes);
+  }
   if (
     status.kind === "current" &&
     status.latestDescriptorSha256 !== status.metadata.descriptorSha256
@@ -1139,8 +1063,8 @@ async function runInstall(
   const progress = context.ui.progress("Downloading icon library", context.signal);
   if (group === "pro" || group === "ent") {
     const { allowLocalTest } = resolveLocalTestContext(runtime.env);
-    const identity =
-      sourceVersion && expectedDescriptorSha256
+    const identity = allowLocalTest
+      ? sourceVersion && expectedDescriptorSha256
         ? { version: sourceVersion, descriptorSha256: expectedDescriptorSha256 }
         : await fetchLibraryVersions({
             signal: context.signal,
@@ -1153,7 +1077,8 @@ async function runInstall(
               version: versions.pro.version,
               descriptorSha256: versions.pro.descriptorSha256,
             };
-          });
+          })
+      : {};
     try {
       const result = await runProInstallUseCase(
         context,
@@ -1181,6 +1106,7 @@ async function runInstall(
         },
         {
           ...identity,
+          ...(!allowLocalTest && sourceVersion ? { version: sourceVersion } : {}),
           ...(allowLocalTest ? { allowLocalTest: true } : {}),
           ...(target ? { target } : {}),
         },
@@ -1260,12 +1186,15 @@ async function runInstall(
       projectRoot: result.projectRoot,
       packageManager: result.packageManager,
       group: result.group,
-      zipBytes: result.artifactBytes,
+      ...(result.downloadMode === "packages" ? {} : { zipBytes: result.artifactBytes }),
       artifactBytes: result.artifactBytes,
       planItems: result.planItems,
       config: result.config,
       artifactVersion: result.artifactVersion,
       descriptorSha256: result.descriptorSha256,
+      candidateRootSha256: result.candidateRootSha256,
+      packageSetSha256: result.packageSetSha256,
+      packageCount: result.packageCount,
       catalogSha256: result.catalogSha256,
       metadataSha256: result.metadataSha256,
       cacheHit: result.cacheHit,
@@ -1273,6 +1202,9 @@ async function runInstall(
       downloadNotes: result.downloadNotes,
       networkBytes: result.networkBytes,
       selectedFiles: result.selectedFiles,
+      cacheHits: result.cacheHits,
+      metadataCacheHits: result.metadataCacheHits,
+      transferRetryCount: result.transferRetryCount,
     });
   } else {
     runtime.stdout(`Project root: ${result.projectRoot}\n`);
@@ -1284,7 +1216,7 @@ async function runInstall(
     );
     for (const note of result.downloadNotes ?? []) runtime.stdout(`${note}\n`);
     runtime.stdout(
-      `Installed free artifact metadata to .moeicons (cacheHit=${String(result.cacheHit)}).\n`,
+      `${result.downloadMode === "packages" ? `Installed ${result.packageCount ?? 0} selected packages` : "Installed free artifact metadata"} to .moeicons (cacheHit=${String(result.cacheHit)}).\n`,
     );
   }
   return 0;

@@ -17,6 +17,7 @@ import {
   sha256Bytes,
   type InstallMetadata,
 } from "../project/install-metadata.js";
+import { parsePackageInstallMetadata } from "../project/package-install-metadata.js";
 import { withProjectLock } from "../project/project-lock.js";
 import { ensureClassMergeDependencies, planTailwindIntegration } from "../project/tailwind.js";
 import {
@@ -26,6 +27,7 @@ import {
 } from "../project/tar-gz.js";
 import type { AuthUseCaseDependencies } from "./auth.js";
 import type { CommandContext } from "./context.js";
+import { runSmallPackageInstall } from "./small-package-install.js";
 import {
   artifactCachePath,
   downloadFreeRelease,
@@ -70,15 +72,20 @@ export async function runLibraryUpdateUseCase(
     readonly tier: "free" | "pro";
     readonly version: string;
     readonly descriptorSha256: string;
+    readonly packageSetSha256?: string;
   },
 ): Promise<{
   readonly projectRoot: string;
   readonly artifactVersion: string;
   readonly files: readonly string[];
-  readonly downloadMode: "icons" | "full";
+  readonly downloadMode: "icons" | "full" | "packages";
   readonly downloadNotes: readonly string[];
   readonly networkBytes?: number;
   readonly selectedFiles?: number;
+  readonly packageCount?: number;
+  readonly cacheHits?: number;
+  readonly metadataCacheHits?: number;
+  readonly transferRetryCount?: number;
 }> {
   const project = detectProject(context.cwd);
   if (!project)
@@ -86,6 +93,17 @@ export async function runLibraryUpdateUseCase(
       "VALIDATION_ERROR",
       "no package.json found in the current directory or parents",
     );
+
+  const installedMetadataPath = join(project.root, ".moeicons", "install-metadata.json");
+  let packageSetInstalled = false;
+  if (deps.fs.existsSync(installedMetadataPath)) {
+    let schemaVersion: unknown;
+    try {
+      const parsed: unknown = JSON.parse(deps.fs.readFileSync(installedMetadataPath, "utf8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) schemaVersion = (parsed as Record<string, unknown>).schemaVersion;
+    } catch { /* validated by the normal install path below */ }
+    packageSetInstalled = schemaVersion === 2;
+  }
 
   const document = loadConfigDocument(project.root);
   const bootstrap = validateConfigDocument(document, undefined, { lenientCatalog: true });
@@ -97,6 +115,46 @@ export async function runLibraryUpdateUseCase(
         : `config.tier must match ${expected.tier}; edit config before updating`,
     );
   assertDownloadSelection(bootstrap.config);
+  if (packageSetInstalled) {
+    const installed = parsePackageInstallMetadata(deps.fs.readFileSync(installedMetadataPath, "utf8"));
+    if (!installed || installed.candidate.tier !== expected.tier) {
+      const tierLabel = expected.tier === "free" ? "Free" : "Pro";
+      throw new CliError("VALIDATION_ERROR", `package-set update requires a valid installed ${tierLabel} candidate`);
+    }
+    if ((expected.tier === "free" && !deps.free) || !expected.packageSetSha256 || !/^[a-f0-9]{64}$/.test(expected.packageSetSha256))
+      throw new CliError("VALIDATION_ERROR", "package-set update requires an exact Worker package-set identity");
+    if (installed.candidate.fullVersion === expected.version && installed.candidate.packageSetSha256 !== expected.packageSetSha256)
+      throw new CliError("VALIDATION_ERROR", "published package-set identity changed for the installed version; refusing replacement");
+    const proAccessToken = expected.tier === "pro" ? await runAccessTokenUseCase(context, deps.auth) : undefined;
+    const result = await runSmallPackageInstall({
+      projectRoot: project.root,
+      fullVersion: expected.version,
+      expectedPackageSetSha256: expected.packageSetSha256,
+      ...(context.env.MOEICONS_API_BASE_URL ? { apiBaseUrl: context.env.MOEICONS_API_BASE_URL } : {}),
+      config: bootstrap.config,
+      plannedConfigDocument: JSON.stringify(document),
+      fs: deps.fs,
+      cacheDir: deps.free?.cacheDir ?? join(homedir(), ".moeicons", "cache"),
+      now: context.now,
+      ...(proAccessToken ? { proAccessToken } : {}),
+      ...(expected.tier === "free" && deps.free?.fixtureBaseUrl ? { fixtureOrigin: deps.free.fixtureBaseUrl } : {}),
+      ...(context.signal ? { signal: context.signal } : {}),
+      ...(deps.fetch ? { fetchFn: deps.fetch } : {}),
+    });
+    return {
+      projectRoot: project.root,
+      artifactVersion: result.artifactVersion,
+      files: result.files,
+      downloadMode: "packages",
+      downloadNotes: result.fallbacks.map((fallback) => `Theme fallback: ${fallback}`),
+      networkBytes: result.networkBytes,
+      selectedFiles: result.selectedFiles,
+      packageCount: result.packageCount,
+      cacheHits: result.cacheHits,
+      metadataCacheHits: result.metadataCacheHits,
+      transferRetryCount: result.transferRetryCount,
+    };
+  }
   let selected: SelectedResourceDownload | undefined;
   let catalogJson: string;
   let fullArchiveFiles: Readonly<Record<string, Uint8Array>> | undefined;

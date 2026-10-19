@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { bitmapShardSetSha256, parseBitmapShard, type BitmapShard } from "../core/bitmap-shards.js";
+import { parsePackageInstallMetadata, type PackageInstallMetadata } from "./package-install-metadata.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const VERSION = /^\d+\.\d+\.\d+(?:-(?:alpha|beta))?$/;
@@ -46,7 +47,7 @@ export interface InstallMetadataParseOptions {
 }
 
 export type InstalledResourceState =
-  | { readonly kind: "ok"; readonly metadata: InstallMetadata }
+  | { readonly kind: "ok"; readonly metadata: InstallMetadata | PackageInstallMetadata }
   | { readonly kind: "missing"; readonly message: string }
   | { readonly kind: "invalid"; readonly message: string };
 
@@ -202,16 +203,18 @@ export function readInstalledResourceState(
       kind: "missing",
       message: "managed install metadata is missing; run 'moeicons install' to repair or reinstall",
     };
-  const metadata = parseInstallMetadata(readFileSync(metadataPath, "utf8"), opts);
+  const raw = readFileSync(metadataPath, "utf8");
+  const metadata = parseInstallMetadata(raw, opts) ?? parsePackageInstallMetadata(raw);
   if (!metadata)
     return {
       kind: "invalid",
       message: "managed install metadata is invalid; run 'moeicons install' to repair or reinstall",
     };
-  if (expectedTier && metadata.tier !== expectedTier)
+  const tier = metadata.schemaVersion === 1 ? metadata.tier : metadata.candidate.tier;
+  if (expectedTier && tier !== expectedTier)
     return {
       kind: "invalid",
-      message: `installed tier ${metadata.tier} does not match config tier ${expectedTier}`,
+      message: `installed tier ${tier} does not match config tier ${expectedTier}`,
     };
   for (const [relative, expectedHash] of Object.entries(metadata.managedFiles)) {
     const path = join(projectRoot, relative);

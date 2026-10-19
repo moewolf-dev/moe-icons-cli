@@ -2,11 +2,13 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { CliError } from "../errors/index.js";
 import { detectProject } from "../project/detect.js";
+import { loadConfigDocument, validateConfigDocument } from "../project/config.js";
 import {
   parseInstallMetadata,
   serializeInstallMetadata,
   sha256Bytes,
 } from "../project/install-metadata.js";
+import { parsePackageInstallMetadata, serializePackageInstallMetadata } from "../project/package-install-metadata.js";
 import { executeManagedReconcile, type TransactionalFsWithCopy } from "../project/install.js";
 import { withProjectLock } from "../project/project-lock.js";
 import { cacheArtifact } from "./cache.js";
@@ -20,6 +22,12 @@ import {
 } from "./free-download.js";
 import { downloadSignedArtifact } from "./signed-artifact.js";
 import { extractProMetadata, fetchProDescriptor, proSignedDownloadOptions } from "./pro-download.js";
+import { downloadFreeVersionPackages } from "./free-small-package-download.js";
+import { downloadProVersionPackages } from "./pro-small-package-download.js";
+import { runAccessTokenUseCase } from "./auth.js";
+import { packageTargetFiles, planConfigPackagesFromMetadata } from "./config-package-plan.js";
+import { canonicalBytes, sha256, type PackageRow } from "./small-pack/candidate-set.cjs";
+import type { SelectedCandidate } from "./small-package-selection.js";
 
 export interface MetadataSyncDeps {
   readonly fs: TransactionalFsWithCopy;
@@ -56,7 +64,16 @@ export async function runMetadataSyncUseCase(
   const metadataPath = join(project.root, ".moeicons", "install-metadata.json");
   if (!deps.fs.existsSync(metadataPath))
     throw new CliError("VALIDATION_ERROR", "managed install metadata is missing; run install first");
-  const old = parseInstallMetadata(deps.fs.readFileSync(metadataPath, "utf8"));
+  const rawMetadata = deps.fs.readFileSync(metadataPath, "utf8");
+  let schemaVersion: unknown;
+  try {
+    const parsed: unknown = JSON.parse(rawMetadata);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) schemaVersion = (parsed as Record<string, unknown>).schemaVersion;
+  } catch { /* reported as invalid metadata below */ }
+  if (schemaVersion === 2) {
+    return runPackageSetMetadataSync(context, deps, project.root, rawMetadata, options);
+  }
+  const old = parseInstallMetadata(rawMetadata);
   if (!old) throw new CliError("VALIDATION_ERROR", "managed install metadata is invalid; run install first");
   const tier = options.tier ?? old.tier;
   const version = old.artifactVersion;
@@ -140,5 +157,123 @@ export async function runMetadataSyncUseCase(
     artifactVersion: version,
     metadataSha256,
     files: [".moeicons/MANUAL.md", ".moeicons/catalog.json", ".moeicons/manifest.json"],
+  };
+}
+
+async function runPackageSetMetadataSync(
+  context: CommandContext,
+  deps: MetadataSyncDeps,
+  projectRoot: string,
+  rawMetadata: string,
+  options: { readonly tier?: "free" | "pro" },
+): Promise<{
+  readonly projectRoot: string;
+  readonly tier: "free" | "pro";
+  readonly artifactVersion: string;
+  readonly metadataSha256: string;
+  readonly files: readonly string[];
+  readonly networkBytes: number;
+}> {
+  const installed = parsePackageInstallMetadata(rawMetadata);
+  if (!installed) throw new CliError("VALIDATION_ERROR", "package-set install metadata is invalid; run install first");
+  const tier = installed.candidate.tier;
+  if (options.tier && options.tier !== tier)
+    throw new CliError("VALIDATION_ERROR", "metadata refresh tier differs from the installed package-set");
+
+  const document = loadConfigDocument(projectRoot);
+  const bootstrap = validateConfigDocument(document, undefined, { lenientCatalog: true });
+  if (bootstrap.kind !== "ok")
+    throw new CliError("VALIDATION_ERROR", bootstrap.kind === "invalid" ? bootstrap.message : "project config is missing");
+  if (bootstrap.config.tier !== tier || bootstrap.config.target !== installed.target)
+    throw new CliError("VALIDATION_ERROR", "metadata refresh config differs from the installed package-set; run update");
+  const plannedConfigDocument = JSON.stringify(document);
+  const expectedPins = installed.packages
+    .map(({ resourceKey, packageSha256, dependencies }) => ({ resourceKey, packageSha256, dependencies: [...dependencies] }))
+    .sort((a, b) => a.resourceKey.localeCompare(b.resourceKey, "en"));
+  let packagePlan: Awaited<ReturnType<typeof planConfigPackagesFromMetadata>> | undefined;
+  const writes: Record<string, string | Uint8Array> = Object.create(null) as Record<string, string | Uint8Array>;
+  const resolveResourceKeys = async (
+    candidate: SelectedCandidate,
+    loadVerifiedPackage: (row: PackageRow) => Promise<Readonly<Record<string, Uint8Array>>>,
+  ): Promise<readonly string[]> => {
+    const identity = candidate.root;
+    if (
+      identity.fullVersion !== installed.candidate.fullVersion ||
+      identity.tier !== tier ||
+      identity.packageSetSha256 !== installed.candidate.packageSetSha256 ||
+      identity.sourceCommit !== installed.candidate.sourceCommit ||
+      identity.generatorCommit !== installed.candidate.generatorCommit ||
+      sha256(canonicalBytes(identity)) !== installed.candidate.candidateRootSha256
+    ) throw new CliError("VALIDATION_ERROR", "published package-set identity differs from the installed pin; refusing metadata refresh");
+
+    packagePlan = await planConfigPackagesFromMetadata(bootstrap.config, candidate, loadVerifiedPackage);
+    const actualPins = packagePlan.packages
+      .map(({ resourceKey, packageSha256, dependencies }) => ({ resourceKey, packageSha256, dependencies: [...dependencies] }))
+      .sort((a, b) => a.resourceKey.localeCompare(b.resourceKey, "en"));
+    if (JSON.stringify(actualPins) !== JSON.stringify(expectedPins))
+      throw new CliError("VALIDATION_ERROR", "configured package selection differs from the installed candidate; run update before metadata refresh");
+    return packagePlan.resourceKeys.filter((key) => key.startsWith(`metadata/${tier}/`));
+  };
+  const consume = (row: PackageRow, files: Readonly<Record<string, Uint8Array>>): Promise<void> => {
+    if (row.kind !== "metadata") throw new CliError("VALIDATION_ERROR", "metadata refresh selected a non-metadata package");
+    const mapped = packageTargetFiles(row, files, bootstrap.config.target);
+    for (const [path, bytes] of Object.entries(mapped.files)) {
+      const installPath = `.moeicons/package-metadata/${path}`;
+      if (Object.hasOwn(writes, installPath)) throw new CliError("VALIDATION_ERROR", "metadata package paths overlap");
+      writes[installPath] = bytes;
+    }
+    return Promise.resolve();
+  };
+  const cacheDir = deps.free.cacheDir ?? join(homedir(), ".moeicons", "cache");
+  const downloadOptions = {
+    cacheDir,
+    fullVersion: installed.candidate.fullVersion,
+    expectedPackageSetSha256: installed.candidate.packageSetSha256,
+    resolveResourceKeys,
+    consume,
+    ...(context.env.MOEICONS_API_BASE_URL ? { apiBaseUrl: context.env.MOEICONS_API_BASE_URL } : {}),
+    ...(deps.fetch ? { fetchFn: deps.fetch } : {}),
+    ...(context.signal ? { signal: context.signal } : {}),
+  };
+  const report = tier === "free"
+    ? await downloadFreeVersionPackages({
+        ...downloadOptions,
+        ...(deps.free.fixtureBaseUrl ? { fixtureOrigin: deps.free.fixtureBaseUrl } : {}),
+      })
+    : await downloadProVersionPackages({
+        ...downloadOptions,
+        accessToken: await runAccessTokenUseCase(context, deps.auth),
+      });
+  if (!packagePlan) throw new CliError("VALIDATION_ERROR", "metadata refresh did not produce a verified package plan");
+
+  const catalogJson = `${JSON.stringify(packagePlan.catalog, null, 2)}\n`;
+  const catalogSha256 = sha256Bytes(catalogJson);
+  writes[".moeicons/catalog.json"] = catalogJson;
+  const managedFiles = {
+    ...installed.managedFiles,
+    ...Object.fromEntries(Object.entries(writes).map(([path, content]) => [path, sha256Bytes(content)])),
+  };
+  const nextMetadata = {
+    ...installed,
+    catalogSha256,
+    installedAt: context.now().toISOString(),
+    managedFiles,
+  };
+  writes[".moeicons/install-metadata.json"] = serializePackageInstallMetadata(nextMetadata);
+
+  await withProjectLock(projectRoot, "update", () => {
+    if (deps.fs.readFileSync(join(projectRoot, ".moeicons", "install-metadata.json"), "utf8") !== rawMetadata)
+      throw new CliError("VALIDATION_ERROR", "installed package-set changed during metadata refresh; retry");
+    if (JSON.stringify(loadConfigDocument(projectRoot)) !== plannedConfigDocument)
+      throw new CliError("VALIDATION_ERROR", "config changed during metadata refresh; retry");
+    executeManagedReconcile(projectRoot, writes, [], deps.fs);
+  });
+  return {
+    projectRoot,
+    tier,
+    artifactVersion: installed.candidate.fullVersion,
+    metadataSha256: catalogSha256,
+    files: Object.keys(writes).sort((a, b) => a.localeCompare(b, "en")),
+    networkBytes: report.networkBytes + report.metadataNetworkBytes,
   };
 }

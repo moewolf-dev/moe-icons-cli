@@ -5,11 +5,11 @@ name: Update CLI resource pin
 # MOEICONS_AUTO_RELEASE_ENABLED=true) push the bot commit that later triggers
 # Publish CLI. workflow_dispatch is dry-run only.
 
-run-name: acceptance ${{ github.event.client_payload.correlationId || inputs.correlationId || github.sha }}
+run-name: CLI package-set resource ${{ github.event.client_payload.eventId || github.event.client_payload.correlationId || inputs.correlationId || github.sha }}
 
 on:
   repository_dispatch:
-    types: [moe-icons-code-library-release]
+    types: [moe-icons-code-library-release, moe-icons-package-set-release]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -42,10 +42,7 @@ on:
         required: false
         type: string
 
-permissions:
-  contents: write
-  actions: write
-  issues: write
+permissions: {}
 
 concurrency:
   group: cli-auto-release
@@ -54,16 +51,133 @@ concurrency:
 
 jobs:
   small-pack-policy:
+    if: github.event.action != 'moe-icons-package-set-release'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions: {}
     steps:
-      - name: Reject retired aggregate resource pin input
+      - name: Block the legacy whole-library pin update before artifact download
         run: |
-          echo "::error::Resource pin updates are paused during the small-package migration."
+          echo "::error::CLI pin updates are paused until candidate-set metadata packages are supported."
           exit 78
 
+  package-set-pin:
+    if: github.repository == 'moewolf-dev/moe-icons-cli' && github.event_name == 'repository_dispatch' && github.event.action == 'moe-icons-package-set-release' && vars.MOEICONS_AUTO_RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+
+      - name: Verify exact Source/Generator producer and package-set roots
+        env:
+          GH_TOKEN: ${{ secrets.CODE_LIBRARY_ARTIFACT_READ_TOKEN || secrets.CODE_LIBRARY_READ_TOKEN }}
+          EVENT_ID: ${{ github.event.client_payload.eventId }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN" || { echo 'Configure CODE_LIBRARY_ARTIFACT_READ_TOKEN with private code-library Actions read access'; exit 1; }
+          echo "::add-mask::$GH_TOKEN"
+          root="$RUNNER_TEMP/moe-cli-package-set-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "PACKAGE_SET_ROOT=$root" >> "$GITHUB_ENV"
+          node scripts/verify-package-set-input.mjs "$root"
+
+      - name: Read only exact Free/Pro metadata packages from Worker
+        env:
+          PRO_PACKAGE_SET_WORKFLOW_TOKEN: ${{ secrets.PRO_PACKAGE_SET_WORKFLOW_TOKEN }}
+          MOEICONS_API_BASE_URL: https://api.moeicons.com
+        run: |
+          set -euo pipefail
+          test -n "$PRO_PACKAGE_SET_WORKFLOW_TOKEN" || { echo 'Configure PRO_PACKAGE_SET_WORKFLOW_TOKEN for authenticated Pro package-set reads'; exit 1; }
+          echo "::add-mask::$PRO_PACKAGE_SET_WORKFLOW_TOKEN"
+          node scripts/package-set-catalog.mjs "$PACKAGE_SET_ROOT/package-set-binding.json" "$RUNNER_TEMP/package-set-catalog.json"
+          catalog_sha="$(shasum -a 256 "$RUNNER_TEMP/package-set-catalog.json" | awk '{print $1}')"
+          echo "PACKAGE_SET_CATALOG_SHA=$catalog_sha" >> "$GITHUB_ENV"
+
+      - name: Validate and apply the exact package-set pin
+        id: apply
+        run: |
+          set -euo pipefail
+          node scripts/apply-package-set-pin.mjs \
+            --event "$PACKAGE_SET_ROOT/event.json" \
+            --catalog "$RUNNER_TEMP/package-set-catalog.json" \
+            --catalog-sha256 "$PACKAGE_SET_CATALOG_SHA" \
+            | tee "$RUNNER_TEMP/package-set-pin-apply.json"
+          echo "action=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1])).action' "$RUNNER_TEMP/package-set-pin-apply.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Test the new catalog and build the exact CLI release tree
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Commit or reuse the exact package-set pin
+        id: pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "moe-icons-release-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/catalog/catalog.json src/catalog/resource-release.json
+          extra="$(git diff --cached --name-only | grep -vE '^(src/catalog/catalog\.json|src/catalog/resource-release\.json)$' || true)"
+          test -z "$extra" || { echo "disallowed staged paths: $extra" >&2; exit 1; }
+          if ! git diff --cached --quiet; then
+            version="$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1])).resourceVersion' "$PACKAGE_SET_ROOT/event.json")"
+            git commit -m "chore(release): pin package-set resources $version"
+            git push origin HEAD:main
+          fi
+          pushed="$(git rev-parse HEAD)"
+          [[ "$pushed" =~ ^[0-9a-f]{40}$ ]]
+          echo "pin_commit=$pushed" >> "$GITHUB_OUTPUT"
+
+      - name: Write the verified package-set pin receipt
+        env:
+          PIN_COMMIT: ${{ steps.pin.outputs.pin_commit }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/package-set-pin-receipt"
+          node - "$PACKAGE_SET_ROOT/event.json" "$PIN_COMMIT" "$PACKAGE_SET_CATALOG_SHA" "$RUNNER_TEMP/package-set-pin-receipt/cli-package-set-pin-receipt.json" <<'NODE'
+          const fs=require('node:fs');
+          const event=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const receipt={schemaVersion:1,eventId:event.eventId,resourceVersion:event.resourceVersion,sourceCommit:event.sourceCommit,generatorCommit:event.generatorCommit,sourceDispatchId:event.sourceDispatchId,packageSets:event.packageSets,producer:event.producer,pinCommit:process.argv[3],catalogSha256:process.argv[4]};
+          fs.writeFileSync(process.argv[5],JSON.stringify(receipt,null,2)+'\n',{flag:'wx',mode:0o600});
+          NODE
+
+      - name: Upload the exact package-set pin receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cli-package-set-pin-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/package-set-pin-receipt/cli-package-set-pin-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Dispatch the guarded OIDC publisher for the exact pushed pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PIN_COMMIT: ${{ steps.pin.outputs.pin_commit }}
+          EVENT_ID: ${{ github.event.client_payload.eventId }}
+        run: |
+          set -euo pipefail
+          live="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
+          test "$live" = "$PIN_COMMIT" || { echo 'main drifted after package-set pin; refusing publisher dispatch' >&2; exit 1; }
+          gh workflow run publish.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f npm_auth_mode=oidc -f dry_run=false -f break_glass=PUBLISH -f correlation_id="$EVENT_ID"
+
   pin:
+    # Retired pin flow downloads the aggregate code-library ZIP for catalog
+    # metadata. Keep it disabled independently of the policy job.
     if: false
     needs: [small-pack-policy]
     runs-on: ubuntu-latest

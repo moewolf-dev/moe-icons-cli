@@ -36,7 +36,9 @@ import {
 } from "./release-descriptor.js";
 
 export const DESCRIPTOR_MAX_BYTES = 256 * 1024;
-export const ARTIFACT_MAX_BYTES = 64 * 1024 * 1024;
+// Full release archives are retired for published versions. This bound only
+// preserves small local-test fixtures until package-scoped target delivery lands.
+export const ARTIFACT_MAX_BYTES = 128 * 1024 * 1024;
 export const METADATA_MAX_BYTES = 8 * 1024 * 1024;
 // GitHub Release downloads can be slow on constrained or distant networks.
 // Keep the operation bounded, but allow enough time for the 64 MiB Free limit.
@@ -498,6 +500,28 @@ export async function downloadFreeRelease(
   if (!fetched.ok) return fetched;
   const { descriptor, descriptorSha256, tag } = fetched;
 
+  // CI FLOW RULE (S05): the old Free descriptor points at a tier-wide archive.
+  // Never silently download that complete library when the group package
+  // directory or selected package support is missing.
+  const localFixture = Boolean(io.fixtureDir || io.fixtureBaseUrl || descriptor.channel === "local-test");
+  if (!localFixture && (descriptor.schemaVersion === undefined || descriptor.schemaVersion < 5)) {
+    return {
+      ok: false,
+      reason: "validation",
+      message: "this release uses the retired full-library package format; install requires the small-package release protocol",
+    };
+  }
+  // CI FLOW RULE (S05): a current-looking descriptor must not make the CLI
+  // fetch the retired tier-wide index/`.bin`. Published installs require the
+  // candidate-set package directory and its bounded dependency closure.
+  if (!localFixture && descriptor.free.resources !== undefined) {
+    return {
+      ok: false,
+      reason: "validation",
+      message: "this release advertises the retired tier-wide resource bundle; refusing to download it",
+    };
+  }
+
   const metadataRef = descriptor.free.metadata;
   if (!metadataRef) {
     return {
@@ -671,18 +695,25 @@ export async function downloadFreeRelease(
       };
     }
   }
+  if (!localFixture) {
+    return {
+      ok: false,
+      reason: "validation",
+      message: "published Free release has no supported bounded package directory; refusing the full-library fallback",
+    };
+  }
   if (mode === "icons")
     return {
       ok: false,
       reason: "validation",
       message:
-        "this release has no selected-resource index; choose a newer release or explicitly set downloadMode=full",
+        "this local fixture has no selected-resource index",
     };
 
   selection?.onPlan?.(
     mode === "full"
-      ? "Download mode: full (explicitly configured); the complete target archive will be verified before selection."
-      : "This release does not advertise selected downloads; auto uses the verified full archive. Set downloadMode=icons to require selected downloads.",
+      ? "Download mode: full (local fixture only)."
+      : "Using a local-test fixture archive.",
   );
   const artifactCache = cachePath(io, descriptor.fullVersion, descriptor.free.sha256);
   if (io.existsSync(artifactCache)) {

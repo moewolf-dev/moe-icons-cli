@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer, type Server } from "node:http";
 import { downloadProArtifact, resolveProDescriptorEndpoint } from "../src/core/pro-download.js";
+import { downloadProSelected } from "../src/core/pro-selected-download.js";
+import type { ProArtifactDescriptor } from "../src/core/pro-download.js";
 import type { StoredSession, TokenStore } from "../src/auth/token-store.js";
 import type { CommandContext } from "../src/core/context.js";
 import { writeFreeReleaseFixture } from "./helpers/free-release-fixture.js";
@@ -95,7 +97,7 @@ describe("pro signed download", () => {
       return url.includes("artifact-descriptor") ? Response.json(body()) : signedResponse(url);
     });
     const result = await downloadProArtifact(
-      context(release),
+      context(release, { MOEICONS_PRO_DESCRIPTOR_URL: "http://127.0.0.1:43199/v1/icon-library/pro/artifact-descriptor" }),
       { tokenStore: store(session) },
       { version: meta.version, descriptorSha256: descriptorSha },
       { fetch: fetchFn as typeof fetch, allowedHosts: ["signed.example"] },
@@ -105,6 +107,45 @@ describe("pro signed download", () => {
     expect(calls[0]?.authorization).toBe("Bearer old-access");
     expect(calls.slice(1).every((call) => call.authorization === null)).toBe(true);
     expect(JSON.stringify(calls)).not.toContain("refresh");
+  });
+
+  it("keeps the historical Pro .bin reader unreachable from production endpoints", async () => {
+    const fetchFn = vi.fn();
+    const descriptor = {
+      version: meta.version,
+      descriptorSha256: descriptorSha,
+      sha256: meta.freeSha,
+      channel: "local-test",
+    } as unknown as ProArtifactDescriptor;
+    await expect(
+      downloadProSelected(
+        context(release),
+        { tokenStore: store(session) },
+        descriptor,
+        { config: {} as never, document: {} as never },
+        { fetch: fetchFn as typeof fetch },
+      ),
+    ).rejects.toThrow(/local-test descriptor and loopback endpoint/);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("does not let a loopback endpoint use the legacy Pro .bin reader without a local-test descriptor", async () => {
+    const fetchFn = vi.fn();
+    const descriptor = {
+      version: meta.version,
+      descriptorSha256: descriptorSha,
+      sha256: meta.freeSha,
+    } as unknown as ProArtifactDescriptor;
+    await expect(
+      downloadProSelected(
+        context(release, { MOEICONS_PRO_DESCRIPTOR_URL: "http://127.0.0.1:43199/v1/icon-library/pro/artifact-descriptor" }),
+        { tokenStore: store(session) },
+        descriptor,
+        { config: {} as never, document: {} as never },
+        { fetch: fetchFn as typeof fetch },
+      ),
+    ).rejects.toThrow(/local-test descriptor and loopback endpoint/);
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 
   it("validates metadata before requesting a complete Pro code archive", async () => {
@@ -126,7 +167,7 @@ describe("pro signed download", () => {
     };
     await expect(
       downloadProArtifact(
-        context(release),
+        context(release, { MOEICONS_PRO_DESCRIPTOR_URL: "http://127.0.0.1:43199/v1/icon-library/pro/artifact-descriptor" }),
         { tokenStore: store(session) },
         { version: meta.version, descriptorSha256: descriptorSha },
         {
@@ -159,6 +200,7 @@ describe("pro signed download", () => {
       return signedResponse(url);
     });
     const env = {
+      MOEICONS_PRO_DESCRIPTOR_URL: "http://127.0.0.1:43199/v1/icon-library/pro/artifact-descriptor",
       MOEICONS_AUTH0_ISSUER: "https://tenant.auth0.com",
       MOEICONS_AUTH0_CLIENT_ID: "client",
     };

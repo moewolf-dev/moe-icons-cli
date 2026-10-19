@@ -3,13 +3,21 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
+const os=require('node:os');
 const {spawn,execFileSync}=require('node:child_process');
 const {pipeline}=require('node:stream/promises');
 const {Transform}=require('node:stream');
 const {workflowRunPathMatches}=require('./workflow-run-path.cjs');
 const REPO='moewolf-dev/moe-icons-code-library';
 const CLI_REPO='moewolf-dev/moe-icons-cli';
-const MAX_ZIP_BYTES=2*1024**3;
+// A CLI candidate is tooling only. The retired code-library ZIP path is
+// fixture-only below; never admit the former GiB-scale production envelope.
+const MAX_ZIP_BYTES=130*1024**2;
+function assertLegacyLibraryZipFixture(file){
+ const fixture=process.env.MOEICONS_TEST_FIXTURE_LEGACY_ARCHIVE==='1' && typeof file==='string' &&
+  path.resolve(file).startsWith(`${path.resolve(os.tmpdir())}${path.sep}`);
+ assert.ok(fixture,'legacy full-library ZIP retrieval is retired; use candidate-set packages');
+}
 function transient(error){return /HTTP\s*(?:429|5\d\d)\b|ETIMEDOUT|ECONNRESET|(?:connection|operation|request) (?:timed out|timeout)/i.test(String(error.stderr || error.message));}
 function retryRead(read){for(let attempt=0;;attempt++){try{return read();}catch(error){if(attempt>=3 || !transient(error))throw error;Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,[1000,3000,7000][attempt]);}}}
 const json=route=>retryRead(()=>JSON.parse(execFileSync('gh',['api',route],{encoding:'utf8',timeout:30000,maxBuffer:4*1024*1024})));
@@ -57,6 +65,7 @@ async function downloadOnce(route,file,metadata){
  }catch(error){fs.rmSync(file,{force:true});throw error;}finally{clearTimeout(timer);child.kill();}
 }
 async function download(route,file,metadata){
+ if(route.startsWith(`repos/${REPO}/`))assertLegacyLibraryZipFixture(file);
  for(let attempt=0;;attempt++){
   try{return await downloadOnce(route,file,metadata);}catch(error){
    if(attempt>=2 || !error.cause?.transient)throw error;
@@ -96,6 +105,7 @@ function readRecord(expected) {
 }
 async function retrieve(expected,file){
  validateInput(expected);const repository=expected.repository || REPO;
+ if(repository===REPO && file)assertLegacyLibraryZipFixture(file);
  assert.ok([REPO,CLI_REPO].includes(repository),'trusted artifact repository');
  let metadata,actionsDownloadError;
  if(!expected.preferPrivate)try{metadata=json(`repos/${repository}/actions/artifacts/${expected.id}`);}catch(error){if(!unavailable(error))throw error;}

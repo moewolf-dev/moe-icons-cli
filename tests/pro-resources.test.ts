@@ -112,11 +112,21 @@ describe("pro resource state and pre-download (ME.2-ME.5)", () => {
     expect(state.kind).toBe("corrupt");
   });
 
-  it("pre-downloads and caches code + metadata without installing", async () => {
+  it("rejects the retired aggregate Pro archive path by default before network access", async () => {
+    let fetched = false;
+    await expect(runProPredownloadUseCase(
+      context(cache),
+      { tokenStore: tokenStore() },
+      { fetch: (async () => { fetched = true; return Response.json({}); }) as typeof fetch },
+    )).rejects.toThrow("aggregate Pro archive pre-download is retired");
+    expect(fetched).toBe(false);
+  });
+
+  it("keeps the retired aggregate Pro fixture path behind explicit local-test opt-in", async () => {
     const result = await runProPredownloadUseCase(
       context(cache),
       { tokenStore: tokenStore() },
-      { fetch: fetchFn() as typeof fetch, allowedProHosts: ["signed.example"] },
+      { fetch: fetchFn() as typeof fetch, allowedProHosts: ["signed.example"], allowLocalTest: true },
     );
     expect(result.version).toBe(meta.version);
     expect(result.codeSha256).toBe(meta.freeSha);
@@ -132,7 +142,7 @@ describe("pro resource state and pre-download (ME.2-ME.5)", () => {
     await runProPredownloadUseCase(
       context(cache),
       { tokenStore: tokenStore() },
-      { fetch: fetchFn() as typeof fetch, allowedProHosts: ["signed.example"], force: true },
+      { fetch: fetchFn() as typeof fetch, allowedProHosts: ["signed.example"], force: true, allowLocalTest: true },
     );
     expect(readFileSync(codePath).equals(Buffer.from(codeBytes))).toBe(true);
   });

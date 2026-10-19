@@ -36,6 +36,16 @@ describe("atomic library update", () => {
     expect(sent).toEqual({ version: "0.0.19", descriptorSha256: "a".repeat(64) });
   });
 
+  it("does not route package-set installs through the legacy archive updater", async () => {
+    writeFileSync(join(project, ".moeicons/install-metadata.json"), JSON.stringify({ schemaVersion: 2 }));
+    let fetched = false;
+    await expect(runLibraryUpdateUseCase(context(project), {
+      ...deps(nextFixture),
+      free: { ...download(nextFixture), fetchFn: async () => { fetched = true; throw new Error("unexpected request"); } },
+    }, { tier: "free", version: "0.0.20", descriptorSha256: "a".repeat(64) })).rejects.toThrow("valid installed Free candidate");
+    expect(fetched).toBe(false);
+  });
+
   it("commits candidate catalog, generated files and metadata together", async () => {
     const next = writeFreeReleaseFixture(nextFixture, { version: "0.0.18", useBundledCatalog: true });
     const result = await runLibraryUpdateUseCase(context(project), deps(nextFixture), { tier: "free", version: next.version, descriptorSha256: next.descriptorSha });

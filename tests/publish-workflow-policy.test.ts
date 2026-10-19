@@ -33,6 +33,17 @@ describe("P0-5 single immutable CLI candidate", () => {
     expect(publish).toMatch(/actions\/download-artifact@[0-9a-f]{40}/);
     expect(publish).not.toMatch(/npm run build|npm pack --pack-destination/);
   });
+
+  it("runs bounded package-set acceptance against the exact packed CLI commit", () => {
+    const acceptance = workflow.slice(workflow.indexOf("\n  acceptance:"), workflow.indexOf("\n  publish:"));
+    expect(acceptance).toMatch(/Checkout the exact CLI source used for the immutable candidate/);
+    expect(acceptance).toMatch(/ref: \$\{\{ needs\.pack\.outputs\.cli_commit \}\}/);
+    expect(acceptance).toMatch(/EXPECTED_CLI_COMMIT: \$\{\{ needs\.pack\.outputs\.cli_commit \}\}/);
+    expect(acceptance).toMatch(/CLI fixture adapter commit mismatch/);
+    expect(acceptance).toMatch(/MOEICONS_CLI_REPO: \.\.\/cli/);
+    expect(acceptance).toMatch(/npm run test:sandbox:full/);
+    expect(acceptance).not.toMatch(/moewolf-dev\/moe-icons-code-library|build:(?:free|pro|ent|main)|npm run generate/);
+  });
 });
 
 describe("R-P0-3/R-P0-4 recoverable release commit and identity", () => {

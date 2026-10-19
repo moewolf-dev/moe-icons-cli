@@ -30,9 +30,9 @@ import {
   parseInstallMetadata,
   serializeInstallMetadata,
   sha256Bytes,
-  type InstallMetadata,
   type InstallMetadataParseOptions,
 } from "../project/install-metadata.js";
+import { parsePackageInstallMetadata, serializePackageInstallMetadata } from "../project/package-install-metadata.js";
 import { withProjectLockSync } from "../project/project-lock.js";
 import type { Target } from "../commands/parser.js";
 import { allowLocalTestFromEnv } from "./local-test-env.js";
@@ -125,7 +125,7 @@ export function loadInstalledCatalogState(
   try {
     const rawMetadata = fs_.readFileSync(metadataPath, "utf8");
     if (typeof rawMetadata !== "string") throw new Error("metadata is not text");
-    metadata = parseInstallMetadata(rawMetadata, opts);
+    metadata = parseInstallMetadata(rawMetadata, opts) ?? parsePackageInstallMetadata(rawMetadata);
   } catch (error) {
     return {
       status: "invalid",
@@ -195,27 +195,17 @@ function readInstallMetadata(
   projectRoot: string,
   readFileSync: (path: string, encoding: "utf8") => string,
   existsSync: (path: string) => boolean,
+  opts: InstallMetadataParseOptions = {},
 ): { artifactVersion?: string; artifactSha256?: string; target?: Target } | undefined {
   const path = join(projectRoot, ".moeicons", "install-metadata.json");
   if (!existsSync(path)) return undefined;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
-      artifactVersion?: unknown;
-      artifactSha256?: unknown;
-      target?: unknown;
-    };
-    return {
-      ...(typeof parsed.artifactVersion === "string"
-        ? { artifactVersion: parsed.artifactVersion }
-        : {}),
-      ...(typeof parsed.artifactSha256 === "string"
-        ? { artifactSha256: parsed.artifactSha256 }
-        : {}),
-      ...(typeof parsed.target === "string" &&
-      ["react", "vue", "vanilla", "assets"].includes(parsed.target)
-        ? { target: parsed.target as Target }
-        : {}),
-    };
+    const raw = readFileSync(path, "utf8");
+    const parsed = parseInstallMetadata(raw, opts);
+    if (parsed) return { artifactVersion: parsed.artifactVersion, artifactSha256: parsed.artifactSha256, target: parsed.target };
+    const packageMetadata = parsePackageInstallMetadata(raw);
+    if (packageMetadata) return { artifactVersion: packageMetadata.candidate.fullVersion, target: packageMetadata.target };
+    return undefined;
   } catch {
     return undefined;
   }
@@ -302,10 +292,17 @@ function mergePinnedBitmapShardAssets(
       errors: ["bitmap shards require an installed pro artifact; run `moeicons install` first"],
     };
   }
-  const metadata = parseInstallMetadata(fs_.readFileSync(metadataPath, "utf8"), {
+  const rawMetadata = fs_.readFileSync(metadataPath, "utf8");
+  const metadata = parseInstallMetadata(rawMetadata, {
     allowLocalTest: allowLocalTestFromEnv(env),
   });
   if (!metadata) {
+    if (parsePackageInstallMetadata(rawMetadata)) {
+      return {
+        ok: false,
+        errors: ["selected bitmap packages are missing for this configuration; run `moeicons install` to download the configured icons, format and imageSize"],
+      };
+    }
     return {
       ok: false,
       errors: ["install metadata is invalid; run 'moeicons install' to repair or reinstall"],
@@ -379,10 +376,10 @@ export async function loadArchiveFiles(
   }
   const selectionMetadataPath = join(projectRoot, ".moeicons", "install-metadata.json");
   if (fs_.existsSync(selectionMetadataPath)) {
-    const pinned = parseInstallMetadata(fs_.readFileSync(selectionMetadataPath, "utf8"), {
-      allowLocalTest: allowLocalTestFromEnv(env),
-    });
-    if (pinned?.delivery?.mode === "icons") {
+    const raw = fs_.readFileSync(selectionMetadataPath, "utf8");
+    const parseOptions = { allowLocalTest: allowLocalTestFromEnv(env) };
+    const pinned = parseInstallMetadata(raw, parseOptions) ?? parsePackageInstallMetadata(raw);
+    if (pinned?.schemaVersion === 1 && pinned.delivery?.mode === "icons") {
       const files: Record<string, Uint8Array> = {};
       for (const [name, hash] of Object.entries(pinned.managedFiles)) {
         if (!name.startsWith(".moeicons/artifact/")) continue;
@@ -399,8 +396,20 @@ export async function loadArchiveFiles(
       }
       return { ok: true, files };
     }
+    if (pinned?.schemaVersion === 2) {
+      const files: Record<string, Uint8Array> = {};
+      for (const [name, hash] of Object.entries(pinned.managedFiles)) {
+        if (!name.startsWith(".moeicons/artifact/")) continue;
+        const target = safeManagedPath(projectRoot, name).target;
+        if (!fs_.existsSync(target)) return { ok: false, reason: `selected resource missing: ${name}; run moeicons install` };
+        const bytes = readBinaryFile(fs_, target);
+        if (sha256Bytes(bytes) !== hash) return { ok: false, reason: `selected resource modified: ${name}; preserve your edit before reinstalling` };
+        files[name.slice(".moeicons/artifact/".length)] = bytes;
+      }
+      return { ok: true, files };
+    }
   }
-  const meta = readInstallMetadata(projectRoot, fs_.readFileSync, fs_.existsSync);
+  const meta = readInstallMetadata(projectRoot, fs_.readFileSync, fs_.existsSync, { allowLocalTest: allowLocalTestFromEnv(env) });
   if (meta?.target) {
     const subtreeRoot = join(projectRoot, ".moeicons", "artifact", meta.target);
     if (fs_.existsSync(subtreeRoot)) {
@@ -485,7 +494,7 @@ export async function runGenerateUseCase(
   const plannedMetadataText = fs_.existsSync(plannedMetadataPath)
     ? fs_.readFileSync(plannedMetadataPath, "utf8")
     : undefined;
-  const installedMeta = readInstallMetadata(project.root, fs_.readFileSync, fs_.existsSync);
+  const installedMeta = readInstallMetadata(project.root, fs_.readFileSync, fs_.existsSync, { allowLocalTest });
   if (!installedMeta) {
     return {
       ok: false,
@@ -596,12 +605,12 @@ export async function runGenerateUseCase(
           reason:
             "managed install metadata is missing; run 'moeicons install' to repair or reinstall",
         };
-      const metadata = parseInstallMetadata(fs_.readFileSync(metadataPath, "utf8"), {
-        allowLocalTest,
-      });
-      if (fs_.readFileSync(metadataPath, "utf8") !== plannedMetadataText)
+      const currentMetadataText = fs_.readFileSync(metadataPath, "utf8");
+      const metadata = parseInstallMetadata(currentMetadataText, { allowLocalTest }) ?? parsePackageInstallMetadata(currentMetadataText);
+      if (currentMetadataText !== plannedMetadataText)
         return { ok: false, reason: "installation changed while preparing generate; retry" };
-      if (!metadata || metadata.tier !== loaded.config.tier)
+      const metadataTier = metadata?.schemaVersion === 1 ? metadata.tier : metadata?.candidate.tier;
+      if (!metadata || metadataTier !== loaded.config.tier)
         return {
           ok: false,
           reason:
@@ -683,11 +692,9 @@ export async function runGenerateUseCase(
           nextManaged[managedPath] = hash;
       for (const [path, content] of Object.entries(generated))
         nextManaged[path] = sha256Bytes(content);
-      const nextMetadata: InstallMetadata = {
-        ...metadata,
-        managedFiles: nextManaged,
-        generatedOutputDir: loaded.config.outputDir,
-      };
+      const nextMetadataText = metadata.schemaVersion === 1
+        ? serializeInstallMetadata({ ...metadata, managedFiles: nextManaged, generatedOutputDir: loaded.config.outputDir })
+        : serializePackageInstallMetadata({ ...metadata, managedFiles: nextManaged, generatedOutputDir: loaded.config.outputDir });
       const writes: Record<string, string | Uint8Array> = { ...generated };
       for (const file of sideFiles) {
         const absolute = resolve(file.path);
@@ -696,7 +703,7 @@ export async function runGenerateUseCase(
           return { ok: false, reason: `side file escapes project: ${file.path}` };
         writes[rel] = file.content;
       }
-      writes[".moeicons/install-metadata.json"] = serializeInstallMetadata(nextMetadata);
+      writes[".moeicons/install-metadata.json"] = nextMetadataText;
       const stale = Object.keys(metadata.managedFiles).filter(
         (path) =>
           (path.startsWith(outputPrefix) || path.startsWith(previousPrefix)) &&

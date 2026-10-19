@@ -238,14 +238,14 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
         },
       );
       const result = await runProInstallUseCase(
-        context(project),
+        context(project, { MOEICONS_PRO_DESCRIPTOR_URL: "http://127.0.0.1:43199/v1/icon-library/pro/artifact-descriptor" }),
         {
           fs: realFs,
           auth: { tokenStore: tokenStore(session()) },
           fetch: fetch as typeof fetch,
           allowedHosts: ["06898acc14d0b9633f259fe20145fd49.r2.cloudflarestorage.com"],
         },
-        { version: meta.version, descriptorSha256: meta.descriptorSha, target },
+        { version: meta.version, descriptorSha256: meta.descriptorSha, target, allowLocalTest: true },
       );
       expect(result.artifactVersion).toBe(meta.version);
       if (target === "react" || target === "vue") {
@@ -340,14 +340,14 @@ describe("B7: 2 tiers x 4 targets routing and target subtree install", () => {
       },
     );
     await runProInstallUseCase(
-      context(project),
+      context(project, { MOEICONS_PRO_DESCRIPTOR_URL: "http://127.0.0.1:43199/v1/icon-library/pro/artifact-descriptor" }),
       {
         fs: realFs,
         auth: { tokenStore: tokenStore(session()) },
         fetch: fetch as typeof fetch,
         allowedHosts: ["signed.example"],
       },
-      { version: meta.version, descriptorSha256: meta.descriptorSha, target: "assets" },
+      { version: meta.version, descriptorSha256: meta.descriptorSha, target: "assets", allowLocalTest: true },
     );
     expect(calls.find((call) => call.url.includes("artifact-descriptor"))?.authorization).toBe(
       "Bearer access-token",

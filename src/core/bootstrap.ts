@@ -60,10 +60,13 @@ export async function runBootstrapUseCase(context: CommandContext, deps: Bootstr
   const state = readInstalledResourceState(project.root, "free");
   if (
     state.kind === "ok" &&
-    deps.fs.existsSync(join(project.root, ".moeicons", "MANUAL.md")) &&
-    deps.fs.existsSync(join(project.root, ".moeicons", "manifest.json"))
+    (state.metadata.schemaVersion === 2 ||
+      (deps.fs.existsSync(join(project.root, ".moeicons", "MANUAL.md")) &&
+        deps.fs.existsSync(join(project.root, ".moeicons", "manifest.json")))
+    )
   ) {
-    writeMarker(deps, context.env, { cliVersion: deps.cliVersion, libraryVersion: state.metadata.artifactVersion, completedAt: new Date().toISOString() });
+    const version = state.metadata.schemaVersion === 1 ? state.metadata.artifactVersion : state.metadata.candidate.fullVersion;
+    writeMarker(deps, context.env, { cliVersion: deps.cliVersion, libraryVersion: version, completedAt: new Date().toISOString() });
     return { kind: "already" };
   }
 

@@ -1,6 +1,8 @@
 {
   "schemaVersion": 1,
-  "maxAggregateInputBytes": 805306368,
+  "maxPackageBytes": 134217728,
+  "maxPackageZipBytes": 136314880,
+  "packageScopedResources": true,
   "bitmapFormats": [
     "png",
     "webp"

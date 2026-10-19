@@ -40,6 +40,8 @@ import {
 import type { BitmapShard } from "./bitmap-shards.js";
 import type { CacheIo } from "./cache.js";
 import { allowLocalTestFromEnv } from "./local-test-env.js";
+import { runSmallPackageInstall } from "./small-package-install.js";
+import { fetchProStablePackageSet } from "./pro-small-package-download.js";
 
 type ProInstallFs = TransactionalFs &
   Partial<Pick<TransactionalFsWithCopy, "readFileSync" | "readdirSync" | "copyFileSync">>;
@@ -97,8 +99,8 @@ export async function runProInstallUseCase(
     }) => void;
   },
   expected: {
-    readonly version: string;
-    readonly descriptorSha256: string;
+    readonly version?: string;
+    readonly descriptorSha256?: string;
     readonly target?: Target;
     /** A-1b: allow a declared local-test candidate (never true for production). */
     readonly allowLocalTest?: boolean;
@@ -106,13 +108,19 @@ export async function runProInstallUseCase(
 ): Promise<{
   readonly projectRoot: string;
   readonly artifactVersion: string;
-  readonly descriptorSha256: string;
+  readonly descriptorSha256?: string;
+  readonly candidateRootSha256?: string;
+  readonly packageSetSha256?: string;
   readonly catalogSha256: string;
   readonly artifactBytes: number;
-  readonly downloadMode: "icons" | "full";
+  readonly downloadMode: "icons" | "full" | "packages";
   readonly downloadNotes: readonly string[];
   readonly networkBytes?: number;
   readonly selectedFiles?: number;
+  readonly packageCount?: number;
+  readonly cacheHits?: number;
+  readonly metadataCacheHits?: number;
+  readonly transferRetryCount?: number;
 }> {
   const project = detectProject(context.cwd);
   if (!project)
@@ -138,6 +146,51 @@ export async function runProInstallUseCase(
       "VALIDATION_ERROR",
       `config target is "${bootstrap.config.target}" but install target is "${target}"; set target to "${target}" in moeicons.config before installing`,
     );
+  }
+  if (expected.allowLocalTest !== true) {
+    const accessToken = await runAccessTokenUseCase(context, deps.auth);
+    const identity = await fetchProStablePackageSet({
+      accessToken,
+      ...(context.env.MOEICONS_API_BASE_URL ? { apiBaseUrl: context.env.MOEICONS_API_BASE_URL } : {}),
+      ...(deps.fetch ? { fetchFn: deps.fetch } : {}),
+      ...(context.signal ? { signal: context.signal } : {}),
+    });
+    if (expected.version && expected.version !== identity.fullVersion) {
+      throw new CliError("VALIDATION_ERROR", "published Pro package-set changed after version selection; retry the install");
+    }
+    const installed = await runSmallPackageInstall({
+      projectRoot: project.root,
+      fullVersion: identity.fullVersion,
+      expectedPackageSetSha256: identity.packageSetSha256,
+      ...(context.env.MOEICONS_API_BASE_URL ? { apiBaseUrl: context.env.MOEICONS_API_BASE_URL } : {}),
+      config: bootstrap.config,
+      plannedConfigDocument: JSON.stringify(document),
+      fs: deps.fs,
+      cacheDir: resolveCacheDir(context.env),
+      now: context.now,
+      proAccessToken: accessToken,
+      ...(context.signal ? { signal: context.signal } : {}),
+      ...(deps.fetch ? { fetchFn: deps.fetch } : {}),
+    });
+    return {
+      projectRoot: project.root,
+      artifactVersion: installed.artifactVersion,
+      candidateRootSha256: installed.candidateRootSha256,
+      packageSetSha256: installed.packageSetSha256,
+      catalogSha256: installed.catalogSha256,
+      artifactBytes: installed.artifactBytes,
+      downloadMode: "packages",
+      downloadNotes: installed.fallbacks.map((fallback) => `Theme fallback: ${fallback}`),
+      networkBytes: installed.networkBytes + identity.networkBytes,
+      selectedFiles: installed.selectedFiles,
+      packageCount: installed.packageCount,
+      cacheHits: installed.cacheHits,
+      metadataCacheHits: installed.metadataCacheHits,
+      transferRetryCount: installed.transferRetryCount,
+    };
+  }
+  if (!expected.version || !expected.descriptorSha256) {
+    throw new CliError("VALIDATION_ERROR", "local Pro test install requires an exact legacy fixture pin");
   }
   const downloaded = await downloadProArtifact(
     context,

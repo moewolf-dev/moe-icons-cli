@@ -5,6 +5,7 @@ import { applyPlannedChanges } from "../project/anchors/apply.js";
 import { withProjectLockSync } from "../project/project-lock.js";
 import type { DiagnosticReport, PlannedFileChange } from "../project/anchors/types.js";
 import { loadInstalledCatalogState } from "./generate.js";
+import { readInstalledResourceState } from "../project/install-metadata.js";
 import type { IconCatalog } from "../catalog/catalog.js";
 import type { Target } from "../commands/parser.js";
 
@@ -112,6 +113,8 @@ export function checkRequiresFix(report: DiagnosticReport): boolean {
 }
 
 function diagnosticCatalog(cwd: string): IconCatalog | undefined {
+  const installed = readInstalledResourceState(cwd);
+  if (installed.kind === "invalid") throw new Error(installed.message);
   const state = loadInstalledCatalogState(cwd, { readFileSync, existsSync });
   if (state.status === "invalid") throw new Error(state.message);
   return state.status === "ok" ? state.catalog : undefined;

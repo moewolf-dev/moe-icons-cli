@@ -185,7 +185,7 @@
         "full"
       ],
       "default": "auto",
-      "description": "Prefer configuration-selected resources (auto), require them (icons), or download the full archive (full)."
+      "description": "Resolve selected packages (auto), require selected packages (icons), or use full archives only with explicit local test fixtures (full). Published releases never download a tier-wide archive."
     }
   }
 }

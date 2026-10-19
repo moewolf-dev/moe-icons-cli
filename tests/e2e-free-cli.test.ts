@@ -106,7 +106,10 @@ describe("E2E-03 free CLI flow", () => {
     }
   });
 
-  it("installs pro through authenticated descriptor and signed bytes", async () => {
+  it("keeps the legacy signed Pro fixture flow behind the explicit local-test gate", async () => {
+    env.MOEICONS_ENV = "local";
+    env.MOEICONS_LIBRARY_VERSIONS_URL = "http://127.0.0.1:43199/v1/icon-library/versions";
+    env.MOEICONS_PRO_DESCRIPTOR_URL = "http://127.0.0.1:43199/v1/icon-library/pro/artifact-descriptor";
     const meta = writeFreeReleaseFixture(releaseDir, { tier: "pro", useBundledCatalog: true });
     const archive = new Uint8Array(readFileSync(join(releaseDir, meta.freeName)));
     const metadataArchive = new Uint8Array(readFileSync(join(releaseDir, meta.metadataName)));

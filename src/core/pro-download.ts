@@ -373,11 +373,35 @@ export async function downloadProArtifact(
 }> {
   const fetchFn = deps.fetch ?? fetch;
   const descriptor = await fetchProDescriptor(context, auth, expected, { fetch: fetchFn });
+  const localFixture =
+    descriptor.channel === "local-test" || resolveProDescriptorEndpoint(context.env).allowLoopback;
+  // CI FLOW RULE (S05): tier-wide resource bundles are historical schema only.
+  // Do not fall through to `descriptor.url` when selected packages are absent;
+  // that URL points at the full Pro code archive. New installs must resolve the
+  // small package directory and fetch only the configured group/tuple set.
+  if (
+    !localFixture &&
+    descriptor.resources?.bundle
+  ) {
+    throw new CliError(
+      "VALIDATION_ERROR",
+      "this release uses the retired full-library package format; install requires the small-package release protocol",
+    );
+  }
+  if (deps.selection?.config.downloadMode === "full" && !localFixture) {
+    throw new CliError(
+      "VALIDATION_ERROR",
+      'downloadMode="full" is disabled for published releases; resolve bounded style-group/target packages instead',
+    );
+  }
+  const localRangeFixture =
+    descriptor.channel === "local-test" &&
+    resolveProDescriptorEndpoint(context.env).allowLoopback;
   if (
     deps.selection &&
     deps.selection.config.downloadMode !== "full" &&
     descriptor.resources &&
-    descriptor.channel !== "local-test"
+    localRangeFixture
   ) {
     const selected = await downloadProSelected(context, auth, descriptor, deps.selection, deps);
     if (selected)
@@ -391,8 +415,14 @@ export async function downloadProArtifact(
   if (deps.selection?.config.downloadMode === "icons")
     throw new CliError(
       "VALIDATION_ERROR",
-      "this release/backend does not support selected resources; set downloadMode=full or use a newer release",
+      "this release/backend does not support bounded selected packages; refusing a full-library fallback",
     );
+  if (!localFixture) {
+    throw new CliError(
+      "VALIDATION_ERROR",
+      "published Pro release has no supported bounded package directory; refusing the full-library fallback",
+    );
+  }
   context.ui.note(
     deps.selection?.config.downloadMode === "full"
       ? "Download mode: full (explicitly configured)."

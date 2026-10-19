@@ -302,7 +302,13 @@ export const FREE_DOWNLOAD_HOSTS = [
 ] as const;
 
 export function githubReleaseAssetUrl(tag: string, filename: string): string {
-  if (!tag.startsWith("v")) throw new Error("release tag must be v<fullVersion>");
+  // Legacy Free releases use v<fullVersion>; the bounded package publisher
+  // uses immutable content-addressed/version-pointer tags as well.
+  const version = String.raw`(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:alpha|beta)(?:\.(?:0|[1-9]\d*))?)?`;
+  const validTag = new RegExp(
+    `^(?:v${version}|candidate-set-v1-free-[a-f0-9]{64}|free-package-v1-[a-f0-9]{64}|candidate-version-v1-free-${version})$`,
+  );
+  if (!validTag.test(tag)) throw new Error("release tag is not a supported Moeicons release tag");
   return `https://github.com/${PUBLIC_FREE_REPO.owner}/${PUBLIC_FREE_REPO.name}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(filename)}`;
 }
 

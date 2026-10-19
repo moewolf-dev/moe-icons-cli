@@ -1,7 +1,8 @@
 import { join, relative, resolve, dirname, isAbsolute, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { lstatSync, realpathSync, readFileSync as realReadFileSync, readdirSync as realReaddirSync, copyFileSync as realCopyFileSync } from "node:fs";
+import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, readFileSync as realReadFileSync, readdirSync as realReaddirSync, copyFileSync as realCopyFileSync } from "node:fs";
 import { parseInstallMetadata, sha256Bytes } from "./install-metadata.js";
+import { parsePackageInstallMetadata } from "./package-install-metadata.js";
 import { strToU8, zipSync, unzipSync } from "fflate";
 import type {
   mkdirSync,
@@ -27,7 +28,18 @@ export interface InstallPlanItem {
   readonly rel?: string;
   readonly content?: string;
   readonly bytes?: Uint8Array;
+  /** A verified file in a private .moeicons/.package-stage-<uuid> directory. */
+  readonly staged?: StagedInstallFile;
 }
+
+export interface StagedInstallFile {
+  readonly kind: "staged-file";
+  /** Project-relative path under .moeicons/.package-stage-<uuid>. */
+  readonly path: string;
+  readonly sha256: string;
+}
+
+export type ManagedFileContent = string | Uint8Array | StagedInstallFile;
 
 export interface InstallPlan {
   readonly root?: string;
@@ -46,6 +58,43 @@ export interface TransactionalFsWithCopy extends TransactionalFs {
   readonly readFileSync: typeof readFileSync;
   readonly readdirSync: typeof readdirSync;
   readonly copyFileSync: typeof copyFileSync;
+}
+
+function packageStageRoot(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  const match = /^(\.moeicons\/(\.package-stage-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}))\/.+$/.exec(normalized);
+  if (!match || normalized !== path) throw new Error(`unsafe staged install path: ${path}`);
+  return match[1]!;
+}
+
+function isStagedInstallFile(value: unknown): value is StagedInstallFile {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return Object.getPrototypeOf(value) === Object.prototype &&
+    Object.keys(record).sort().join(",") === "kind,path,sha256" &&
+    record.kind === "staged-file" && typeof record.path === "string" &&
+    typeof record.sha256 === "string" && /^[0-9a-f]{64}$/.test(record.sha256);
+}
+
+function sha256FileSync(path: string): string {
+  const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+  const descriptor = openSync(path, flags);
+  try {
+    if (!fstatSync(descriptor).isFile()) throw new Error(`staged install source is not a regular file: ${path}`);
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let position = 0;
+    let count = 1;
+    while (count > 0) {
+      count = readSync(descriptor, buffer, 0, buffer.length, position);
+      if (count === 0) break;
+      hash.update(buffer.subarray(0, count));
+      position += count;
+    }
+    return hash.digest("hex");
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 /** Shared path boundary for install/update and doctor/init writes. */
@@ -71,7 +120,7 @@ export function safeManagedPath(projectRoot: string, relative: string): { normal
  */
 export function executeManagedReconcile(
   projectRoot: string,
-  writes: Readonly<Record<string, string | Uint8Array>>,
+  writes: Readonly<Record<string, ManagedFileContent>>,
   removePaths: readonly string[],
   fs_: TransactionalFsWithCopy,
   options: {
@@ -103,10 +152,29 @@ export function executeManagedReconcile(
     const current = fs_.existsSync(target) ? fs_.readFileSync(target, "utf8") : undefined;
     if (current !== expected) throw new Error(`file changed since planning: ${relative}`);
   };
-  const entries = Object.entries(writes).map(([relative, content]) => ({ ...safe(relative), content }));
+  const stagedSources = new Set<string>();
+  const stagedRoots = new Set<string>();
+  const entries = Object.entries(writes).map(([relative, content]) => {
+    const target = safe(relative);
+    if (typeof content === "string" || content instanceof Uint8Array) {
+      return { ...target, content, afterHash: sha256Bytes(content), stagedSource: undefined };
+    }
+    if (!isStagedInstallFile(content)) throw new Error(`invalid managed file content: ${relative}`);
+    const stageRoot = packageStageRoot(content.path);
+    const source = safe(content.path);
+    if (stagedSources.has(source.normalized)) throw new Error(`staged file is referenced more than once: ${source.normalized}`);
+    stagedSources.add(source.normalized);
+    stagedRoots.add(stageRoot);
+    const stat = lstatSync(source.target);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`staged install source is not a regular file: ${source.normalized}`);
+    if (sha256FileSync(source.target) !== content.sha256) throw new Error(`staged install source checksum mismatch: ${source.normalized}`);
+    return { ...target, content, afterHash: content.sha256, stagedSource: source.target };
+  });
+  const cleanupStages = [...stagedRoots].sort();
   const removals = [...new Set(removePaths)].map(safe).filter((item) => !Object.hasOwn(writes, item.normalized));
   for (const item of [...entries, ...removals]) {
-    if (item.normalized.toLowerCase().startsWith(".moeicons/.reconcile-")) throw new Error(`managed path overlaps transaction control: ${item.normalized}`);
+    const lowered = item.normalized.toLowerCase();
+    if (lowered.startsWith(".moeicons/.reconcile-") || lowered.startsWith(".moeicons/.package-stage-")) throw new Error(`managed path overlaps transaction control: ${item.normalized}`);
   }
   const allPaths = [...entries, ...removals].map((item) => item.normalized.toLowerCase()).sort();
   for (const entry of entries) checkExpected(entry.normalized, entry.target);
@@ -130,12 +198,14 @@ export function executeManagedReconcile(
   const backedUp: Array<{ target: string; backup: string; relative: string }> = [];
   const installed: Array<{ target: string; hash: string; relative: string }> = [];
   let preserveBackup = false;
+  const afterHashes = new Map(entries.map((entry) => [entry.normalized, entry.afterHash]));
   const journal = {
     version: 1, operationId, committed: false,
+    cleanupStages,
     entries: [...removals, ...entries].map((item) => ({
       path: item.normalized,
       before: fs_.existsSync(item.target) ? sha256Bytes(fs_.readFileSync(item.target)) : null,
-      after: Object.hasOwn(writes, item.normalized) ? sha256Bytes(writes[item.normalized]!) : null,
+      after: afterHashes.get(item.normalized) ?? null,
     })),
   };
   const journalPath = join(backupRoot, "recovery.json");
@@ -152,7 +222,9 @@ export function executeManagedReconcile(
       const staged = join(stagingRoot, entry.normalized);
       fs_.mkdirSync(join(staged, ".."), { recursive: true });
       safe(`${stagingRelative}/${entry.normalized}`);
-      fs_.writeFileSync(staged, entry.content);
+      if (entry.stagedSource) fs_.copyFileSync(entry.stagedSource, staged);
+      else fs_.writeFileSync(staged, entry.content as string | Uint8Array);
+      if (sha256FileSync(staged) !== entry.afterHash) throw new Error(`staged install copy checksum mismatch: ${entry.normalized}`);
     }
     // Persist the entire intent before the first destructive rename. Recovery
     // infers completed renames from hashes, so no per-rename journal gap exists.
@@ -178,7 +250,7 @@ export function executeManagedReconcile(
       fs_.mkdirSync(join(entry.target, ".."), { recursive: true });
       safe(entry.normalized);
       fs_.renameSync(staged, entry.target);
-      installed.push({ target: entry.target, hash: sha256Bytes(entry.content), relative: entry.normalized });
+      installed.push({ target: entry.target, hash: entry.afterHash, relative: entry.normalized });
     }
     journal.committed = true;
     safe(backupRelative);
@@ -232,7 +304,13 @@ export function executeManagedReconcile(
   // The new state is committed. A cleanup failure must not trigger rollback
   // after any backup bytes have already been removed.
   if (fs_.existsSync(backupRoot)) {
-    try { safe(backupRelative); fs_.rmSync(backupRoot, { recursive: true, force: true }); }
+    try {
+      for (const stageRoot of cleanupStages) {
+        const stage = safe(stageRoot).target;
+        if (fs_.existsSync(stage)) fs_.rmSync(stage, { recursive: true, force: true });
+      }
+      safe(backupRelative); fs_.rmSync(backupRoot, { recursive: true, force: true });
+    }
     catch (error) {
       throw new Error(`changes committed, backup cleanup failed at ${backupRoot}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -253,13 +331,18 @@ export function recoverManagedReconcile(projectRoot: string, fs_: TransactionalF
     const journalPath = safeManagedPath(projectRoot, `.moeicons/${name}/recovery.json`).target;
     if (!fs_.existsSync(journalPath)) continue; // staging never reached mutation
     const journal = JSON.parse(fs_.readFileSync(journalPath, "utf8")) as {
-      version: number; operationId: string; entries: Array<{ path: string; before: string | null; after: string | null }>;
+      version: number; operationId: string; cleanupStages?: string[]; entries: Array<{ path: string; before: string | null; after: string | null }>;
     };
     const hashOrNull = (value: unknown) => value === null || (typeof value === "string" && /^[0-9a-f]{64}$/.test(value));
     if (journal.version !== 1 || name !== `.reconcile-backup-${journal.operationId}` || !Array.isArray(journal.entries) || journal.entries.some((entry) => !entry || typeof entry.path !== "string" || !hashOrNull(entry.before) || !hashOrNull(entry.after))) {
       throw new Error(`invalid recovery journal; originals retained at ${backupRoot}`);
     }
-    if (journal.entries.some((entry) => entry.path.toLowerCase().startsWith(".moeicons/.reconcile-")) || new Set(journal.entries.map((entry) => entry.path.toLowerCase())).size !== journal.entries.length) throw new Error(`unsafe recovery journal at ${backupRoot}`);
+    if (journal.cleanupStages !== undefined && (!Array.isArray(journal.cleanupStages) || journal.cleanupStages.some((path) => typeof path !== "string" || !/^\.moeicons\/\.package-stage-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(path)) || new Set(journal.cleanupStages).size !== journal.cleanupStages.length)) throw new Error(`unsafe recovery journal at ${backupRoot}`);
+    const cleanupStages = (journal.cleanupStages ?? []).map((path) => safeManagedPath(projectRoot, path).target);
+    if (journal.entries.some((entry) => {
+      const path = entry.path.toLowerCase();
+      return path.startsWith(".moeicons/.reconcile-") || path.startsWith(".moeicons/.package-stage-");
+    }) || new Set(journal.entries.map((entry) => entry.path.toLowerCase())).size !== journal.entries.length) throw new Error(`unsafe recovery journal at ${backupRoot}`);
     const entries = journal.entries.map((entry) => ({ ...entry, target: safeManagedPath(projectRoot, entry.path).target, backup: safeManagedPath(projectRoot, `.moeicons/${name}/files/${entry.path}`).target }));
     const committed = safeManagedPath(projectRoot, `.moeicons/${name}/committed`).target;
     if (fs_.existsSync(committed)) {
@@ -287,6 +370,7 @@ export function recoverManagedReconcile(projectRoot: string, fs_: TransactionalF
     }
     const staging = safeManagedPath(projectRoot, `.moeicons/.reconcile-staging-${journal.operationId}`).target;
     if (fs_.existsSync(staging)) fs_.rmSync(staging, { recursive: true, force: true });
+    for (const stage of cleanupStages) if (fs_.existsSync(stage)) fs_.rmSync(stage, { recursive: true, force: true });
     fs_.rmSync(backupRoot, { recursive: true, force: true });
     recovered++;
   }
@@ -328,7 +412,7 @@ function existsOnDisk(path: string): boolean {
 /** Pure list of install operations with expected checksums. */
 export function createInstallPlan(
   targetRoot: string,
-  files: Readonly<Record<string, string | Uint8Array>>,
+  files: Readonly<Record<string, ManagedFileContent>>,
 ): InstallPlan {
   const items: InstallPlanItem[] = [];
   const sorted = Object.keys(files).sort((a, b) => a.localeCompare(b));
@@ -344,11 +428,10 @@ export function createInstallPlan(
     seen.add(folded);
     const content = files[rel];
     if (content !== undefined) {
-      items.push(
-        typeof content === "string"
-          ? { kind: "write", path: join(targetRoot, rel), rel, content }
-          : { kind: "write", path: join(targetRoot, rel), rel, bytes: content },
-      );
+      if (typeof content === "string") items.push({ kind: "write", path: join(targetRoot, rel), rel, content });
+      else if (content instanceof Uint8Array) items.push({ kind: "write", path: join(targetRoot, rel), rel, bytes: content });
+      else if (isStagedInstallFile(content)) items.push({ kind: "write", path: join(targetRoot, rel), rel, staged: content });
+      else throw new Error(`invalid install file content: ${rel}`);
     }
   }
   return { root: targetRoot, items };
@@ -436,6 +519,8 @@ export function executeInstallPlan(
       }
       current = dirname(current);
     }
+    const supplied = Number(item.content !== undefined) + Number(item.bytes !== undefined) + Number(item.staged !== undefined);
+    if (supplied !== 1 || (item.staged !== undefined && !isStagedInstallFile(item.staged))) throw new Error(`invalid install plan content: ${rel}`);
     return { item, rel, target };
   });
   const folded = validated.map((item) => item.rel.toLowerCase());
@@ -446,7 +531,7 @@ export function executeInstallPlan(
   const metadataPath = join(project, ".moeicons", "install-metadata.json");
   const priorMetadataText = existsOnDisk(metadataPath) ? realReadFileSync(metadataPath, "utf8") : undefined;
   const prior = priorMetadataText !== undefined
-    ? parseInstallMetadata(priorMetadataText, { allowLocalTest: true })
+    ? parseInstallMetadata(priorMetadataText, { allowLocalTest: true }) ?? parsePackageInstallMetadata(priorMetadataText)
     : undefined;
   if (existsOnDisk(metadataPath) && !prior) throw new Error("existing install metadata is invalid; refusing to overwrite project files");
   if (prior) {
@@ -476,7 +561,7 @@ export function executeInstallPlan(
       : prior?.managedFiles[rel] ?? (existsOnDisk(target) ? sha256Bytes(realReadFileSync(target)) : undefined),
   ]));
   executeManagedReconcile(project,
-    Object.fromEntries(validated.map(({ item, rel }) => [rel, item.bytes ?? item.content ?? ""])),
+    Object.fromEntries(validated.map(({ item, rel }) => [rel, item.staged ?? item.bytes ?? item.content ?? ""])),
     staleOwned.map(({ rel }) => rel), reconcileFs, { expectedSha256 });
 }
 

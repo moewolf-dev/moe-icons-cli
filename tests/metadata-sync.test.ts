@@ -95,4 +95,15 @@ describe("metadata-only sync (MC.7 / update metadata)", () => {
       code: "VALIDATION_ERROR",
     });
   });
+
+  it("rejects malformed package-set metadata before fetching", async () => {
+    mkdirSync(join(project, ".moeicons"), { recursive: true });
+    writeFileSync(join(project, ".moeicons/install-metadata.json"), JSON.stringify({ schemaVersion: 2 }));
+    let fetched = false;
+    await expect(runMetadataSyncUseCase(context(project, cache), {
+      ...metadataDeps(),
+      free: { ...freeDeps(), fetchFn: async () => { fetched = true; throw new Error("unexpected request"); } },
+    }, {})).rejects.toThrow("package-set install metadata is invalid");
+    expect(fetched).toBe(false);
+  });
 });

@@ -1,0 +1,13 @@
+{
+  "kind": "svg",
+  "tier": "free",
+  "styleGroupId": "moe-outline",
+  "packageSha256": "2449ffba7993fcc9d284f8f13098b51313d7dd30f3215277ea0e04d4e0483baa",
+  "filename": "packages/2449ffba7993fcc9d284f8f13098b51313d7dd30f3215277ea0e04d4e0483baa.tgz",
+  "resourceKey": "svg/free/moe-outline",
+  "compressedBytes": 365,
+  "expandedBytes": 284,
+  "fileCount": 2,
+  "dependencies": [],
+  "fullVersion": "1.0.0"
+}

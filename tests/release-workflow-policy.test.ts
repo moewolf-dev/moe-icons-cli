@@ -93,6 +93,15 @@ describe("CLI single version owner", () => {
     expect(pinWorkflow).not.toMatch(/for resources/);
   });
 
+  it("blocks the legacy aggregate candidate download until package-set pinning is implemented", () => {
+    expect(pinWorkflow).toMatch(/small-pack-policy:/);
+    expect(pinWorkflow).toMatch(/candidate-set metadata packages/);
+    expect(pinWorkflow).toMatch(/pin:\n    # Retired pin flow downloads the aggregate code-library ZIP for catalog/);
+    expect(pinWorkflow).toMatch(/pin:\n[\s\S]*?if: false/);
+    const unpacker = readFileSync(join(process.cwd(), "scripts", "unpack-release-artifact.py"), "utf8");
+    expect(unpacker).toMatch(/legacy full-library ZIP extraction is retired/);
+  });
+
   it("dispatches the guarded OIDC publisher after uploading the exact pin receipt", () => {
     const upload = pinWorkflow.indexOf("name: Upload the pin receipt");
     const dispatch = pinWorkflow.indexOf("name: Dispatch guarded OIDC publisher");
@@ -119,5 +128,22 @@ describe("CLI single version owner", () => {
     expect(pinWorkflow).toMatch(/cli-pin-receipt\.json/);
     expect(pinWorkflow).toMatch(/name:\s*cli-resource-pin-receipt-/);
     expect(pinWorkflow).toMatch(/git rev-parse HEAD/);
+  });
+});
+
+describe("CLI workflow token scopes", () => {
+  it("keeps workflow defaults empty and scopes publisher access to the jobs that use it", () => {
+    const publish = readFileSync(join(process.cwd(), ".github", "workflows", "publish.yml"), "utf8");
+    const resume = readFileSync(join(process.cwd(), ".github", "workflows", "publish-auto-resume.yml"), "utf8");
+    const pin = readFileSync(join(process.cwd(), ".github", "workflows", "resource-pin.yml"), "utf8");
+    expect(publish).toMatch(/^permissions: \{\}$/m);
+    expect(publish).toMatch(/pack:[\s\S]*?permissions:\n      contents: write/);
+    expect(publish).toMatch(/publish:[\s\S]*?permissions:\n      actions: read\n      contents: write\n      id-token: write/);
+    expect(publish).toMatch(/recover:[\s\S]*?permissions:\n      actions: read\n      contents: read/);
+    expect(resume).toMatch(/^permissions: \{\}$/m);
+    expect(resume).toMatch(/resume:[\s\S]*?permissions:\n      actions: write\n      contents: read/);
+    expect(pin).toMatch(/^permissions: \{\}$/m);
+    expect(pin).toMatch(/small-pack-policy:[\s\S]*?permissions: \{\}/);
+    expect(pin).toMatch(/package-set-pin:[\s\S]*?permissions:\n      contents: write\n      actions: write/);
   });
 });

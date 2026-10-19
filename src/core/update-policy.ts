@@ -1,12 +1,18 @@
 export type Tier = "free" | "pro";
 
-interface ParsedVersion { major: number; minor: number; patch: number; channel: "stable" | "alpha" | "beta" }
-const VERSION = /^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta))?$/;
+interface ParsedVersion { major: number; minor: number; patch: number; channel: "stable" | "alpha" | "beta"; prereleaseNumber: number | null }
+const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta)(?:\.(0|[1-9]\d*))?)?$/;
 
 export function parseVersion(value: string): ParsedVersion | undefined {
   const match = VERSION.exec(value);
   if (!match) return undefined;
-  return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]), channel: (match[4] as "alpha" | "beta" | undefined) ?? "stable" };
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    channel: (match[4] as "alpha" | "beta" | undefined) ?? "stable",
+    prereleaseNumber: match[4] ? Number(match[5] ?? 0) : null,
+  };
 }
 
 export type UpdateDecision =
@@ -20,7 +26,8 @@ export function decideUpdate(input: { installedTier: Tier; remoteTier: Tier; ins
   const remote = parseVersion(input.remoteVersion);
   if (!local || !remote) return { kind: "refuse", reason: "invalid-version" };
   if (local.channel !== remote.channel) return { kind: "refuse", reason: "channel-mismatch" };
-  const comparison = remote.major - local.major || remote.minor - local.minor || remote.patch - local.patch;
+  const comparison = remote.major - local.major || remote.minor - local.minor || remote.patch - local.patch ||
+    (local.channel === "stable" ? 0 : (remote.prereleaseNumber ?? 0) - (local.prereleaseNumber ?? 0));
   if (comparison === 0) return { kind: "current" };
   return comparison > 0 ? { kind: "update" } : { kind: "refuse", reason: "downgrade" };
 }

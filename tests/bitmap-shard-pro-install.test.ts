@@ -161,7 +161,7 @@ describe("DEV-G10-R1 two-phase Pro bitmap install", () => {
         MOEICONS_BITMAP_SHARD_DESCRIPTOR_URL: "http://127.0.0.1:1/v1/icon-library/pro/bitmap-shard-descriptor",
       }),
       { fs: fs_, auth: { tokenStore: store() }, fetch: fetchMock, allowedHosts: ["127.0.0.1:1"] },
-      { version: VERSION, descriptorSha256: meta.descriptorSha },
+      { version: VERSION, descriptorSha256: meta.descriptorSha, allowLocalTest: true },
     );
     expect(result.artifactVersion).toBe(VERSION);
     const metadata = parseInstallMetadata(readFileSync(join(dir, ".moeicons", "install-metadata.json"), "utf8"), {});
@@ -230,7 +230,7 @@ describe("DEV-G10-R1 two-phase Pro bitmap install", () => {
         MOEICONS_BITMAP_SHARD_DESCRIPTOR_URL: "http://127.0.0.1:1/v1/icon-library/pro/bitmap-shard-descriptor",
       }),
       { fs: fs_, auth: { tokenStore: store() }, fetch: fetchMock, allowedHosts: ["127.0.0.1:1"] },
-      { version: VERSION, descriptorSha256: meta.descriptorSha },
+      { version: VERSION, descriptorSha256: meta.descriptorSha, allowLocalTest: true },
     )).rejects.toThrow("config changed while preparing install");
     expect(rewrote).toBe(true);
     expect(existsSync(join(dir, ".moeicons", "install-metadata.json"))).toBe(false);
@@ -261,7 +261,7 @@ describe("DEV-G10-R1 two-phase Pro bitmap install", () => {
     await expect(runProInstallUseCase(
       context(dir, { MOEICONS_CACHE_DIR: join(dir, ".cache"), MOEICONS_PRO_DESCRIPTOR_URL: "http://127.0.0.1:1/v1/icon-library/pro/artifact-descriptor" }),
       { fs: fs_, auth: { tokenStore: store() }, fetch: fetchMock, allowedHosts: ["127.0.0.1:1"] },
-      { version: VERSION, descriptorSha256: meta.descriptorSha },
+      { version: VERSION, descriptorSha256: meta.descriptorSha, allowLocalTest: true },
     )).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     expect(existsSync(join(dir, ".moeicons", "install-metadata.json"))).toBe(false);
     // DEV-G10-R2: a strictly rejected config writes no code/metadata cache.

@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/moewolf-dev/moe-icons-code-library/main/schemas/small-pack-candidate-set-v1.schema.json",
+  "title": "Moe Icons small-package candidate-set v1",
+  "description": "Wire shape and per-object budgets for a tier-isolated package-set root or package page. Canonical bytes, digest equality, sorted order, cross-page uniqueness, dependency closure, and package contents are enforced by the executable candidate-set validator.",
+  "oneOf": [
+    { "$ref": "#/$defs/candidateRoot" },
+    { "$ref": "#/$defs/packagePage" }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:alpha|beta)(?:\\.(0|[1-9][0-9]*))?)?$"
+    },
+    "tier": {
+      "enum": ["free", "pro"]
+    },
+    "styleGroupId": {
+      "type": "string",
+      "pattern": "^moe-[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "target": {
+      "enum": ["react", "vue", "vanilla"]
+    },
+    "candidateRoot": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "fullVersion",
+        "tier",
+        "sourceCommit",
+        "generatorCommit",
+        "packagePageCount",
+        "packagePages",
+        "packageSetSha256"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "fullVersion": { "$ref": "#/$defs/version" },
+        "tier": { "$ref": "#/$defs/tier" },
+        "sourceCommit": { "$ref": "#/$defs/commit" },
+        "generatorCommit": { "$ref": "#/$defs/commit" },
+        "packagePageCount": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "packagePages": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/pageReference" }
+        },
+        "packageSetSha256": { "$ref": "#/$defs/sha256" }
+      },
+      "additionalProperties": false
+    },
+    "pageReference": {
+      "type": "object",
+      "required": ["filename", "sha256", "sizeBytes", "packageCount"],
+      "properties": {
+        "filename": { "type": "string", "pattern": "^package-page-(?:free|pro)-[0-9]{4}\\.json$" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "sizeBytes": { "type": "integer", "minimum": 1, "maximum": 8388608 },
+        "packageCount": { "type": "integer", "minimum": 1, "maximum": 20000 }
+      },
+      "additionalProperties": false
+    },
+    "packagePage": {
+      "type": "object",
+      "required": ["schemaVersion", "fullVersion", "tier", "packages"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "fullVersion": { "$ref": "#/$defs/version" },
+        "tier": { "$ref": "#/$defs/tier" },
+        "packages": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20000,
+          "items": { "$ref": "#/$defs/packageRow" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "packageRow": {
+      "type": "object",
+      "required": [
+        "packageSha256",
+        "filename",
+        "kind",
+        "tier",
+        "resourceKey",
+        "fullVersion",
+        "compressedBytes",
+        "expandedBytes",
+        "fileCount",
+        "dependencies"
+      ],
+      "properties": {
+        "packageSha256": { "$ref": "#/$defs/sha256" },
+        "filename": { "type": "string", "pattern": "^packages/[a-f0-9]{64}\\.tgz$" },
+        "kind": { "enum": ["bitmap", "svg", "code", "shared", "metadata", "website"] },
+        "tier": { "$ref": "#/$defs/tier" },
+        "resourceKey": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "fullVersion": { "$ref": "#/$defs/version" },
+        "compressedBytes": { "type": "integer", "minimum": 1, "maximum": 134217728 },
+        "expandedBytes": { "type": "integer", "minimum": 1, "maximum": 134217728 },
+        "fileCount": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "dependencies": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/sha256" }
+        },
+        "styleGroupId": { "$ref": "#/$defs/styleGroupId" },
+        "target": { "$ref": "#/$defs/target" },
+        "variant": {
+          "type": "object",
+          "required": ["width", "height", "format"],
+          "properties": {
+            "width": { "type": "integer", "minimum": 1, "maximum": 4096 },
+            "height": { "type": "integer", "minimum": 1, "maximum": 4096 },
+            "format": { "enum": ["png", "webp"] }
+          },
+          "additionalProperties": false
+        },
+        "inputSha256": { "$ref": "#/$defs/sha256" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "bitmap" } }, "required": ["kind"] },
+          "then": {
+            "required": ["styleGroupId", "variant"],
+            "not": { "required": ["target"] },
+            "properties": {
+              "resourceKey": { "type": "string", "pattern": "^bitmap/(?:free|pro)/moe-[a-z0-9]+(?:-[a-z0-9]+)*/[1-9][0-9]*x[1-9][0-9]*/(?:png|webp)$" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "svg" } }, "required": ["kind"] },
+          "then": {
+            "required": ["styleGroupId"],
+            "not": { "anyOf": [{ "required": ["target"] }, { "required": ["variant"] }] },
+            "properties": { "compressedBytes": { "type": "integer", "maximum": 33554432 }, "expandedBytes": { "type": "integer", "maximum": 33554432 }, "resourceKey": { "type": "string", "pattern": "^svg/(?:free|pro)/moe-[a-z0-9]+(?:-[a-z0-9]+)*$" } }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "code" } }, "required": ["kind"] },
+          "then": {
+            "required": ["styleGroupId", "target"],
+            "not": { "required": ["variant"] },
+            "properties": { "compressedBytes": { "type": "integer", "maximum": 33554432 }, "expandedBytes": { "type": "integer", "maximum": 33554432 }, "resourceKey": { "type": "string", "pattern": "^code/(?:free|pro)/(?:react|vue|vanilla)/moe-[a-z0-9]+(?:-[a-z0-9]+)*$" } }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "shared" } }, "required": ["kind"] },
+          "then": {
+            "required": ["target"],
+            "not": { "anyOf": [{ "required": ["styleGroupId"] }, { "required": ["variant"] }] },
+            "properties": { "compressedBytes": { "type": "integer", "maximum": 33554432 }, "expandedBytes": { "type": "integer", "maximum": 33554432 }, "resourceKey": { "type": "string", "pattern": "^shared/(?:free|pro)/(?:react|vue|vanilla)$" } }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "metadata" } }, "required": ["kind"] },
+          "then": {
+            "required": ["styleGroupId"],
+            "not": { "anyOf": [{ "required": ["target"] }, { "required": ["variant"] }] },
+            "properties": { "compressedBytes": { "type": "integer", "maximum": 8388608 }, "expandedBytes": { "type": "integer", "maximum": 8388608 }, "resourceKey": { "type": "string", "pattern": "^metadata/(?:free|pro)/moe-[a-z0-9]+(?:-[a-z0-9]+)*$" } }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "website" } }, "required": ["kind"] },
+          "then": {
+            "required": ["styleGroupId"],
+            "not": { "anyOf": [{ "required": ["target"] }, { "required": ["variant"] }] },
+            "properties": { "compressedBytes": { "type": "integer", "maximum": 33554432 }, "expandedBytes": { "type": "integer", "maximum": 33554432 }, "resourceKey": { "type": "string", "pattern": "^website/(?:free|pro)/moe-[a-z0-9]+(?:-[a-z0-9]+)*$" } }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -61,6 +61,14 @@ describe("release descriptor", () => {
     expect(githubReleaseAssetUrl("v0.0.17", "release-descriptor.json")).toBe(
       `https://github.com/${PUBLIC_FREE_REPO.owner}/${PUBLIC_FREE_REPO.name}/releases/download/v0.0.17/release-descriptor.json`,
     );
+    expect(githubReleaseAssetUrl(`candidate-set-v1-free-${"a".repeat(64)}`, "candidate-set-free.json")).toBe(
+      `https://github.com/${PUBLIC_FREE_REPO.owner}/${PUBLIC_FREE_REPO.name}/releases/download/candidate-set-v1-free-${"a".repeat(64)}/candidate-set-free.json`,
+    );
+    expect(githubReleaseAssetUrl("candidate-version-v1-free-0.0.17-beta.2", "candidate-version-free.json")).toContain(
+      "/releases/download/candidate-version-v1-free-0.0.17-beta.2/candidate-version-free.json",
+    );
+    expect(() => githubReleaseAssetUrl("../escape", "file.json")).toThrow(/supported Moeicons release tag/);
+    expect(() => githubReleaseAssetUrl(`free-package-v1-${"g".repeat(64)}`, "file.tgz")).toThrow(/supported Moeicons release tag/);
   });
 });
 
@@ -322,7 +330,7 @@ describe("downloadFreeRelease", () => {
     expect(result).toMatchObject({ ok: false, reason: "disk-full" });
   });
 
-  it("uses injected fetch against GitHub release URLs without guessing the archive name", async () => {
+  it("rejects a remote legacy descriptor before any full-library payload download", async () => {
     const meta = writeFreeReleaseFixture(fixture);
     const served = new Map<string, Uint8Array>([
       [githubReleaseAssetUrl(`v${meta.version}`, RELEASE_LATEST_NAME), new Uint8Array(readFileSync(join(fixture, RELEASE_LATEST_NAME)))],
@@ -352,18 +360,51 @@ describe("downloadFreeRelease", () => {
       },
       meta.version,
     );
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.manifestJson).toContain('"tier": "free"');
-      expect(result.manualMd.length).toBeGreaterThan(0);
-      expect(result.metadataSha256).toBe(meta.metadataSha);
-    }
-    expect(requested).toContain(githubReleaseAssetUrl(`v${meta.version}`, meta.freeName));
+    expect(result).toMatchObject({ ok: false, reason: "validation" });
+    expect(requested).not.toContain(githubReleaseAssetUrl(`v${meta.version}`, meta.freeName));
+    expect(requested).not.toContain(githubReleaseAssetUrl(`v${meta.version}`, meta.metadataName));
     expect(requested).not.toContain(githubReleaseAssetUrl(`v${meta.version}`, "release-descriptor.json.sha256"));
     expect(requested.some((url) => /moe-icons-free-/.test(url) && !url.endsWith(meta.freeName) && !url.includes("metadata"))).toBe(false);
   });
 
-  it("retries transient GitHub network failures before failing the install", async () => {
+  it("refuses a published descriptor that advertises the retired tier-wide bundle", async () => {
+    const meta = writeFreeReleaseFixture(fixture);
+    const descriptorPath = join(fixture, "release-descriptor.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf8"));
+    descriptor.schemaVersion = 5;
+    descriptor.free.resources = {
+      schemaVersion: 1,
+      index: { filename: `moe-icons-free-resource-index-${meta.version}.json.gz`, size: 1, sha256: "a".repeat(64) },
+      bundle: { filename: `moe-icons-free-resources-${meta.version}.bin`, size: 1, sha256: "b".repeat(64) },
+    };
+    const descriptorBytes = Buffer.from(JSON.stringify(descriptor));
+    const descriptorSha = sha256(descriptorBytes);
+    writeFileSync(descriptorPath, descriptorBytes);
+    writeFileSync(join(fixture, "release-descriptor.json.sha256"), `${descriptorSha}  release-descriptor.json\n`);
+    const latestPath = join(fixture, RELEASE_LATEST_NAME);
+    const latest = JSON.parse(readFileSync(latestPath, "utf8"));
+    latest.descriptorSha256 = descriptorSha;
+    writeFileSync(latestPath, JSON.stringify(latest));
+    const served = new Map<string, Uint8Array>([
+      [githubReleaseAssetUrl(`v${meta.version}`, RELEASE_LATEST_NAME), new Uint8Array(readFileSync(latestPath))],
+      [githubReleaseAssetUrl(`v${meta.version}`, "release-descriptor.json"), new Uint8Array(descriptorBytes)],
+    ]);
+    const base = io();
+    const { fixtureDir: _fixtureDir, ...remote } = base;
+    const requested: string[] = [];
+    const result = await downloadFreeRelease({
+      ...remote,
+      fetchFn: (async (url: string) => {
+        requested.push(url);
+        return new Response(served.get(url) ?? null, { status: served.has(url) ? 200 : 404 });
+      }) as typeof fetch,
+    }, meta.version);
+    expect(result).toMatchObject({ ok: false, reason: "validation" });
+    if (!result.ok) expect(result.message).toMatch(/retired tier-wide resource bundle/);
+    expect(requested.some((url) => url.endsWith(`moe-icons-free-resources-${meta.version}.bin`))).toBe(false);
+  });
+
+  it("retries transient descriptor requests then rejects the retired remote package format", async () => {
     const meta = writeFreeReleaseFixture(fixture);
     let failures = 2;
     const { fixtureDir: _fixtureDir, ...base } = io();
@@ -382,7 +423,7 @@ describe("downloadFreeRelease", () => {
         }
       }) as typeof fetch,
     }, meta.version);
-    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({ ok: false, reason: "validation" });
     expect(failures).toBe(0);
   });
 

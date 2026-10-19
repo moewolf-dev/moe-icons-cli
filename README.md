@@ -16,8 +16,8 @@ moeicons generate           generate target-specific project files
 moeicons doctor --check     check configuration and integration
 moeicons recover            recover an interrupted transaction
 moeicons init               create moeicons.config.jsonc
-moeicons update metadata    sync MANUAL.md/catalog.json/manifest.json only
-moeicons update             full code + metadata update
+moeicons update metadata    sync metadata for supported legacy installs
+moeicons update             update the installed Free or Pro package set
 moeicons mcp                start the MCP stdio server
 moeicons --version          show version
 moeicons --help             show help
@@ -73,10 +73,12 @@ first, then run `moeicons install free --target <target>` and `moeicons generate
 For React/Vue, installation now keeps only the configured SVG component modules
 and their required files in `.moeicons/artifact`. After adding icon IDs to the
 config, run `moeicons install` again before `moeicons generate`; generate reports
-the missing installed component if this step is skipped. New releases support
-selected-resource downloads as well as full archives; `downloadMode` controls
-this choice. Legacy releases without resource indexes still use a full archive
-in `auto` mode. See Download modes and resource selection below.
+the missing installed component if this step is skipped. Published releases
+must provide bounded selected packages. A legacy descriptor without the new
+package-set contract is rejected; the CLI never downloads a complete tier
+archive as a fallback. See Download modes and resource selection below.
+In this branch, Free and Pro installs resolve their stable package-set identity, verify the root and pages, then download only the selected package closure before the transactional install. Pro requests use the logged-in access token; the Worker checks current entitlement on identity, root, page, and package requests. Pro package cache files are private to the current OS user. `moeicons update` compares the installed package-set identity with the tier's Worker stable pointer and pins the exact set before reconciling files. `moeicons update metadata` refreshes only the selected metadata packages for the exact installed package-set, verifies the installed selection still matches the project config, and transactionally restores the derived catalog without fetching code or icon packages. The global Pro preview warm-up also uses separately addressed packages from the current package set. These changes are local to this branch; the Worker and CLI have not been deployed or published.
+
 Each theme may select a subset of the registered project icons:
 
 ```json
@@ -138,16 +140,21 @@ Installing or updating a tier writes `<project>/.moeicons/`:
 └── artifact/<target>/
 ```
 
-`moeicons update metadata` re-downloads only the small metadata archive for the
-installed code version and reconciles the three files, without touching the
-code artifact.
+`moeicons update metadata` refreshes metadata for a pinned package-set install
+by reading only its selected scoped metadata packages. Legacy installs continue
+to use their version-pinned metadata archive. Neither path changes the installed
+code or resource package selection.
 
 ## Pro resources
 
-After an authenticated login (TTY) the CLI offers a one-time pre-download of the
-full Pro code + metadata. If skipped, the authenticated home screen shows the
-resource state and offers `Download / Update / Repair Pro resources`. Logging
-out keeps cached archives but blocks new unauthenticated installs/updates.
+Project-level Pro installation uses authenticated, selected package sets and
+does not require pre-downloading the full Pro library. The separate global
+`Warm default Pro previews` action downloads only the current package set's
+separately addressed 128-WebP bitmap tuple packages, after showing their total
+compressed size and asking for confirmation. It does not pre-download a Pro
+code archive. Project installs continue to fetch only their configured package
+closure. Logging out keeps cached objects but blocks new package-set installs,
+updates, and Pro preview warm-ups.
 
 ## Security
 
@@ -179,7 +186,8 @@ out keeps cached archives but blocks new unauthenticated installs/updates.
 
 Metadata distribution (`MANUAL-DIST`) implemented: builder-generated manual,
 catalog and manifest, per-tier archives and descriptors, Free bootstrap,
-metadata-only sync, and authenticated Pro pre-download/update.
+metadata-only sync, and authenticated Pro package-set install/update and
+bounded preview warm-up.
 
 ### Download modes and resource selection
 
@@ -202,17 +210,17 @@ Set `downloadMode` in `moeicons.config.jsonc` (schemaVersion 3):
 }
 ```
 
-- `auto` (default): selected resources when the fixed release advertises them. A legacy release without this capability uses the full archive and explains why.
-- `icons`: require selected resources. Unsupported releases, authorization failures, bad ranges and invalid digests stop the operation; they never trigger a full archive download.
-- `full`: download and verify the complete archive, then install the configured target/resources.
+- `auto` (default): resolve only the fixed release's selected package set. A legacy descriptor without that contract fails before resource transfer.
+- `icons`: require selected packages. Unsupported releases, authorization failures, invalid package identities and bad digests stop the operation; they never trigger a full archive download.
+- `full`: retained only for explicit local `-test` fixtures. Published releases reject this mode because tier-wide archives are retired.
 
 `icons` registers the allowed icon IDs. Install/update requires at least one global icon ID; an empty global list stops before version queries or downloads and preserves the existing installation. An individual theme may still use `icons: []`. A theme's `icons` restricts that theme to a subset; omitting it selects every registered ID available in the style group, and `[]` selects none. Fallback chooses the requested theme, then the default theme, then theme names in ASCII order. An icon with no selected variant fails validation. Bitmap themes also select `format` and `imageSize`; changing these fields may require new resources.
 
-The CLI reads the release metadata before planning resources, so validation uses that release's catalog. It shows the target, registered icon/theme counts, required file count and compressed payload budget before reading the data object. Verified cache entries reduce traffic. `--json` reports `downloadMode`, `downloadNotes`, `selectedFiles` and `networkBytes` (resource payload only; descriptor/metadata/index traffic is separate).
+For package-set installs, the CLI reads the Worker identity and candidate root/pages before planning resources, so validation uses that candidate's catalog. It shows the target, registered icon/theme counts, required file count and compressed payload budget before reading selected package objects. Verified cache entries reduce traffic. `--json` reports `downloadMode`, `downloadNotes`, `selectedFiles` and `networkBytes` (resource payload only; identity and metadata traffic is separate).
 
 Run `moeicons install free` or `moeicons install pro` after changing the selected icons, themes, bitmap format or size, then `moeicons generate`. `moeicons update` also reconciles the configuration when the release version is unchanged. Missing resources name the affected path and ask for reinstall; stale resources are removed only if still owned and unmodified. A configuration change during download stops before project writes; retry with the final configuration.
 
-Generation works offline from the project's verified installed resources; `moeicons recover` also needs no network. Install/update still consult the fixed descriptor and metadata, and Pro checks current entitlement. A resource cache hit does not bypass authorization, and there is no offline install flag. Corrupt cache entries are rejected and fetched again online. Interrupted downloads retain only verified cache members; project files change in one recoverable transaction after all required resources have verified.
+Generation works offline from the project's verified installed resources; `moeicons recover` also needs no network. Package-set installs and updates pin a verified tier candidate; every Pro identity and payload read checks current entitlement. A resource cache hit does not bypass the authenticated stable identity check, and there is no offline install flag. Corrupt cache entries are rejected and fetched again online. Interrupted downloads retain only verified cache members; project files change in one recoverable transaction after all required resources have verified.
 
 Version queries have a deadline covering both response headers and body, with bounded JSON sizes. Invalid or unavailable version responses make update fail explicitly. Cache cleanup preserves staging files owned by a live process; disk-full and permission failures report actionable errors.
 

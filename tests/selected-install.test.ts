@@ -200,7 +200,8 @@ it("Pro selected install renews an expired resource URL, never downloads full co
     bundleDescriptors = 0,
     ranges = 0;
   const base = writeFreeReleaseFixture(s.fixture, {
-    version: "0.0.18",
+    localTest: true,
+    version: "0.0.18-test",
     useBundledCatalog: true,
     tier: "pro",
   });
@@ -266,6 +267,8 @@ it("Pro selected install renews an expired resource URL, never downloads full co
     ...s.context,
     env: {
       ...s.context.env,
+      MOEICONS_ENV: "local",
+      MOEICONS_LIBRARY_VERSIONS_URL: `${origin}/v1/icon-library/versions`,
       MOEICONS_PRO_DESCRIPTOR_URL: `${origin}/v1/icon-library/pro/artifact-descriptor`,
     },
   };
@@ -292,6 +295,8 @@ it("Pro selected install renews an expired resource URL, never downloads full co
       return Response.json({
         ok: true,
         tier: "pro",
+        channel: "local-test",
+        publishable: false,
         version: base.version,
         descriptorSha256: identity,
         catalogFilename: "catalog.json",
@@ -333,7 +338,7 @@ it("Pro selected install renews an expired resource URL, never downloads full co
     const result = await runProInstallUseCase(
       context,
       { fs, auth: { tokenStore: store }, fetch: fetchFn },
-      { version: base.version, descriptorSha256: identity },
+      { version: base.version, descriptorSha256: identity, allowLocalTest: true },
     );
     expect(result.downloadMode).toBe("icons");
     expect(fullRequests).toBe(0);
@@ -348,7 +353,7 @@ it("Pro selected install renews an expired resource URL, never downloads full co
     const second = await runProInstallUseCase(
       context,
       { fs, auth: { tokenStore: store }, fetch: fetchFn },
-      { version: base.version, descriptorSha256: identity },
+      { version: base.version, descriptorSha256: identity, allowLocalTest: true },
     );
     expect(second.networkBytes).toBe(0);
     expect(bundleDescriptors).toBe(previous);

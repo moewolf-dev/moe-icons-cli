@@ -16,6 +16,8 @@ import { parseCatalog } from "../catalog/catalog.js";
 import { runAccessTokenUseCase } from "./auth.js";
 import { PRO_DOWNLOAD_HOSTS } from "./pro-download.js";
 import { resolveBitmapShardDescriptorEndpoint } from "./bitmap-shard-download.js";
+import { downloadProStablePackages } from "./pro-small-package-download.js";
+import { planSelectedPackages, type SelectedCandidate } from "./small-package-selection.js";
 import {
   warmDefaultBitmapShards,
   type WarmupPlan,
@@ -133,9 +135,14 @@ export async function runProPredownloadUseCase(
     readonly fetch?: typeof fetch;
     readonly allowedProHosts?: readonly string[];
     readonly force?: boolean;
+    /** Explicitly isolate the retired aggregate archive path to test fixtures. */
+    readonly allowLocalTest?: boolean;
     readonly onProgress?: (event: { readonly downloadedBytes: number; readonly totalBytes?: number }) => void;
   } = {},
 ): Promise<ProPredownloadResult> {
+  if (deps.allowLocalTest !== true) {
+    throw new CliError('VALIDATION_ERROR', 'aggregate Pro archive pre-download is retired; use package-set project installs or preview package warm-up');
+  }
   const versions = await fetchLibraryVersions({ ...(deps.fetch ? { fetch: deps.fetch } : {}), signal: context.signal, env: context.env });
   if (!versions.pro) throw new CliError("NOT_FOUND", "no pro release is published");
   const latest = versions.pro;
@@ -207,10 +214,77 @@ export interface ProWarmupDeps {
   readonly descriptorSha256: string;
   readonly metadataSha256: string;
   readonly catalogSha256: string;
+  /** Explicit test-fixture opt-in for the retired legacy shard route. */
+  readonly allowLocalTest?: boolean;
   readonly fetch?: typeof fetch;
   readonly allowedProHosts?: readonly string[];
   readonly onPlan?: (plan: WarmupPlan) => void;
   readonly onProgress?: (event: BitmapShardFetchProgress) => void;
+}
+
+export interface ProPackageWarmupPlan {
+  readonly version: string;
+  readonly packageSetSha256: string;
+  readonly groups: number;
+  readonly packages: number;
+  readonly compressedBytes: number;
+}
+
+export interface ProPackageWarmupResult extends ProPackageWarmupPlan {
+  readonly downloaded: number;
+  readonly reused: number;
+  readonly networkBytes: number;
+  readonly metadataNetworkBytes: number;
+}
+
+/** Warm the explicit default preview tuple (128-WebP) as separate package objects. */
+export async function runProPreviewPackageWarmupUseCase(
+  context: CommandContext,
+  auth: AuthUseCaseDependencies,
+  deps: {
+    readonly fetch?: typeof fetch;
+    readonly apiBaseUrl?: string;
+    readonly onPlan?: (plan: ProPackageWarmupPlan) => Promise<void> | void;
+  } = {},
+): Promise<ProPackageWarmupResult> {
+  const accessToken = await runAccessTokenUseCase(context, auth);
+  const cache = cacheDir(context.env);
+  let plan: ProPackageWarmupPlan | undefined;
+  const report = await downloadProStablePackages({
+    accessToken,
+    cacheDir: cache,
+    ...(deps.apiBaseUrl ? { apiBaseUrl: deps.apiBaseUrl } : context.env.MOEICONS_API_BASE_URL ? { apiBaseUrl: context.env.MOEICONS_API_BASE_URL } : {}),
+    ...(deps.fetch ? { fetchFn: deps.fetch } : {}),
+    ...(context.signal ? { signal: context.signal } : {}),
+    resolveResourceKeys: async (candidate: SelectedCandidate) => {
+      const selected = candidate.rows.filter((row) => row.kind === 'bitmap' && row.tier === 'pro'
+        && row.variant?.width === 128 && row.variant.height === 128 && row.variant.format === 'webp')
+        .sort((a, b) => a.resourceKey.localeCompare(b.resourceKey, 'en'));
+      if (selected.length === 0) throw new CliError('NOT_FOUND', 'the current Pro package set has no 128-WebP preview packages');
+      const selectedRows = planSelectedPackages(candidate, selected.map((row) => row.resourceKey));
+      const compressedBytes = selectedRows.reduce((sum, row) => sum + row.compressedBytes, 0);
+      if (!Number.isSafeInteger(compressedBytes) || compressedBytes > 4 * 1024 * 1024 * 1024)
+        throw new CliError('VALIDATION_ERROR', 'Pro preview warm-up exceeds the 4 GiB package budget');
+      plan = {
+        version: candidate.root.fullVersion,
+        packageSetSha256: candidate.root.packageSetSha256,
+        groups: new Set(selected.map((row) => row.styleGroupId)).size,
+        packages: selectedRows.length,
+        compressedBytes,
+      };
+      await deps.onPlan?.(plan);
+      return selected.map((row) => row.resourceKey);
+    },
+    consume: () => Promise.resolve(),
+  });
+  if (!plan) throw new CliError('VALIDATION_ERROR', 'Pro preview warm-up did not produce a candidate plan');
+  return {
+    ...plan,
+    downloaded: report.packageCount - report.cacheHits,
+    reused: report.cacheHits,
+    networkBytes: report.networkBytes,
+    metadataNetworkBytes: report.metadataNetworkBytes,
+  };
 }
 
 function cacheIo(): CacheIo {
@@ -236,6 +310,9 @@ export async function runProResourceWarmupUseCase(
   auth: AuthUseCaseDependencies,
   deps: ProWarmupDeps,
 ): Promise<ProWarmupResult> {
+  if (deps.allowLocalTest !== true) {
+    throw new CliError('VALIDATION_ERROR', 'legacy Pro bitmap shard warm-up is retired; use package-set preview package warm-up');
+  }
   const dir = cacheDir(context.env);
   const metadataPath = metadataCachePath(dir, deps.version, deps.metadataSha256);
   if (!existsSync(metadataPath)) {

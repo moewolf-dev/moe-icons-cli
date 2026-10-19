@@ -17,6 +17,7 @@ import {
 } from "./target-subtree.js";
 import { parseCatalog } from "../catalog/catalog.js";
 import { posix } from "node:path";
+import { runSmallPackageInstall } from "./small-package-install.js";
 
 export type InstallResult =
   | {
@@ -29,14 +30,20 @@ export type InstallResult =
       readonly planItems: number;
       readonly config: string;
       readonly artifactVersion: string;
-      readonly descriptorSha256: string;
+      readonly descriptorSha256?: string;
+      readonly candidateRootSha256?: string;
+      readonly packageSetSha256?: string;
+      readonly packageCount?: number;
       readonly catalogSha256: string;
       readonly metadataSha256: string;
       readonly cacheHit: boolean;
-      readonly downloadMode?: "icons" | "full";
+      readonly downloadMode?: "icons" | "full" | "packages";
       readonly downloadNotes?: readonly string[];
       readonly networkBytes?: number;
       readonly selectedFiles?: number;
+      readonly cacheHits?: number;
+      readonly metadataCacheHits?: number;
+      readonly transferRetryCount?: number;
     }
   | { readonly ok: false; readonly reason: "no-project" }
   | { readonly ok: false; readonly reason: "cancelled"; readonly message: string }
@@ -147,6 +154,70 @@ export async function runInstallUseCase(
       message: `config target is "${config.config.target}" but install target is "${target}"; set target to "${target}" in moeicons.config before installing`,
     };
   }
+
+  // Production Free installs use the immutable package-set pointer and exact
+  // configured dependency closure. Aggregate archives remain available only to
+  // the isolated local archive-fixture harness while old fixtures are retired.
+  if (!deps.download.fixtureDir) {
+    if (config.kind !== "ok") {
+      return { ok: false, reason: "validation", message: "run 'moeicons init' and select icons/themes before installing the package set" };
+    }
+    if (config.config.downloadMode === "full") {
+      return { ok: false, reason: "validation", message: "full archive installs are disabled; set downloadMode to icons and select the required resources" };
+    }
+    if (options.expectedDescriptorSha256) {
+      return { ok: false, reason: "validation", message: "legacy descriptor pins cannot identify a package-set candidate; retry through the package-set update command" };
+    }
+    try {
+      const result = await runSmallPackageInstall({
+        projectRoot: project.root,
+        ...(options.sourceVersion ? { fullVersion: options.sourceVersion } : {}),
+        ...(context.env.MOEICONS_API_BASE_URL ? { apiBaseUrl: context.env.MOEICONS_API_BASE_URL } : {}),
+        config: config.config,
+        plannedConfigDocument,
+        fs: deps.fs,
+        cacheDir: deps.download.cacheDir,
+        now: context.now,
+        ...(context.signal ? { signal: context.signal } : {}),
+        ...(deps.download.fetchFn ? { fetchFn: deps.download.fetchFn } : {}),
+        ...(deps.download.fixtureBaseUrl ? { fixtureOrigin: deps.download.fixtureBaseUrl } : {}),
+      });
+      return {
+        ok: true,
+        projectRoot: project.root,
+        packageManager: project.packageManager,
+        group: "free",
+        target,
+        artifactBytes: result.artifactBytes,
+        planItems: result.planItems,
+        config: config.kind,
+        artifactVersion: result.artifactVersion,
+        candidateRootSha256: result.candidateRootSha256,
+        packageSetSha256: result.packageSetSha256,
+        packageCount: result.packageCount,
+        catalogSha256: result.catalogSha256,
+        metadataSha256: result.metadataSha256,
+        cacheHit: result.cacheHit,
+        downloadMode: "packages",
+        downloadNotes: result.fallbacks.map((fallback) => `Theme fallback: ${fallback}`),
+        networkBytes: result.networkBytes,
+        selectedFiles: result.selectedFiles,
+        cacheHits: result.cacheHits,
+        metadataCacheHits: result.metadataCacheHits,
+        transferRetryCount: result.transferRetryCount,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (context.signal?.aborted || /CANCELLED|cancelled/i.test(message)) return { ok: false, reason: "cancelled", message };
+      if (/ENOSPC|no space left/i.test(message)) return { ok: false, reason: "disk-full", message };
+      if (/HTTP_ERROR[^\n]*\b404\b/i.test(message)) return { ok: false, reason: "not-found", message };
+      if (/HTTP_ERROR[^\n]*\b5\d\d\b|NETWORK_ERROR|network|fetch failed|timed out/i.test(message)) return { ok: false, reason: "network", message };
+      if (/checksum|SHA-256|digest mismatch|differs from immutable version pointer/i.test(message)) return { ok: false, reason: "checksum-mismatch", message };
+      if (/config changed|unsafe|invalid|requires downloadMode|candidate-set:|config package plan:|small package install currently/i.test(message)) return { ok: false, reason: "validation", message };
+      return { ok: false, reason: "write-failed", message };
+    }
+  }
+
   const downloaded = await downloadFreeRelease(
     { ...deps.download, signal: context.signal },
     options.sourceVersion ?? bundledSourceVersion(),

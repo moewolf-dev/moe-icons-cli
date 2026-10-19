@@ -56,6 +56,7 @@ function assertUnique(values, label) {
 export function validateFreeCatalog(catalog) {
   assertExactKeys(catalog, ["schemaVersion", "catalogVersion", "sourceVersion", "sourceCommit", "generatorCommit", "manifestSchemaVersion", "styleGroups", "icons"], "catalog");
   assert(catalog.manifestSchemaVersion === undefined || [1, 2].includes(catalog.manifestSchemaVersion), "catalog manifestSchemaVersion must be a supported source manifest version");
+  if (catalog.manifestSchemaVersion === 2) return validatePackageSetCatalog(catalog);
   assert(catalog.schemaVersion === 1, "catalog schemaVersion must be 1");
   assert(typeof catalog.catalogVersion === "string" && SEMVER.test(catalog.catalogVersion), "catalog catalogVersion must be X.Y.Z");
   assert(typeof catalog.sourceVersion === "string" && SEMVER.test(catalog.sourceVersion), "catalog sourceVersion must be X.Y.Z");
@@ -100,6 +101,53 @@ export function validateFreeCatalog(catalog) {
   }
   assertUnique(iconIds, "catalog icon ids");
   return { groupCount: catalog.styleGroups.length, iconCount: catalog.icons.length, freeGroups: expected };
+}
+
+/** Validate a complete compact catalog reconstructed only from verified metadata packages. */
+export function validatePackageSetCatalog(catalog) {
+  assertExactKeys(catalog, ["schemaVersion", "catalogVersion", "sourceVersion", "sourceCommit", "generatorCommit", "manifestSchemaVersion", "styleGroups", "icons"], "catalog");
+  assert(catalog.schemaVersion === 1 && catalog.manifestSchemaVersion === 2, "package-set catalog schema is invalid");
+  for (const field of ["catalogVersion", "sourceVersion"]) assert(typeof catalog[field] === "string" && SEMVER.test(catalog[field]), `catalog ${field} must be X.Y.Z`);
+  for (const field of ["sourceCommit", "generatorCommit"]) assert(typeof catalog[field] === "string" && COMMIT.test(catalog[field]), `catalog ${field} must be 40-hex`);
+  assert(catalog.catalogVersion === catalog.sourceVersion, "package-set catalog version fields differ");
+  assert(Array.isArray(catalog.styleGroups) && catalog.styleGroups.length > 0 && Array.isArray(catalog.icons) && catalog.icons.length > 0, "package-set catalog must contain groups and icons");
+  const groups = new Map();
+  for (const group of catalog.styleGroups) {
+    assertExactKeys(group, ["id", "type", "tiers", "formats", "imageSizes", "variants"], `catalog group ${group?.id}`);
+    assert(group && GROUP_ID.test(group.id || "") && ["outline", "solid", "mixed", "bitmap"].includes(group.type), `catalog group ${String(group?.id)} is invalid`);
+    assert(Array.isArray(group.tiers) && group.tiers.length > 0 && group.tiers.every(tier => tier === "free" || tier === "pro"), `catalog group ${group.id} tiers are invalid`);
+    assertUnique(group.tiers, `catalog group ${group.id} tiers`);
+    assert(Array.isArray(group.formats) && group.formats.length > 0 && group.formats.every(format => ["svg", "png", "webp"].includes(format)), `catalog group ${group.id} formats are invalid`);
+    assertUnique(group.formats, `catalog group ${group.id} formats`);
+    assert(Array.isArray(group.imageSizes) && group.imageSizes.every(size => Number.isSafeInteger(size) && size > 0), `catalog group ${group.id} imageSizes are invalid`);
+    if (group.variants !== undefined) {
+      assert(group.type === "bitmap" && Array.isArray(group.variants) && group.variants.length > 0, `catalog group ${group.id} variants are invalid`);
+      assertUnique(group.variants, `catalog group ${group.id} variants`);
+      for (const variant of group.variants) {
+        const match = /^(.*)-(64|128|256|512)-(png|webp)$/.exec(variant);
+        assert(match && match[1] === group.id && group.formats.includes(match[3]) && group.imageSizes.includes(Number(match[2])), `catalog group ${group.id} has invalid bitmap variant ${variant}`);
+      }
+    } else assert(group.type !== "bitmap", `catalog bitmap group ${group.id} must declare variants`);
+    assert(!groups.has(group.id), `duplicate catalog style group id ${group.id}`);
+    groups.set(group.id, group);
+  }
+  const iconIds = new Set();
+  for (const icon of catalog.icons) {
+    assertExactKeys(icon, ["id", "name", "prefix", "label", "keywords", "categories", "variants", "targets", "aliases", "deprecatedAt", "replacedBy", "availableIn"], `catalog icon ${icon?.id}`);
+    assert(icon && ICON_ID.test(icon.id || "") && typeof icon.prefix === "string" && typeof icon.label === "string", `catalog icon ${String(icon?.id)} is invalid`);
+    assert(Array.isArray(icon.aliases) && Array.isArray(icon.availableIn) && icon.availableIn.length > 0, `catalog icon ${icon.id} availability is invalid`);
+    assertUnique(icon.aliases, `catalog icon ${icon.id} aliases`);
+    assertUnique(icon.availableIn, `catalog icon ${icon.id} availableIn`);
+    assert(icon.availableIn.every(id => groups.has(id)), `catalog icon ${icon.id} references an unknown style group`);
+    for (const field of ["keywords", "categories", "variants", "targets"]) {
+      if (icon[field] !== undefined) assert(Array.isArray(icon[field]) && icon[field].every(value => typeof value === "string"), `catalog icon ${icon.id} has invalid ${field}`);
+    }
+    if (icon.variants !== undefined) assertUnique(icon.variants, `catalog icon ${icon.id} variants`);
+    if (icon.targets !== undefined) assert(icon.targets.every(target => ["react", "vue", "vanilla", "assets"].includes(target)), `catalog icon ${icon.id} has invalid targets`);
+    assert(!iconIds.has(icon.id), `duplicate catalog icon id ${icon.id}`);
+    iconIds.add(icon.id);
+  }
+  return { groupCount: groups.size, iconCount: iconIds.size, packageSetCatalog: true, freeGroups: [...groups.values()].filter(group => group.tiers.includes("free")).map(group => group.id).sort() };
 }
 
 function arg(name) {

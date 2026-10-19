@@ -1,5 +1,5 @@
 name: Publish CLI
-run-name: Publish CLI ${{ inputs.resume_run_id != '' && format('resume:{0}', inputs.resume_run_id) || '' }}
+run-name: Publish CLI ${{ inputs.correlation_id != '' && inputs.correlation_id || (inputs.resume_run_id != '' && format('resume:{0}', inputs.resume_run_id)) || github.sha }}
 
 # E2E-G1/G1A/G2/G3/G4 (ICON-E2E-0907) + P0-5/P0-6.
 #   1. push to protected `main` when shipped bytes (payloadHash) changed;
@@ -27,11 +27,12 @@ on:
         description: "Recover an already accepted immutable candidate from this repository run; never rebuild or bump"
         required: false
         type: string
+      correlation_id:
+        description: "Exact package-set resource event being published"
+        required: false
+        type: string
       clitest_sha:
         description: "Full commit SHA of moe-icons-clitest to accept against (default: repo variable CLITEST_REF)"
-        required: false
-      code_library_sha:
-        description: "Full commit SHA of moe-icons-code-library to accept against (default: repo variable CODE_LIBRARY_REF)"
         required: false
       dry_run:
         description: "R-P0-2: manual runs are dry-run unless dry_run=false AND break_glass=PUBLISH"
@@ -43,10 +44,7 @@ on:
         required: false
         type: string
 
-permissions:
-  actions: read
-  contents: write
-  id-token: write
+permissions: {}
 
 concurrency:
   group: cli-auto-release
@@ -98,6 +96,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.auth_audit_only != true
     runs-on: [self-hosted, Linux, X64, moe-ci-server]
     timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Checkout immutable shared contract fixture authority
@@ -150,6 +150,8 @@ jobs:
     if: always() && inputs.auth_audit_only != true && inputs.resume_run_id == '' && (needs.npm-auth-preflight.result == 'success' || needs.npm-auth-preflight.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     outputs:
       should_release: ${{ steps.decide.outputs.should_release }}
       next_version: ${{ steps.decide.outputs.next_version }}
@@ -216,6 +218,9 @@ jobs:
     needs: [validate, npm-auth-preflight]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
     outputs:
       candidate_sha: ${{ steps.verify.outputs.candidate_sha }}
       cli_commit: ${{ steps.verify.outputs.cli_commit }}
@@ -258,6 +263,8 @@ jobs:
     if: always() && needs.decide.result == 'success' && needs.decide.outputs.should_release == '1'
     runs-on: [self-hosted, Linux, X64, moe-ci-server]
     timeout-minutes: 35
+    permissions:
+      contents: write
     outputs:
       candidate_sha: ${{ steps.pack.outputs.candidate_sha }}
       release_tag: ${{ steps.bump.outputs.release_tag }}
@@ -411,8 +418,11 @@ jobs:
     needs: [decide, pack]
     if: always() && needs.decide.result == 'success' && needs.pack.result == 'success'
     runs-on: ubuntu-latest
-    # Release acceptance must run the complete sandbox suite (test:sandbox:full),
-    # which performs 8 code-package installs; allow build + full suite.
+    permissions:
+      actions: read
+      contents: read
+    # Acceptance runs the complete sandbox suite against bounded package-set
+    # fixtures and the exact immutable CLI candidate; no library aggregate build.
     timeout-minutes: 90
     outputs:
       candidate_sha: ${{ needs.pack.outputs.candidate_sha }}
@@ -421,33 +431,25 @@ jobs:
         id: resolve
         env:
           CLITEST_REF: ${{ vars.CLITEST_REF }}
-          CODE_LIBRARY_REF: ${{ vars.CODE_LIBRARY_REF }}
           INPUT_CLITEST_SHA: ${{ inputs.clitest_sha }}
-          INPUT_CODE_LIBRARY_SHA: ${{ inputs.code_library_sha }}
         run: |
           clitest_ref="${INPUT_CLITEST_SHA:-${CLITEST_REF:-}}"
-          code_library_ref="${INPUT_CODE_LIBRARY_SHA:-${CODE_LIBRARY_REF:-}}"
           : "${clitest_ref:?set CLITEST_REF (full commit SHA) or clitest_sha input}"
-          : "${code_library_ref:?set CODE_LIBRARY_REF (full commit SHA) or code_library_sha input}"
-          for ref in "$clitest_ref" "$code_library_ref"; do
-            [[ "$ref" =~ ^[0-9a-f]{40}$ ]] || { echo "ref must be 40-hex: $ref" >&2; exit 1; }
-          done
+          [[ "$clitest_ref" =~ ^[0-9a-f]{40}$ ]] || { echo "clitest ref must be 40-hex: $clitest_ref" >&2; exit 1; }
           echo "clitest_sha=$clitest_ref" >> "$GITHUB_OUTPUT"
-          echo "code_library_sha=$code_library_ref" >> "$GITHUB_OUTPUT"
           echo "clitest_sha=$clitest_ref" >> "$GITHUB_ENV"
-          echo "code_library_sha=$code_library_ref" >> "$GITHUB_ENV"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: moewolf-dev/moe-icons-clitest
           ref: ${{ env.clitest_sha }}
           token: ${{ secrets.CLITEST_READ_TOKEN }}
           path: clitest
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Checkout the exact CLI source used for the immutable candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          repository: moewolf-dev/moe-icons-code-library
-          ref: ${{ env.code_library_sha }}
-          token: ${{ secrets.CODE_LIBRARY_READ_TOKEN }}
-          path: code-library
+          ref: ${{ needs.pack.outputs.cli_commit }}
+          path: cli
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
@@ -460,34 +462,34 @@ jobs:
       - name: Verify the downloaded candidate identity
         env:
           EXPECTED_SHA: ${{ needs.pack.outputs.candidate_sha }}
+          EXPECTED_CLI_COMMIT: ${{ needs.pack.outputs.cli_commit }}
         run: |
           set -euo pipefail
           tgz="$(ls clitest/.artifacts/*.tgz)"
           actual="$(shasum -a 256 "$tgz" | awk '{print $1}')"
           test "$actual" = "$EXPECTED_SHA" || { echo "candidate sha mismatch" >&2; exit 1; }
+          checkout_commit="$(git -C cli rev-parse HEAD)"
+          test "$checkout_commit" = "$EXPECTED_CLI_COMMIT" || { echo "CLI fixture adapter commit mismatch" >&2; exit 1; }
           echo "candidate_sha=$actual"
       - name: Install clitest
         working-directory: clitest
         run: npm ci
-      - name: Build code-library candidate
-        working-directory: code-library
-        env:
-          MOE_ICONS_SOURCE_DIR: tests/fixtures/icon-source
-          MOE_ICONS_FREE_STYLE_GROUPS: moe-colored,moe-lite-outline,moe-outline,moe-solid
+      - name: Build the exact CLI package-set fixture adapter
+        working-directory: cli
         run: |
           npm ci
-          npm run clean && npm run generate && npm run build:free && npm run build:pro && npm run build:ent && npm run build:main && npm run postbuild
+          npm run build
       - name: Acceptance gates (G3)
         working-directory: clitest
         env:
-          MOEICONS_CODE_LIBRARY_REPO: ../code-library
+          MOEICONS_CLI_REPO: ../cli
         run: |
           node scripts/prime-candidate-cache.mjs
           npm run test:package
           npm run test:sandbox:full
       - name: Record acceptance evidence
         run: |
-          echo "## CLI acceptance (G3)" >> "$GITHUB_STEP_SUMMARY"
+          echo "## CLI package-set acceptance (G3)" >> "$GITHUB_STEP_SUMMARY"
           echo "- candidate sha: \`${{ needs.pack.outputs.candidate_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- cli commit: \`${{ needs.pack.outputs.cli_commit }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- release tag: \`${{ needs.pack.outputs.release_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
@@ -499,6 +501,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: npm-publish
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
     steps:
       # FIX-29-B: check out the exact candidate commit so the scanner script is
       # present; the publish job does not otherwise have the source tree.

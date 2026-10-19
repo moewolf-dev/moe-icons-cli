@@ -11,7 +11,7 @@ test('expired Actions artifact restores the original ZIP from private release; t
  const f=fixture();const routes={};routes[`repos/${repo}/actions/artifacts/7`]=f.record.artifacts[0];routes[`repos/${repo}/actions/runs/8`]=f.run;routes[`repos/${repo}/actions/runs/8/attempts/1`]=f.run;routes[`repos/${repo}/actions/runs/8/attempts/1/jobs?per_page=100`]={jobs:f.jobs};routes[`repos/${repo}/releases/tags/candidate-v1.2.3-r8-a1`]={draft:false,assets:[{id:10,name:'artifact-record.v1.json',size:999},{id:11,name:'artifact-7.zip',size:bytes.length}]};routes[`repos/${repo}/releases/assets/10`]=f.record;
  fs.writeFileSync(path.join(dir,'routes.json'),JSON.stringify(routes));fs.writeFileSync(path.join(dir,'bytes'),bytes);
  fs.writeFileSync(path.join(dir,'gh'),`#!${process.execPath}\nconst fs=require('node:fs');const route=process.argv[3];fs.appendFileSync(process.env.FIXTURE+'/requests',route+'\\n');if(route.endsWith('/artifacts/7/zip') && fs.existsSync(process.env.FIXTURE+'/actions-failure')){process.stderr.write(fs.readFileSync(process.env.FIXTURE+'/actions-failure'));process.exit(1)}const accept=process.argv[process.argv.indexOf('-H')+1];if((route.endsWith('/zip') && accept!=='Accept: application/json') || (route.includes('/releases/assets/') && accept!=='Accept: application/octet-stream')){process.stderr.write('HTTP 415');process.exit(1)}if(route.endsWith('/assets/11') || route.endsWith('/artifacts/7/zip')){if(fs.existsSync(process.env.FIXTURE+'/fail-once')){fs.unlinkSync(process.env.FIXTURE+'/fail-once');process.stderr.write('HTTP 503');process.exit(1)}process.stdout.write(fs.readFileSync(process.env.FIXTURE+'/bytes'));}else{const value=JSON.parse(fs.readFileSync(process.env.FIXTURE+'/routes.json'))[route];if(!value){process.stderr.write('HTTP 404');process.exit(1)}process.stdout.write(JSON.stringify(value));}\n`,{mode:0o700});
- const destination=path.join(dir,'restored.zip'),script=path.resolve('scripts/durable-release-artifact.cjs');const args=[script,'retrieve','--id','7','--version','1.2.3','--run','8','--attempt','1','--head',sha,'--digest',digest,'--zip',destination,'--metadata',path.join(dir,'metadata.json')];const env={...process.env,FIXTURE:dir,PATH:dir+path.delimiter+process.env.PATH};
+ const destination=path.join(dir,'restored.zip'),script=path.resolve('scripts/durable-release-artifact.cjs');const args=[script,'retrieve','--id','7','--version','1.2.3','--run','8','--attempt','1','--head',sha,'--digest',digest,'--zip',destination,'--metadata',path.join(dir,'metadata.json')];const env={...process.env,FIXTURE:dir,MOEICONS_TEST_FIXTURE_LEGACY_ARCHIVE:'1',PATH:dir+path.delimiter+process.env.PATH};
  fs.writeFileSync(path.join(dir,'fail-once'),'transient HTTP failure');
  let result=spawnSync(process.execPath,args,{env,encoding:'utf8'});assert.equal(result.status,0,result.stderr);assert.deepEqual(fs.readFileSync(destination),bytes);
  fs.rmSync(destination);fs.writeFileSync(path.join(dir,'bytes'),Buffer.alloc(bytes.length));result=spawnSync(process.execPath,args,{env,encoding:'utf8'});assert.notEqual(result.status,0);assert.equal(fs.existsSync(destination),false);
@@ -26,5 +26,16 @@ test('expired Actions artifact restores the original ZIP from private release; t
  fs.writeFileSync(path.join(dir,'actions-failure'),'HTTP 503');fs.writeFileSync(path.join(dir,'bytes'),Buffer.alloc(bytes.length));
  result=spawnSync(process.execPath,args,{env,encoding:'utf8'});assert.notEqual(result.status,0);assert.equal(fs.existsSync(destination),false);assert.match(result.stderr,/exact private backup recovery failed/);
 
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('production full-library ZIP retrieval is disabled without the isolated temp fixture switch',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'durable-archive-policy-'));
+ try{
+  const f=fixture(),destination=path.join(dir,'candidate.zip'),script=path.resolve('scripts/durable-release-artifact.cjs');
+  const result=spawnSync(process.execPath,[script,'retrieve','--id','7','--version','1.2.3','--run','8','--attempt','1','--head',sha,'--digest',digest,'--zip',destination],{env:{...process.env,MOEICONS_TEST_FIXTURE_LEGACY_ARCHIVE:'',PATH:process.env.PATH},encoding:'utf8'});
+  assert.notEqual(result.status,0);
+  assert.match(result.stderr,/legacy full-library ZIP retrieval is retired/);
+  assert.equal(fs.existsSync(destination),false);
  }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });

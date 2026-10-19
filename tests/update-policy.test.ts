@@ -5,6 +5,8 @@ describe("resource update policy", () => {
   it("allows only a higher version in the same tier and prerelease channel", () => {
     expect(decideUpdate({ installedTier: "free", remoteTier: "free", installedVersion: "1.2.3", remoteVersion: "1.2.4" })).toEqual({ kind: "update" });
     expect(decideUpdate({ installedTier: "pro", remoteTier: "pro", installedVersion: "1.2.3-alpha", remoteVersion: "1.2.4-alpha" })).toEqual({ kind: "update" });
+    expect(decideUpdate({ installedTier: "free", remoteTier: "free", installedVersion: "1.2.3-alpha.1", remoteVersion: "1.2.3-alpha.2" })).toEqual({ kind: "update" });
+    expect(decideUpdate({ installedTier: "free", remoteTier: "free", installedVersion: "1.2.3-beta.2", remoteVersion: "1.2.3-beta.1" })).toEqual({ kind: "refuse", reason: "downgrade" });
     expect(decideUpdate({ installedTier: "free", remoteTier: "free", installedVersion: "1.2.3", remoteVersion: "1.2.3" })).toEqual({ kind: "current" });
   });
 

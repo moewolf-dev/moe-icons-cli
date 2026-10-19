@@ -61,6 +61,15 @@ export async function downloadProSelected(
 > {
   const fetchFn = deps.fetch ?? fetch;
   const endpointInfo = resolveProDescriptorEndpoint(context.env);
+  // CI FLOW RULE (S05): this implementation reads the retired tier-wide
+  // resource-index / `.bin` bundle. Keep it reachable only from an explicitly
+  // declared local-test descriptor served by a loopback endpoint; a descriptor
+  // label alone must never reopen the production reader.
+  if (!endpointInfo.allowLoopback || descriptor.channel !== "local-test")
+    throw new CliError(
+      "VALIDATION_ERROR",
+      "legacy Pro resource-bundle downloads require a local-test descriptor and loopback endpoint",
+    );
   const endpoint = new URL(
     endpointInfo.url.replace(/\/artifact-descriptor$/, "/resource-descriptor"),
   );
@@ -223,7 +232,11 @@ export async function downloadProSelected(
       const renewed = await fetchProDescriptor(
         context,
         auth,
-        { version: descriptor.version, descriptorSha256: descriptor.descriptorSha256 },
+        {
+          version: descriptor.version,
+          descriptorSha256: descriptor.descriptorSha256,
+          ...(descriptor.channel === "local-test" ? { allowLocalTest: true } : {}),
+        },
         deps,
       );
       if (
@@ -240,7 +253,12 @@ export async function downloadProSelected(
       currentMetadata = renewed.metadata;
     }
   if (!metadataBytes) throw new CliError("NETWORK_ERROR", "metadata URL renewal failed");
-  const metadata = extractProMetadata(metadataBytes, descriptor.catalogSha256, descriptor.version);
+  const metadata = extractProMetadata(
+    metadataBytes,
+    descriptor.catalogSha256,
+    descriptor.version,
+    descriptor.channel === "local-test",
+  );
   const catalog = parseCatalog(JSON.parse(metadata.catalogJson));
   const strict = validateConfigDocument(selection.document, catalog);
   if (strict.kind !== "ok")
