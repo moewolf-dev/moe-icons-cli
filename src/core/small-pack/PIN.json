@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "sourceCommit": "59d6d0d15c13203349efb8d1d615dec8fecd1db4",
+  "sourceCommit": "97864314e8cd4080e46443edb7abd398066042ba",
   "files": {
-    "candidate-set.cjs": "48ab5498a8056a4eb4f5eda61d8c54700075f563b80554656bb98a9fa7040161",
+    "candidate-set.cjs": "8273950682933723ac862e55f7ac805b90595250eb139d59ef92cad09d25f8fb",
     "tar-read.cjs": "053cd19f14d2a779b9e964e497129aac6a0226d3766797b1f281e230ab41ad49"
   },
   "contracts": {

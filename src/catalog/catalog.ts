@@ -110,7 +110,7 @@ export function parseCatalog(value: unknown): IconCatalog {
     return {
       id: group.id,
       type: group.type as CatalogStyleGroupType,
-      tiers: group.tiers as readonly CatalogTier[],
+      tiers: group.tiers,
       formats: group.formats as readonly CatalogFormat[],
       imageSizes: group.imageSizes,
       ...(groupVariants ? { variants: groupVariants } : {}),

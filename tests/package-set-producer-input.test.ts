@@ -26,14 +26,15 @@ function event() {
   return { action: "moe-icons-package-set-release", client_payload: { eventId: delivery.eventId, delivery } };
 }
 
-async function makeHarness(jobConclusion = "success", displayTitle = `Source package-set ${"a".repeat(40)} ${"1".repeat(64)}`) {
+async function makeHarness(jobConclusion = "success", displayTitle = `Source package-set ${"a".repeat(40)} ${"1".repeat(64)}`, jobPages: Record<number, any> | null = null) {
   const root = await mkdtemp(join(tmpdir(), "moe-plugin-package-set-input-"));
   await mkdir(join(root, "bin"));
   const ghPath = join(root, "bin/gh");
   await writeFile(ghPath, `#!/usr/bin/env node
 const route=process.argv[process.argv.indexOf('api')+1]||'';
 const repo='moewolf-dev/moe-icons-code-library', commit='${"b".repeat(40)}';
-if(route.includes('/jobs?')) console.log(JSON.stringify({jobs:['durable','dispatch-free','dispatch-pro','dispatch-website'].map(name=>({name,conclusion:'${jobConclusion}'}))}));
+const pages=${JSON.stringify(jobPages)};
+if(route.includes('/jobs?')) { const page=Number(new URL('https://api.test/?'+route.split('?')[1]).searchParams.get('page')); console.log(JSON.stringify(pages?.[page]??{total_count:4,jobs:['durable','dispatch-free','dispatch-pro','dispatch-website'].map(name=>({name,conclusion:'${jobConclusion}'}))})); }
 else console.log(JSON.stringify({id:123,run_attempt:2,event:'workflow_dispatch',status:'completed',conclusion:'success',head_sha:commit,head_branch:'main',path:'.github/workflows/small-pack-candidate.yml',display_title:${JSON.stringify(displayTitle)},repository:{full_name:repo},head_repository:{full_name:repo}}));
 `, { mode: 0o755 });
   const payloadPath = join(root, "event.json");
@@ -69,6 +70,32 @@ it("rejects a candidate producer whose package-set or projection job failed", as
     }), /producer job durable did not succeed/);
     await assert.rejects(readFile(join(outputRoot, "event.json")), /ENOENT/);
   } finally { await h.cleanup(); }
+});
+
+it("finds required producer jobs on page two and rejects a changing job count", async () => {
+  const pages = {
+    1: { total_count: 104, jobs: Array.from({ length: 100 }, (_, index) => ({ name: `build-unit-${index}` })) },
+    2: { total_count: 104, jobs: ["durable", "dispatch-free", "dispatch-pro", "dispatch-website"].map(name => ({ name, conclusion: "success" })) },
+  };
+  const h = await makeHarness("success", undefined, pages);
+  try {
+    const outputRoot = join(h.root, "output");
+    await run(process.execPath, ["scripts/verify-package-set-input.mjs", outputRoot], {
+      env: { ...process.env, PATH: `${join(h.root, "bin")}:${process.env.PATH}`, GH_TOKEN: "read-token", GITHUB_EVENT_PATH: h.payloadPath, GITHUB_ENV: h.envFile },
+    });
+    assert.ok(JSON.parse(await readFile(join(outputRoot, "event.json"), "utf8")));
+  } finally { await h.cleanup(); }
+
+  const changedPages = {
+    1: { total_count: 101, jobs: Array.from({ length: 100 }, (_, index) => ({ name: `build-unit-${index}` })) },
+    2: { total_count: 104, jobs: ["durable", "dispatch-free", "dispatch-pro", "dispatch-website"].map(name => ({ name, conclusion: "success" })) },
+  };
+  const changed = await makeHarness("success", undefined, changedPages);
+  try {
+    await assert.rejects(run(process.execPath, ["scripts/verify-package-set-input.mjs", join(changed.root, "output")], {
+      env: { ...process.env, PATH: `${join(changed.root, "bin")}:${process.env.PATH}`, GH_TOKEN: "read-token", GITHUB_EVENT_PATH: changed.payloadPath, GITHUB_ENV: changed.envFile },
+    }), /job count changed between pages/);
+  } finally { await changed.cleanup(); }
 });
 
 it("rejects a Generator run title bound to another Source commit or dispatch ID", async () => {

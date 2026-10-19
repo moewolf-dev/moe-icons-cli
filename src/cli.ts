@@ -458,7 +458,10 @@ async function runAccount(runtime: CliRuntime, json: boolean): Promise<number> {
   } catch (error) {
     remoteError = error;
   }
-  if (json && remoteError) throw remoteError;
+  if (json && remoteError) {
+    if (remoteError instanceof Error) throw remoteError;
+    throw new Error("remote account command failed", { cause: remoteError });
+  }
   const account = { ...session, ...(remote ?? {}) };
   if (json) writeJson(runtime, { ok: true, environment, account });
   else {

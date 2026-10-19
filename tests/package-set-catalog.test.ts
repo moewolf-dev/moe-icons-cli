@@ -92,11 +92,11 @@ function metadataPackage(tier: "free" | "pro", groupId: string, icons: string[])
   };
 }
 
-function fixture() {
+function fixture(freeGroup = "moe-outline") {
   const archives = new Map<string, Buffer>();
   const sets: Record<string, any> = {};
   for (const tier of ["free", "pro"] as const) {
-    const groups = tier === "free" ? [["moe-outline", ["archive-box"]]] : [["moe-outline", ["archive-box"]], ["moe-game-blue", ["pixel-sword"]]];
+    const groups = tier === "free" ? [[freeGroup, ["archive-box"]]] : [["moe-outline", ["archive-box"]], ["moe-game-blue", ["pixel-sword"]]];
     const rows = groups.map(([group, ids]) => {
       const item = metadataPackage(tier, group as string, ids as string[]);
       archives.set(item.row.packageSha256, item.archive);
@@ -170,4 +170,11 @@ it("rejects package digest tampering and preserves strict metadata scope", async
     return original(request, init);
   };
   await assert.rejects(fetchPackageSetCatalog({ bindings: f.bindings, proToken: "t".repeat(40), fetcher: corruptFetcher }), /metadata\/free\/moe-outline byte count differs from its binding/);
+});
+
+it("rejects a Pro-only group mislabeled into the Free candidate before reading its package", async () => {
+  const { fetchPackageSetCatalog } = await metadataModule;
+  const f = fixture("moe-game-blue");
+  await assert.rejects(fetchPackageSetCatalog({ bindings: f.bindings, proToken: "t".repeat(40), fetcher: f.fetcher }), /outside the pinned allowlist/);
+  assert.equal(f.calls.some(url => url.pathname.includes('/free/package-set/packages/')), false);
 });

@@ -12,6 +12,8 @@ const COMMIT = /^[a-f0-9]{40}$/;
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SOURCE_REPOSITORY = "moewolf-dev/moe-icons-code-library";
 const SOURCE_WORKFLOW = ".github/workflows/small-pack-candidate.yml";
+const MAX_GENERATOR_JOBS = 300;
+const MAX_GENERATOR_JOB_PAGES = 3;
 
 function exactKeys(value, keys, label) {
   assert(value && typeof value === "object" && !Array.isArray(value)
@@ -20,8 +22,26 @@ function exactKeys(value, keys, label) {
 
 function sha256(value) { return createHash("sha256").update(value).digest("hex"); }
 function gh(route) {
-  try { return JSON.parse(execFileSync("gh", ["api", route], { encoding: "utf8", timeout: 30000, maxBuffer: 1024 * 1024 })); }
+  try { return JSON.parse(execFileSync("gh", ["api", route], { encoding: "utf8", timeout: 30000, maxBuffer: 2 * 1024 * 1024 })); }
   catch { fail("exact package-set producer evidence is unavailable"); }
+}
+
+function readProducerJobs(runId, runAttempt) {
+  const jobs = [];
+  let totalCount;
+  for (let page = 1; page <= MAX_GENERATOR_JOB_PAGES; page += 1) {
+    const result = gh(`repos/${SOURCE_REPOSITORY}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100&page=${page}`);
+    assert(result && Number.isSafeInteger(result.total_count) && result.total_count >= 0
+      && result.total_count <= MAX_GENERATOR_JOBS && Array.isArray(result.jobs) && result.jobs.length <= 100,
+    "package-set producer jobs are incomplete or exceed the 300-job bound");
+    if (totalCount === undefined) totalCount = result.total_count;
+    assert(result.total_count === totalCount, "package-set producer job count changed between pages");
+    jobs.push(...result.jobs);
+    if (jobs.length >= totalCount) break;
+    assert(page < MAX_GENERATOR_JOB_PAGES, "package-set producer jobs exceed the page bound");
+  }
+  assert(jobs.length === totalCount, "package-set producer job listing is incomplete");
+  return jobs;
 }
 
 function validateBinding(raw, tier, delivery) {
@@ -45,10 +65,9 @@ function verifyProducer(producer, sourceCommit, sourceDispatchId) {
     && attempt.head_sha === producer.headSha
     && attempt.display_title === `Source package-set ${sourceCommit} ${sourceDispatchId}`,
   "package-set producer run identity differs from its exact Source/Generator binding");
-  const result = gh(`repos/${SOURCE_REPOSITORY}/actions/runs/${producer.runId}/attempts/${producer.runAttempt}/jobs?per_page=100`);
-  assert(Array.isArray(result.jobs) && result.jobs.length <= 100, "package-set producer job list is invalid or oversized");
+  const jobs = readProducerJobs(producer.runId, producer.runAttempt);
   for (const name of ["durable", "dispatch-free", "dispatch-pro", "dispatch-website"]) {
-    const matches = result.jobs.filter(job => job.name === name);
+    const matches = jobs.filter(job => job.name === name);
     assert(matches.length === 1 && matches[0].conclusion === "success", `producer job ${name} did not succeed`);
   }
   return { repository: producer.repository, workflowPath: producer.workflowPath, runId: String(producer.runId), runAttempt: producer.runAttempt, headSha: producer.headSha };

@@ -10,6 +10,7 @@ const {Transform}=require('node:stream');
 const {workflowRunPathMatches}=require('./workflow-run-path.cjs');
 const REPO='moewolf-dev/moe-icons-code-library';
 const CLI_REPO='moewolf-dev/moe-icons-cli';
+const MAX_PRODUCER_JOB_PAGES=3;
 // A CLI candidate is tooling only. The retired code-library ZIP path is
 // fixture-only below; never admit the former GiB-scale production envelope.
 const MAX_ZIP_BYTES=130*1024**2;
@@ -21,6 +22,20 @@ function assertLegacyLibraryZipFixture(file){
 function transient(error){return /HTTP\s*(?:429|5\d\d)\b|ETIMEDOUT|ECONNRESET|(?:connection|operation|request) (?:timed out|timeout)/i.test(String(error.stderr || error.message));}
 function retryRead(read){for(let attempt=0;;attempt++){try{return read();}catch(error){if(attempt>=3 || !transient(error))throw error;Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,[1000,3000,7000][attempt]);}}}
 const json=route=>retryRead(()=>JSON.parse(execFileSync('gh',['api',route],{encoding:'utf8',timeout:30000,maxBuffer:4*1024*1024})));
+function readProducerJobs(runId,attempt){
+ assert.match(String(runId),/^[1-9][0-9]*$/);assert.match(String(attempt),/^[1-9][0-9]*$/);
+ const jobs=[];let totalCount;
+ for(let page=1;page<=MAX_PRODUCER_JOB_PAGES;page++){
+  const result=json(`repos/${REPO}/actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100&page=${page}`);
+  assert.ok(Number.isSafeInteger(result.total_count) && result.total_count>=0 && result.total_count<=MAX_PRODUCER_JOB_PAGES*100,'producer job count budget');
+  if(totalCount===undefined)totalCount=result.total_count;else assert.equal(result.total_count,totalCount,'producer job count stability');
+  assert.ok(Array.isArray(result.jobs) && result.jobs.length<=100,'producer job page');
+  jobs.push(...result.jobs);assert.ok(jobs.length<=totalCount,'producer job page overflow');
+  if(jobs.length===totalCount)break;
+ }
+ assert.equal(jobs.length,totalCount,'complete producer job inventory');
+ return jobs;
+}
 function upload(tag,file){
  for(let attempt=0;;attempt++){
   try{execFileSync('gh',['release','upload',tag,file,'--repo',REPO],{stdio:'pipe',timeout:10*60*1000});return;}
@@ -94,7 +109,7 @@ function readRecord(expected) {
   const record=JSON.parse(execFileSync('gh',['api',`repos/${REPO}/releases/assets/${recordAsset.id}`,'-H','Accept: application/octet-stream'],{encoding:'utf8',timeout:30000,maxBuffer:1024*1024}));
   if(expected.id && !record.artifacts?.some(item=>String(item.id)===String(expected.id)))continue;
   const run=json(`repos/${REPO}/actions/runs/${libraryId}/attempts/${attempt}`);
-  const jobs=json(`repos/${REPO}/actions/runs/${libraryId}/attempts/${attempt}/jobs?per_page=100`).jobs || [];
+  const jobs=readProducerJobs(libraryId,attempt);
   assert.equal(record.repository,REPO);assert.equal(record.resourceVersion,expected.version);
   assert.equal(String(record.runId),String(libraryId));assert.equal(record.headSha,expected.libraryHeadSha || expected.headSha);
   assert.equal(Number(record.runAttempt),attempt);assert.equal(run.head_sha,record.headSha);assert.equal(run.head_branch,'main');assert.equal(run.repository?.full_name,REPO);
@@ -127,7 +142,7 @@ async function retrieve(expected,file){
    assert.equal(String(metadata.workflow_run?.id),String(expected.runId),'CLI artifact run');assert.equal(metadata.workflow_run.head_sha,expected.headSha,'CLI artifact head');
    if(expected.digest)assert.equal(metadata.digest,`sha256:${expected.digest.replace(/^sha256:/,'')}`);
   }else{
-   const jobs=json(`repos/${REPO}/actions/runs/${expected.runId}/attempts/${attempt}/jobs?per_page=100`).jobs || [];
+   const jobs=readProducerJobs(expected.runId,attempt);
    metadata=artifactRecord({schemaVersion:1,repository:REPO,resourceVersion:expected.version,runId:expected.runId,runAttempt:attempt,headSha:expected.headSha,artifacts:[metadata]},expected,run,jobs);
    metadata.expires_at=metadata.originalActionsExpiresAt;
   }
@@ -237,7 +252,7 @@ function restoreProgress({version,runId,attempt,headSha,ownerId,ownerAttempt,dir
  }
  return record;
 }
-module.exports={artifactRecord,retrieve,persist,download,readRecord,saveProgress,restoreProgress};
+module.exports={artifactRecord,retrieve,persist,download,readRecord,readProducerJobs,saveProgress,restoreProgress};
 if(require.main===module){
  const args=process.argv.slice(2),arg=name=>args[args.indexOf(name)+1];
  const task=args[0];

@@ -218,7 +218,7 @@ function requireCommonConfigFields(
   }
   if (
     obj.downloadMode !== undefined &&
-    !["auto", "icons", "full"].includes(String(obj.downloadMode))
+    (typeof obj.downloadMode !== "string" || !["auto", "icons", "full"].includes(obj.downloadMode))
   )
     throw new Error('downloadMode must be "auto", "icons" or "full"');
   if (

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { verifySmallPackPin } from '../scripts/verify-small-pack-pin.mjs';
-import { canonicalBytes, sha256, buildCandidateSet, type PackageRow } from '../src/core/small-pack/candidate-set.cjs';
+import { canonicalBytes, sha256, buildCandidateSet, validatePackagePages, type PackageRow } from '../src/core/small-pack/candidate-set.cjs';
 import { createTarGz } from '../src/project/tar-gz.js';
 import { readSelectedCandidate, consumeSelectedPackages, planSelectedPackages, verifySelectedPackage, type SelectedCandidate } from '../src/core/small-package-selection.js';
 function unit(kind: 'svg' | 'code' | 'shared', group: string | undefined, dependencies: string[] = []) {
@@ -20,6 +20,25 @@ async function fixture() {
   return { units, selected, unrelated, shared, candidate, built };
 }
 describe('small-package selection', () => {
+  it('rejects cross-page digest aliases and unresolved dependency references', () => {
+    const digest = 'f'.repeat(64);
+    const first: PackageRow = { kind: 'svg', tier: 'free', styleGroupId: 'moe-outline', packageSha256: digest, filename: `packages/${digest}.tgz`, resourceKey: 'svg/free/moe-outline', fullVersion: '1.0.0', compressedBytes: 1, expandedBytes: 1, fileCount: 1, dependencies: [] };
+    const second: PackageRow = { ...first, styleGroupId: 'moe-solid', resourceKey: 'svg/free/moe-solid' };
+    const pages = [first, second].map(row => canonicalBytes({ schemaVersion: 1, fullVersion: '1.0.0', tier: 'free', packages: [row] }));
+    const refs = pages.map((bytes, index) => ({ filename: `package-page-free-${String(index + 1).padStart(4, '0')}.json`, sha256: sha256(bytes), sizeBytes: bytes.length, packageCount: 1 }));
+    const projection = { schemaVersion: 1 as const, fullVersion: '1.0.0', tier: 'free' as const, sourceCommit: 'a'.repeat(40), generatorCommit: 'b'.repeat(40), packagePageCount: refs.length, packagePages: refs };
+    const root = { ...projection, packageSetSha256: sha256(canonicalBytes(projection)) };
+    const pageMap = new Map(refs.map((ref, index) => [ref.filename, pages[index]!]));
+    expect(() => validatePackagePages(root, pageMap)).toThrow('duplicate package digest across candidate set');
+
+    const danglingDigest = 'd'.repeat(64);
+    const dangling: PackageRow = { ...first, styleGroupId: 'moe-game-blue', packageSha256: danglingDigest, filename: `packages/${danglingDigest}.tgz`, resourceKey: 'svg/free/moe-game-blue', dependencies: ['e'.repeat(64)] };
+    const danglingPage = canonicalBytes({ schemaVersion: 1, fullVersion: '1.0.0', tier: 'free', packages: [dangling] });
+    const danglingRef = { filename: 'package-page-free-0001.json', sha256: sha256(danglingPage), sizeBytes: danglingPage.length, packageCount: 1 };
+    const danglingProjection = { schemaVersion: 1 as const, fullVersion: '1.0.0', tier: 'free' as const, sourceCommit: 'a'.repeat(40), generatorCommit: 'b'.repeat(40), packagePageCount: 1, packagePages: [danglingRef] };
+    const danglingRoot = { ...danglingProjection, packageSetSha256: sha256(canonicalBytes(danglingProjection)) };
+    expect(() => validatePackagePages(danglingRoot, new Map([[danglingRef.filename, danglingPage]]))).toThrow('missing dependency package');
+  });
   it('downloads only explicit unit and dependency closure in dependency order; warm cache transfers zero bytes', async () => {
     const f = await fixture(); const cache = new Map<string, Uint8Array>(), requested: string[] = [], consumed: string[] = [];
     const io = { readCache: async (row: PackageRow) => cache.get(row.packageSha256), writeCache: async (row: PackageRow, bytes: Uint8Array) => { cache.set(row.packageSha256, bytes); }, download: async (row: PackageRow) => { requested.push(row.resourceKey); return f.units.find(u => u.row.packageSha256 === row.packageSha256)!.bytes; }, consume: async (row: PackageRow) => { consumed.push(row.resourceKey); } };
@@ -47,7 +66,7 @@ describe('small-package selection', () => {
     await expect(consumeSelectedPackages(f.candidate, [f.unrelated.row.resourceKey], { readCache: async () => undefined, writeCache: async () => { cached = true; }, download: async () => f.unrelated.bytes, consume: async () => { expect(cached).toBe(true); throw Error('target failed'); } })).rejects.toThrow('target failed');
   });
   it('vendored strict parsers retain pinned bytes', () => {
-    expect(verifySmallPackPin().sourceCommit).toBe('59d6d0d15c13203349efb8d1d615dec8fecd1db4');
+    expect(verifySmallPackPin().sourceCommit).toBe('97864314e8cd4080e46443edb7abd398066042ba');
     const pin = JSON.parse(readFileSync(new URL('../src/core/small-pack/PIN.json', import.meta.url), 'utf8')) as { files: Record<string, string> };
     for (const [name, digest] of Object.entries(pin.files)) expect(sha256(readFileSync(new URL('../src/core/small-pack/' + name, import.meta.url)))).toBe(digest);
   });

@@ -180,7 +180,7 @@ export async function extractTarGzAsync(bytes: Uint8Array, limits: { maxEntries:
       if (reader.errors.length) { stream.destroy(); break; }
     }
     return reader.result();
-  } catch (error) { return { files: {}, errors: [signal?.aborted ? "archive extraction cancelled" : "invalid gzip"] }; }
+  } catch { return { files: {}, errors: [signal?.aborted ? "archive extraction cancelled" : "invalid gzip"] }; }
   finally { signal?.removeEventListener("abort", abort); stream.destroy(); }
 }
 

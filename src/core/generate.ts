@@ -620,7 +620,7 @@ export async function runGenerateUseCase(
         const absolute = join(project.root, managedPath);
         if (
           !fs_.existsSync(absolute) ||
-          sha256Bytes(fs_.readFileSync(absolute) as string | Uint8Array) !== expected
+          sha256Bytes(fs_.readFileSync(absolute)) !== expected
         ) {
           return { ok: false, reason: `managed file was modified or removed: ${managedPath}` };
         }

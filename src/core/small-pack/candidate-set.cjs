@@ -199,6 +199,9 @@ function validatePackagePages(candidateSet, pageBytesByName) {
     if (all.length + page.length > MAX_PACKAGES) fail(`candidate package count exceeds ${MAX_PACKAGES}`);
     all.push(...page);
   }
+  if (new Set(all.map((item) => item.packageSha256)).size !== all.length) {
+    fail('duplicate package digest across candidate set');
+  }
   const packageIds = new Set(all.map((item) => item.packageSha256));
   const keys = new Set();
   for (const item of all) {

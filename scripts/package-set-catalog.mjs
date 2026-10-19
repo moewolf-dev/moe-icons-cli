@@ -5,6 +5,7 @@ import { gunzipSync } from "node:zlib";
 const require = createRequire(import.meta.url);
 const candidateTools = require("../src/core/small-pack/candidate-set.cjs");
 const tarTools = require("../src/core/small-pack/tar-read.cjs");
+const freePolicy = require("../vendor/moe-icons-release-policy/free-style-groups.v1.json");
 
 const MAX_ROOT_BYTES = 1024 * 1024;
 const MAX_PAGE_BYTES = 8 * 1024 * 1024;
@@ -214,6 +215,8 @@ async function fetchTier({ tier, binding, baseUrl, token, fetcher }) {
     pageBytesByName.set(page.filename, bytes);
   }
   const rows = candidateTools.validatePackagePages(root, pageBytesByName);
+  if (tier === "free") assert(rows.every(row => !row.styleGroupId || freePolicy.freeStyleGroups.includes(row.styleGroupId)),
+    "Free candidate contains a group outside the pinned allowlist");
   const metadataRows = rows.filter(row => row.kind === "metadata");
   assert(metadataRows.length > 0 && metadataRows.length <= MAX_METADATA_PACKAGES
     && metadataRows.every(row => row.tier === tier && GROUP.test(row.styleGroupId || "")), `${tier} metadata package inventory is invalid`);

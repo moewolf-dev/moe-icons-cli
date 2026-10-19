@@ -276,7 +276,7 @@ export async function downloadSelectedResources(
   let cacheHits = 0;
   let cursor = 0;
   let urlPromise: Promise<string> | undefined;
-  let failure: unknown;
+  let failure: CliError | undefined;
   const controller = new AbortController();
   const abort = () => controller.abort();
   deps.signal.addEventListener("abort", abort, { once: true });

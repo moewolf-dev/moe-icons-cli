@@ -74,7 +74,7 @@ export function createProjectMcpServices(runtime: CliRuntime, execute: (argv: re
     keys(args, Object.keys(def.inputSchema.properties as Record<string, unknown>));
     if (args.projectPath !== undefined && (typeof args.projectPath !== "string" || realpathSync(resolve(root(), args.projectPath)) !== root())) throw new McpArgumentError("projectPath must resolve to the bound project root");
     for (const key of ["dryRun"]) if (args[key] !== undefined && typeof args[key] !== "boolean") throw new McpArgumentError(`${key} must be boolean`);
-    if (args.target !== undefined && !["react", "vue", "vanilla", "assets"].includes(String(args.target))) throw new McpArgumentError("invalid target");
+    if (args.target !== undefined && (typeof args.target !== "string" || !["react", "vue", "vanilla", "assets"].includes(args.target))) throw new McpArgumentError("invalid target");
     if (name === "install_icon_group") {
       if (typeof args.groupId !== "string" || typeof args.projectPath !== "string") throw new McpArgumentError("groupId and projectPath are required strings");
       return installIconGroup();
@@ -113,7 +113,7 @@ export function createProjectMcpServices(runtime: CliRuntime, execute: (argv: re
           if (key !== "adapter") safeManagedPath(root(), value);
           else if (!["vite-vue", "vite-react", "next-app", "next-pages", "nuxt", "vanilla", "assets-only"].includes(value)) throw new McpArgumentError("invalid adapter");
         }
-        confirmed = args.integration as typeof confirmed;
+        confirmed = args.integration;
       }
       if (args.target && confirmed?.adapter) {
         const adapterTarget = confirmed.adapter === "vite-vue" || confirmed.adapter === "nuxt" ? "vue" : confirmed.adapter === "vanilla" ? "vanilla" : confirmed.adapter === "assets-only" ? "assets" : "react";

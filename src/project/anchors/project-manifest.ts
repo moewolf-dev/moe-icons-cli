@@ -21,8 +21,8 @@ export function detectAdapter(
   pkg: Record<string, unknown>,
 ): AdapterEvidence {
   const deps = new Set([
-    ...Object.keys(isRecord(pkg.dependencies) ? (pkg.dependencies as object) : {}),
-    ...Object.keys(isRecord(pkg.devDependencies) ? (pkg.devDependencies as object) : {}),
+    ...Object.keys(isRecord(pkg.dependencies) ? pkg.dependencies : {}),
+    ...Object.keys(isRecord(pkg.devDependencies) ? pkg.devDependencies : {}),
   ]);
   const has = (name: string) => deps.has(name);
   const candidates: string[] = [];

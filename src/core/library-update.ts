@@ -449,7 +449,7 @@ export async function runLibraryUpdateUseCase(
       const absolute = join(project.root, path);
       if (
         !deps.fs.existsSync(absolute) ||
-        sha256Bytes(deps.fs.readFileSync(absolute) as string | Uint8Array) !== hash
+        sha256Bytes(deps.fs.readFileSync(absolute)) !== hash
       ) {
         throw new CliError("VALIDATION_ERROR", `managed file was modified or removed: ${path}`);
       }
