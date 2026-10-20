@@ -9,6 +9,10 @@ const MAX_PAGE_BYTES = 8 * 1024 ** 2;
 const MAX_PACKAGE_BYTES = 128 * 1024 ** 2;
 const MAX_CODE_PACKAGE_BYTES = 32 * 1024 ** 2;
 const MAX_PACKAGES = 20_000;
+// Keep a tier candidate within the downstream website projection's existing
+// selected-package byte ceiling. This is a protocol fail-closed bound, not an
+// approved Hosted capacity budget.
+const MAX_CANDIDATE_BYTES = 4 * 1024 ** 3;
 const SHA256 = /^[a-f0-9]{64}$/;
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:alpha|beta)(?:\.(0|[1-9]\d*))?)?$/;
 const COMMIT = /^[a-f0-9]{40}$/;
@@ -192,11 +196,19 @@ function validatePackagePages(candidateSet, pageBytesByName) {
     ? parseCandidateSet(canonicalBytes(candidateSet))
     : parseCandidateSet(candidateSet);
   const all = [];
+  let compressedBytes = 0;
+  let expandedBytes = 0;
   for (const ref of set.packagePages) {
     const bytes = pageBytesByName instanceof Map ? pageBytesByName.get(ref.filename) : pageBytesByName?.[ref.filename];
     if (!bytes) fail(`missing package page ${ref.filename}`);
     const page = parsePackagePage(bytes, ref, set.fullVersion, set.tier).packages;
     if (all.length + page.length > MAX_PACKAGES) fail(`candidate package count exceeds ${MAX_PACKAGES}`);
+    for (const item of page) {
+      compressedBytes += item.compressedBytes;
+      expandedBytes += item.expandedBytes;
+      if (compressedBytes > MAX_CANDIDATE_BYTES) fail(`candidate compressed package bytes exceed ${MAX_CANDIDATE_BYTES}`);
+      if (expandedBytes > MAX_CANDIDATE_BYTES) fail(`candidate expanded package bytes exceed ${MAX_CANDIDATE_BYTES}`);
+    }
     all.push(...page);
   }
   if (new Set(all.map((item) => item.packageSha256)).size !== all.length) {
@@ -218,6 +230,14 @@ function buildCandidateSet({ fullVersion, tier, sourceCommit, generatorCommit, p
   if (packages.some((item) => item.tier !== tier)) fail('candidate-set packages must belong to exactly one tier');
   const sorted = packages.map((item, index) => validatePackage(item, index, fullVersion))
     .sort((a, b) => a.resourceKey.localeCompare(b.resourceKey, 'en'));
+  let compressedBytes = 0;
+  let expandedBytes = 0;
+  for (const item of sorted) {
+    compressedBytes += item.compressedBytes;
+    expandedBytes += item.expandedBytes;
+    if (compressedBytes > MAX_CANDIDATE_BYTES) fail(`candidate compressed package bytes exceed ${MAX_CANDIDATE_BYTES}`);
+    if (expandedBytes > MAX_CANDIDATE_BYTES) fail(`candidate expanded package bytes exceed ${MAX_CANDIDATE_BYTES}`);
+  }
   const keys = sorted.map((item) => item.resourceKey);
   if (new Set(keys).size !== keys.length) fail('duplicate resourceKey across candidate set');
   const pageBytesByName = new Map();
@@ -253,6 +273,7 @@ module.exports = {
   MAX_PACKAGE_BYTES,
   MAX_CODE_PACKAGE_BYTES,
   MAX_PACKAGES,
+  MAX_CANDIDATE_BYTES,
   canonicalBytes,
   sha256,
   parseCandidateSet,

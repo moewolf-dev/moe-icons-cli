@@ -66,7 +66,7 @@ describe('small-package selection', () => {
     await expect(consumeSelectedPackages(f.candidate, [f.unrelated.row.resourceKey], { readCache: async () => undefined, writeCache: async () => { cached = true; }, download: async () => f.unrelated.bytes, consume: async () => { expect(cached).toBe(true); throw Error('target failed'); } })).rejects.toThrow('target failed');
   });
   it('vendored strict parsers retain pinned bytes', () => {
-    expect(verifySmallPackPin().sourceCommit).toBe('97864314e8cd4080e46443edb7abd398066042ba');
+    expect(verifySmallPackPin().sourceCommit).toBe('24d7e9ea5d4ac7c338ee08995ebf09b485950092');
     const pin = JSON.parse(readFileSync(new URL('../src/core/small-pack/PIN.json', import.meta.url), 'utf8')) as { files: Record<string, string> };
     for (const [name, digest] of Object.entries(pin.files)) expect(sha256(readFileSync(new URL('../src/core/small-pack/' + name, import.meta.url)))).toBe(digest);
   });
