@@ -15,7 +15,7 @@ concurrency:
 jobs:
   resume:
     if: github.repository == 'moewolf-dev/moe-icons-cli' && github.event.workflow_run.conclusion == 'failure'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, moe-ci-server]
     timeout-minutes: 5
     permissions:
       actions: write

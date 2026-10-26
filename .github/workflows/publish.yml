@@ -57,7 +57,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name == 'workflow_dispatch' && inputs.npm_auth_mode == 'token'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, moe-ci-server]
     timeout-minutes: 5
     steps:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -148,7 +148,7 @@ jobs:
   decide:
     needs: npm-auth-preflight
     if: always() && inputs.auth_audit_only != true && inputs.resume_run_id == '' && (needs.npm-auth-preflight.result == 'success' || needs.npm-auth-preflight.result == 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, moe-ci-server]
     timeout-minutes: 10
     permissions:
       contents: read
@@ -216,7 +216,7 @@ jobs:
   recover:
     if: always() && inputs.auth_audit_only != true && github.event_name == 'workflow_dispatch' && inputs.resume_run_id != '' && needs.validate.result == 'success' && (needs.npm-auth-preflight.result == 'success' || needs.npm-auth-preflight.result == 'skipped')
     needs: [validate, npm-auth-preflight]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, moe-ci-server]
     timeout-minutes: 10
     permissions:
       actions: read
@@ -417,7 +417,7 @@ jobs:
   acceptance:
     needs: [decide, pack]
     if: always() && needs.decide.result == 'success' && needs.pack.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, moe-ci-server]
     permissions:
       actions: read
       contents: read
@@ -498,7 +498,7 @@ jobs:
   publish:
     needs: [decide, pack, acceptance, recover]
     if: always() && (needs.acceptance.result == 'success' || needs.recover.result == 'success')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, moe-ci-server]
     timeout-minutes: 45
     environment: npm-publish
     permissions:
