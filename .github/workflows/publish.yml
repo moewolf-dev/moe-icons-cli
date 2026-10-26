@@ -100,6 +100,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Prepare auxiliary runner tools
+        run: bash .github/scripts/prepare-auxiliary-runner.sh
       - name: Checkout immutable shared contract fixture authority
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -160,6 +162,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+      - name: Prepare auxiliary runner tools
+        run: bash .github/scripts/prepare-auxiliary-runner.sh
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
@@ -232,6 +236,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
+      - name: Prepare auxiliary runner tools
+        run: bash .github/scripts/prepare-auxiliary-runner.sh
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
@@ -444,6 +450,8 @@ jobs:
           ref: ${{ env.clitest_sha }}
           token: ${{ secrets.CLITEST_READ_TOKEN }}
           path: clitest
+      - name: Prepare auxiliary runner tools
+        run: bash .github/scripts/prepare-auxiliary-runner.sh
       - name: Checkout the exact CLI source used for the immutable candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -512,6 +520,8 @@ jobs:
         with:
           ref: ${{ needs.recover.outputs.cli_commit || needs.pack.outputs.cli_commit }}
           fetch-depth: 1
+      - name: Prepare auxiliary runner tools
+        run: bash .github/scripts/prepare-auxiliary-runner.sh
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
