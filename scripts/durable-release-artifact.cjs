@@ -8,6 +8,7 @@ const {spawn,execFileSync}=require('node:child_process');
 const {pipeline}=require('node:stream/promises');
 const {Transform}=require('node:stream');
 const {workflowRunPathMatches}=require('./workflow-run-path.cjs');
+const {createRecorder,summary,writeReport}=require('./small-pack-consumer-transport.cjs');
 const REPO='moewolf-dev/moe-icons-code-library';
 const CLI_REPO='moewolf-dev/moe-icons-cli';
 const MAX_PRODUCER_JOB_PAGES=3;
@@ -67,22 +68,37 @@ function artifactRecord(record,expected,run,jobs){
  assert.ok(expected.repository===CLI_REPO ? artifact.name===`moeicons-cli-${expected.headSha}` : [`moe-icons-production-${expected.version}`,`moe-icons-free-candidate-${expected.version}`].includes(artifact.name),'durable artifact name');
  return {...artifact,expired:false,expires_at:'9999-12-31T23:59:59Z',storage:'private-release',originalActionsExpiresAt:artifact.expires_at,durableRunAttempt:record.runAttempt};
 }
-async function downloadOnce(route,file,metadata){
+function httpStatus(stderr){const match=/HTTP\s*([1-5][0-9]{2})\b/.exec(String(stderr || ''));return match?Number(match[1]):null;}
+function failureClass(error,timedOut,stderr){
+ if(timedOut)return 'timeout';
+ if(/downloaded ZIP (?:size|digest)|artifact download exceeds budget/.test(String(error.message)))return 'integrity';
+ return transient({message:stderr})?'transient':'fatal';
+}
+async function downloadOnce(route,file,metadata,recorder,callId,attempt){
  assert.match(route,new RegExp(`^repos/moewolf-dev/moe-icons-(?:code-library|cli)/(?:actions/artifacts/[1-9][0-9]*/zip|releases/assets/[1-9][0-9]*)$`),'trusted artifact download route');
  fs.mkdirSync(path.dirname(file),{recursive:true});
+ const startedAt=new Date().toISOString();
  const child=spawn('gh',['api',route,'-H',`Accept: ${route.includes('/actions/artifacts/') ? 'application/json' : 'application/octet-stream'}`],{stdio:['ignore','pipe','pipe']});
  let stderr='';child.stderr.on('data',chunk=>{if(stderr.length<16384)stderr+=chunk.toString();});let size=0;const hash=crypto.createHash('sha256');let timedOut=false;
  const timer=setTimeout(()=>{timedOut=true;child.kill('SIGTERM');},10*60*1000);
  const completed=new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',code=>code===0?resolve():reject(new Error('artifact download failed',{cause:{transient:timedOut || transient({message:stderr})}})));});
  try{
   await Promise.all([completed,pipeline(child.stdout,new Transform({transform(chunk,_,callback){size+=chunk.length;if(size>metadata.size_in_bytes || size>MAX_ZIP_BYTES)return callback(Error('artifact download exceeds budget'));hash.update(chunk);callback(null,chunk);}}),fs.createWriteStream(file,{flags:'wx',mode:0o600}))]);
-  assert.equal(size,metadata.size_in_bytes,'downloaded ZIP size');assert.equal(hash.digest('hex'),metadata.digest.slice(7),'downloaded ZIP digest');
- }catch(error){fs.rmSync(file,{force:true});throw error;}finally{clearTimeout(timer);child.kill();}
+  assert.equal(size,metadata.size_in_bytes,'downloaded ZIP size');const actualSha256=hash.digest('hex');assert.equal(actualSha256,metadata.digest.slice(7),'downloaded ZIP digest');
+  recorder?.record({callId,route,attempt,status:'complete',responseBytes:size,deliveredBytes:size,expectedBytes:metadata.size_in_bytes,contentSha256:actualSha256,digestVerified:true,startedAt,finishedAt:new Date().toISOString()});
+ }catch(error){
+  // Unknown is not zero: only the prefix the consumer received is recorded.
+  recorder?.record({callId,route,attempt,status:'failed',responseBytes:null,deliveredBytes:size,expectedBytes:metadata.size_in_bytes,digestVerified:false,
+   errorClass:failureClass(error,timedOut,stderr),httpStatus:httpStatus(stderr),startedAt,finishedAt:new Date().toISOString()});
+  fs.rmSync(file,{force:true});throw error;
+ }finally{clearTimeout(timer);child.kill();}
 }
-async function download(route,file,metadata){
+let downloadCallSeq=0;
+async function download(route,file,metadata,recorder){
  if(route.startsWith(`repos/${REPO}/`))assertLegacyLibraryZipFixture(file);
+ const callId=recorder?`${route}#${++downloadCallSeq}`:null;
  for(let attempt=0;;attempt++){
-  try{return await downloadOnce(route,file,metadata);}catch(error){
+  try{return await downloadOnce(route,file,metadata,recorder,callId,attempt+1);}catch(error){
    if(attempt>=2 || !error.cause?.transient)throw error;
    await new Promise(resolve=>setTimeout(resolve,[1000,3000][attempt]));
   }
@@ -118,7 +134,7 @@ function readRecord(expected) {
  }
  throw Error('No exact immutable private candidate record exists');
 }
-async function retrieve(expected,file){
+async function retrieve(expected,file,recorder=null){
  validateInput(expected);const repository=expected.repository || REPO;
  if(repository===REPO && file)assertLegacyLibraryZipFixture(file);
  assert.ok([REPO,CLI_REPO].includes(repository),'trusted artifact repository');
@@ -148,7 +164,7 @@ async function retrieve(expected,file){
   }
   metadata.storage='actions';
   if(file){
-   try{await download(`repos/${repository}/actions/artifacts/${expected.id}/zip`,file,metadata);return metadata;}
+   try{await download(`repos/${repository}/actions/artifacts/${expected.id}/zip`,file,metadata,recorder);return metadata;}
    catch(error){if(!error.cause?.transient)throw error;actionsDownloadError=error;}
   }else return metadata;
  }
@@ -163,22 +179,22 @@ async function retrieve(expected,file){
  }
  const asset=release.assets.find(asset=>asset.name===`artifact-${expected.id}.zip`);
  assert.ok(asset && asset.size===metadata.size_in_bytes,'durable archive size');
- if(file)await download(`repos/${REPO}/releases/assets/${asset.id}`,file,metadata);
+ if(file)await download(`repos/${REPO}/releases/assets/${asset.id}`,file,metadata,recorder);
  return metadata;
  }catch(error){
   if(actionsDownloadError)throw new Error(`${actionsDownloadError.message}; exact private backup recovery failed: ${error.message}`,{cause:actionsDownloadError});
   throw error;
  }
 }
-async function persist({version,runId,attempt,headSha,ids,directory,cliCandidate,clitest}){
+async function persist({version,runId,attempt,headSha,ids,directory,cliCandidate,clitest,recorder=null}){
  assert.equal(json(`repos/${REPO}`).private,true,'Pro durable storage must remain private');
  const artifacts=[];
- for(const id of ids){const expected={version,runId,attempt,headSha,id};const metadata=await retrieve(expected,path.join(directory,`artifact-${id}.zip`));delete metadata.storage;delete metadata.originalActionsExpiresAt;delete metadata.durableRunAttempt;artifacts.push(metadata);}
+ for(const id of ids){const expected={version,runId,attempt,headSha,id};const metadata=await retrieve(expected,path.join(directory,`artifact-${id}.zip`),recorder);delete metadata.storage;delete metadata.originalActionsExpiresAt;delete metadata.durableRunAttempt;artifacts.push(metadata);}
   if(cliCandidate){
   let metadata;const storageToken=process.env.GH_TOKEN;
   try{
    if(process.env.CLI_ARTIFACT_READ_TOKEN)process.env.GH_TOKEN=process.env.CLI_ARTIFACT_READ_TOKEN;
-   metadata=await retrieve({version,id:cliCandidate.artifactId,runId:cliCandidate.runId,attempt:cliCandidate.runAttempt,headSha:cliCandidate.commit,repository:CLI_REPO},path.join(directory,`artifact-${cliCandidate.artifactId}.zip`));
+   metadata=await retrieve({version,id:cliCandidate.artifactId,runId:cliCandidate.runId,attempt:cliCandidate.runAttempt,headSha:cliCandidate.commit,repository:CLI_REPO},path.join(directory,`artifact-${cliCandidate.artifactId}.zip`),recorder);
   }finally{if(storageToken===undefined)delete process.env.GH_TOKEN;else process.env.GH_TOKEN=storageToken;}
   delete metadata.storage;artifacts.push({...metadata,repository:CLI_REPO});ids=[...ids,cliCandidate.artifactId];
  }
@@ -193,7 +209,7 @@ async function persist({version,runId,attempt,headSha,ids,directory,cliCandidate
   if(!asset)upload(tag,file);
   else{
    if(name==='artifact-record.v1.json')assert.deepEqual(JSON.parse(execFileSync('gh',['api',`repos/${REPO}/releases/assets/${asset.id}`,'-H','Accept: application/octet-stream'],{encoding:'utf8',timeout:30000,maxBuffer:1024*1024})),record,'immutable durable record');
-   else {const meta=artifacts.find(item=>name===`artifact-${item.id}.zip`);await download(`repos/${REPO}/releases/assets/${asset.id}`,file+'.readback',meta);fs.rmSync(file+'.readback');}
+   else {const meta=artifacts.find(item=>name===`artifact-${item.id}.zip`);await download(`repos/${REPO}/releases/assets/${asset.id}`,file+'.readback',meta,recorder);fs.rmSync(file+'.readback');}
   }
  }
  // Read back all saved bytes, including the original CLI envelope.
@@ -204,7 +220,7 @@ async function persist({version,runId,attempt,headSha,ids,directory,cliCandidate
   const file=path.join(directory,`artifact-${artifact.id}.zip.readback`);
   const asset=saved.assets.find(asset=>asset.name===`artifact-${artifact.id}.zip`);
   assert.ok(asset && asset.size===artifact.size_in_bytes,'saved artifact size');
-  await download(`repos/${REPO}/releases/assets/${asset.id}`,file,artifact);fs.rmSync(file);
+  await download(`repos/${REPO}/releases/assets/${asset.id}`,file,artifact,recorder);fs.rmSync(file);
  }
  return record;
 }
@@ -257,6 +273,15 @@ if(require.main===module){
  const args=process.argv.slice(2),arg=name=>args[args.indexOf(name)+1];
  const task=args[0];
  const expected={preferPrivate:args.includes('--prefer-private'),id:arg('--id'),version:arg('--version'),runId:arg('--run'),attempt:args.includes('--attempt')?arg('--attempt'):undefined,headSha:arg('--head'),digest:args.includes('--digest')?arg('--digest'):undefined,repository:args.includes('--repository')?arg('--repository'):REPO,libraryRunId:args.includes('--library-run')?arg('--library-run'):undefined,libraryAttempt:args.includes('--library-attempt')?arg('--library-attempt'):undefined,libraryHeadSha:args.includes('--library-head')?arg('--library-head'):undefined};
- const run=task==='persist'?persist({...expected,ids:arg('--ids').split(','),directory:arg('--directory'),cliCandidate:args.includes('--cli-candidate')?JSON.parse(fs.readFileSync(arg('--cli-candidate'),'utf8')):undefined,clitest:args.includes('--clitest')?JSON.parse(arg('--clitest')):undefined}):retrieve(expected,args.includes('--zip')?arg('--zip'):null).then(metadata=>{if(args.includes('--metadata'))fs.writeFileSync(arg('--metadata'),JSON.stringify(metadata,null,2)+'\n',{mode:0o600});return metadata;});
- run.then(()=>console.log('Exact resource artifact provenance and bytes verified')).catch(error=>{console.error(error.message);process.exitCode=1;});
+ const transportReport=args.includes('--transport-report')?arg('--transport-report'):null;
+ const recorder=transportReport?createRecorder({scope:task==='persist'?'cli-durable-persist':'cli-durable-retrieve'}):null;
+ const run=task==='persist'?persist({...expected,ids:arg('--ids').split(','),directory:arg('--directory'),cliCandidate:args.includes('--cli-candidate')?JSON.parse(fs.readFileSync(arg('--cli-candidate'),'utf8')):undefined,clitest:args.includes('--clitest')?JSON.parse(arg('--clitest')):undefined,recorder}):retrieve(expected,args.includes('--zip')?arg('--zip'):null,recorder).then(metadata=>{if(args.includes('--metadata'))fs.writeFileSync(arg('--metadata'),JSON.stringify(metadata,null,2)+'\n',{mode:0o600});return metadata;});
+ // The transport report is written for failures too: a failed download keeps its
+ // delivered prefix and unknown response total instead of a zero.
+ run.then(()=>console.log('Exact resource artifact provenance and bytes verified')).catch(error=>{console.error(error.message);process.exitCode=1;}).finally(()=>{
+  if(!recorder)return;
+  const report=recorder.report();
+  writeReport(transportReport,report);
+  console.log('[small-pack-consumer-transport] '+JSON.stringify(summary(report,{reportPath:transportReport})));
+ });
 }

@@ -277,9 +277,23 @@ jobs:
           [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
           mkdir -p "$RUNNER_TEMP/candidate"
           node - "$RUNNER_TEMP/cli-pin-event.validated.json" "$RUNNER_TEMP" <<'NODE'
-          const fs=require('node:fs'),p=require('node:path'),{retrieve}=require('./scripts/durable-release-artifact.cjs');
+          const fs=require('node:fs'),p=require('node:path');
+          const {retrieve}=require('./scripts/durable-release-artifact.cjs');
+          const {createRecorder,summary,writeReport}=require('./scripts/small-pack-consumer-transport.cjs');
           const e=JSON.parse(fs.readFileSync(process.argv[2])),root=process.argv[3];
-          retrieve({id:process.env.ARTIFACT_ID,version:e.resourceVersion,runId:e.upstreamRunId,headSha:e.generatorCommit},p.join(root,'candidate.zip')).then(meta=>fs.writeFileSync(p.join(root,'candidate-artifact.json'),JSON.stringify(meta))).catch(error=>{console.error(error.message);process.exitCode=1;});
+          const recorder=createRecorder({scope:'cli-resource-pin'});
+          const transportReport=p.join(root,'cli-candidate-transport.json');
+          (async()=>{
+            try{
+              const meta=await retrieve({id:process.env.ARTIFACT_ID,version:e.resourceVersion,runId:e.upstreamRunId,headSha:e.generatorCommit},p.join(root,'candidate.zip'),recorder);
+              fs.writeFileSync(p.join(root,'candidate-artifact.json'),JSON.stringify(meta));
+            }catch(error){console.error(error.message);process.exitCode=1;}
+            finally{
+              const report=recorder.report();
+              writeReport(transportReport,report);
+              console.log('[small-pack-consumer-transport] '+JSON.stringify(summary(report,{reportPath:transportReport})));
+            }
+          })();
           NODE
           python3 scripts/unpack-release-artifact.py "$RUNNER_TEMP/candidate.zip" "$RUNNER_TEMP/candidate"
           node scripts/verify-pin-candidate.mjs "$RUNNER_TEMP/cli-pin-event.validated.json" \
