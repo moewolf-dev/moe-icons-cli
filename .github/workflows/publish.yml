@@ -625,7 +625,12 @@ jobs:
             mkdir -p registry candidate-extract registry-extract
             registry_url="$(npm view "@moewolf/moe-icons-cli@${version}" dist.tarball)"
             [[ "$registry_url" == https://registry.npmjs.org/* ]] || { echo "unexpected registry tarball URL" >&2; exit 1; }
-            node scripts/metered-curl.cjs --url "$registry_url" --output registry/package.tgz --transport-report "$RUNNER_TEMP/cli-registry-transport.json"
+            if [ -f scripts/metered-curl.cjs ]; then
+              node scripts/metered-curl.cjs --url "$registry_url" --output registry/package.tgz --transport-report "$RUNNER_TEMP/cli-registry-transport.json"
+            else
+              # Older resume candidates predate the metered wrapper.
+              curl --fail --location --proto '=https' --proto-redir '=https' "$registry_url" --output registry/package.tgz
+            fi
             tar -xzf "$tgz" -C candidate-extract
             tar -xzf registry/*.tgz -C registry-extract
             (cd candidate-extract && find . -type f | sort | xargs shasum -a 256) > candidate-digests
@@ -670,7 +675,12 @@ jobs:
           version="${TAG#v}"
           integrity="$(npm view "@moewolf/moe-icons-cli@${version}" dist.integrity)"
           [[ "$integrity" =~ ^sha512- ]] || { echo "missing npm integrity" >&2; exit 1; }
-          prov="$(curl -fsSL -H 'Accept: application/json' "https://registry.npmjs.org/-/npm/v1/attestations/@moewolf/moe-icons-cli@${version}")"
+          if [ -f scripts/metered-curl.cjs ]; then
+            node scripts/metered-curl.cjs --url "https://registry.npmjs.org/-/npm/v1/attestations/@moewolf/moe-icons-cli@${version}" --header 'Accept: application/json' --output "$RUNNER_TEMP/cli-attestations.json" --scope cli-registry-attestation --transport-report "$RUNNER_TEMP/cli-attestation-transport.json"
+            prov="$(cat "$RUNNER_TEMP/cli-attestations.json")"
+          else
+            prov="$(curl -fsSL -H 'Accept: application/json' "https://registry.npmjs.org/-/npm/v1/attestations/@moewolf/moe-icons-cli@${version}")"
+          fi
           node -e 'const a=JSON.parse(process.argv[1]);if(!Array.isArray(a.attestations)||a.attestations.length===0){console.error("missing provenance attestations");process.exit(1);}' "$prov"
           mkdir -p receipt
           node -e '
