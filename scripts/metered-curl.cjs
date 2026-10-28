@@ -48,6 +48,9 @@ function runCurl({ url, output, headers, allowHttp }) {
     '--max-filesize', String(MAX_BYTES),
     '--write-out', '\n%{size_download} %{http_code}',
     '--output', output];
+  // Loopback is only allowed for hermetic tests. Bypass any ambient proxy so a
+  // developer/CI proxy cannot turn a local fixture into an HTTP 400 timeout.
+  if (allowHttp) args.push('--noproxy', '*');
   for (const header of headers) args.push('--header', header);
   args.push(url);
   const result = spawnSync('curl', args, { encoding: 'utf8', timeout: 10 * 60 * 1000, maxBuffer: 1024 * 1024 });
