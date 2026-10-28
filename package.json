@@ -43,7 +43,7 @@
     "build": "tsc -p tsconfig.build.json && node scripts/copy-catalog.mjs && node scripts/copy-config-package.mjs && node scripts/copy-small-pack.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src --ext .ts",
-    "test": "vitest run && node --test tests/durable-fallback.test.cjs tests/small-pack-release-guard.test.cjs",
+    "test": "vitest run && node --test tests/durable-fallback.test.cjs tests/small-pack-release-guard.test.cjs tests/metered-curl.test.cjs",
     "policy:verify-remote": "node scripts/verify-release-policy-remote.mjs",
     "release:preflight": "node scripts/release-preflight.mjs",
     "release:bump": "node scripts/release-bump.mjs",

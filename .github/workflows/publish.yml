@@ -625,7 +625,7 @@ jobs:
             mkdir -p registry candidate-extract registry-extract
             registry_url="$(npm view "@moewolf/moe-icons-cli@${version}" dist.tarball)"
             [[ "$registry_url" == https://registry.npmjs.org/* ]] || { echo "unexpected registry tarball URL" >&2; exit 1; }
-            curl --fail --location --proto '=https' --proto-redir '=https' "$registry_url" --output registry/package.tgz
+            node scripts/metered-curl.cjs --url "$registry_url" --output registry/package.tgz --transport-report "$RUNNER_TEMP/cli-registry-transport.json"
             tar -xzf "$tgz" -C candidate-extract
             tar -xzf registry/*.tgz -C registry-extract
             (cd candidate-extract && find . -type f | sort | xargs shasum -a 256) > candidate-digests
