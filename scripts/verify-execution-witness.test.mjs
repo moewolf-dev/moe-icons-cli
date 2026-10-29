@@ -29,6 +29,21 @@ test('canonical reused roots are tied to the registry and exact execution before
     assert.equal(report.totals.verifiedDownloads, 2);
     assert.equal(report.complete, false);
     assert.ok(report.bypassRisk.includes('unmeasured-github-api'));
+    const apiRaw = route => Buffer.from(JSON.stringify(api(route)));
+    assert.equal(verifyExecutionWitness({ binding, producer, sourceDispatchId, api, apiRaw, download }).record.recordSha256, record.recordSha256);
+    const measured = JSON.parse(readFileSync(process.env.SMALL_PACK_WITNESS_TRANSPORT_REPORT));
+    const expectedApiBytes = [
+      'repos/moewolf-dev/moe-icons-code-library',
+      `repos/moewolf-dev/moe-icons-code-library/releases/tags/${tag}`,
+      'repos/moewolf-dev/moe-icons-code-library/releases/1/assets?per_page=100&page=1',
+    ].reduce((sum, route) => sum + apiRaw(route).length, 0);
+    assert.equal(measured.totals.responseBytes, payloads[0].length + payloads[1].length + expectedApiBytes);
+    assert.ok(!measured.bypassRisk.includes('unmeasured-github-api'));
+    assert.ok(measured.bypassRisk.includes('partial-consumer-scope'));
+    assert.throws(() => verifyExecutionWitness({ binding, producer, sourceDispatchId, api, apiRaw: () => { throw Error('API unavailable'); }, download }));
+    const failedApi = JSON.parse(readFileSync(process.env.SMALL_PACK_WITNESS_TRANSPORT_REPORT));
+    assert.equal(failedApi.totals.unknownResponses, 1);
+    assert.equal(failedApi.entries[0].responseBytes, null);
     assert.throws(() => verifyExecutionWitness({ binding, producer, sourceDispatchId, api, download: () => { throw Error('network failure'); } }));
     const failed = JSON.parse(readFileSync(process.env.SMALL_PACK_WITNESS_TRANSPORT_REPORT));
     assert.equal(failed.totals.unknownResponses, 1);

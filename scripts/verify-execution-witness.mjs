@@ -14,27 +14,45 @@ const sha256 = value => createHash('sha256').update(value).digest('hex');
 export function verifyExecutionWitness(options) {
   const reportPath = process.env.SMALL_PACK_WITNESS_TRANSPORT_REPORT;
   const recorder = reportPath ? transportTools.createRecorder({ scope: 'execution-witness-read' }) : null;
-  // This recorder measures asset bodies only; the GitHub JSON API lookups are
-  // deliberately marked unknown until the complete consumer meter covers them.
-  if (recorder) recorder.risk('unmeasured-github-api');
+  // This report covers this verifier only, not the enclosing consumer job.
+  if (recorder) recorder.risk('partial-consumer-scope');
   try { return verifyWitness(options, recorder); }
   finally { if (recorder) transportTools.writeReport(reportPath, recorder.report()); }
 }
 
-function verifyWitness({ binding, producer, sourceDispatchId, api, download }, recorder) {
+function verifyWitness({ binding, producer, sourceDispatchId, api, download, apiRaw }, recorder) {
   assert(binding && COMMIT.test(binding.sourceCommit || '') && COMMIT.test(binding.generatorCommit || '')
     && HEX.test(sourceDispatchId || '') && /^[1-9]\d*$/.test(String(producer?.runId))
     && Number.isSafeInteger(producer?.runAttempt) && producer.runAttempt > 0 && COMMIT.test(producer.headSha || '')
     && typeof api === 'function', 'exact identity required');
+  const rawReader = apiRaw || (!download && recorder ? route => execFileSync('gh', ['api', route], { timeout: 30000, maxBuffer: 2 * 1024 * 1024 }) : null);
+  if (recorder && !rawReader) recorder.risk('unmeasured-github-api');
+  const json = route => {
+    if (!recorder || !rawReader) return api(route);
+    let data;
+    try {
+      data = rawReader(route);
+      assert(Buffer.isBuffer(data) && data.length <= 2 * 1024 * 1024, 'API response exceeds budget');
+      const result = JSON.parse(data.toString('utf8'));
+      recorder.record({ callId: route, route: 'github-json-api', attempt: 1, status: 'complete',
+        responseBytes: data.length, deliveredBytes: data.length, digestVerified: null });
+      return result;
+    } catch (error) {
+      const delivered = Buffer.isBuffer(data) ? data.length : Buffer.isBuffer(error.stdout) ? error.stdout.length : null;
+      recorder.record({ callId: route, route: 'github-json-api', attempt: 1, status: 'failed',
+        responseBytes: null, deliveredBytes: delivered, errorClass: 'api-read-or-json' });
+      throw error;
+    }
+  };
   const tag = `candidate-source-v2-${binding.sourceCommit}`;
-  const repo = api(`repos/${REPO}`);
+  const repo = json(`repos/${REPO}`);
   assert(repo.full_name === REPO && repo.private === true && repo.default_branch === 'main', 'private repository authority mismatch');
-  const release = api(`repos/${REPO}/releases/tags/${tag}`);
+  const release = json(`repos/${REPO}/releases/tags/${tag}`);
   assert(release.tag_name === tag && release.draft === false && release.prerelease === true
     && Number.isSafeInteger(release.id) && release.id > 0, 'registry release mismatch');
   const assets = [];
   for (let page = 1; page <= 10; page++) {
-    const list = api(`repos/${REPO}/releases/${release.id}/assets?per_page=100&page=${page}`);
+    const list = json(`repos/${REPO}/releases/${release.id}/assets?per_page=100&page=${page}`);
     assert(Array.isArray(list) && list.length <= 100, 'asset page invalid');
     assets.push(...list); assert(assets.length <= 900, 'asset budget exceeded');
     if (list.length < 100) break;
