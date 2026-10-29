@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { workflowRunPathMatches } from "./workflow-run-path.cjs";
+import { verifyExecutionWitness } from "./verify-execution-witness.mjs";
 
 const fail = message => { throw new Error(`package-set producer verification: ${message}`); };
 const assert = (condition, message) => { if (!condition) fail(message); };
@@ -87,10 +88,10 @@ async function main() {
     && HEX.test(delivery.sourceDispatchId || "") && VERSION.test(delivery.resourceVersion || "")
     && COMMIT.test(delivery.sourceCommit || "") && COMMIT.test(delivery.generatorCommit || ""), "package-set delivery identity is invalid");
   const producer = verifyProducer(delivery.producer, delivery.sourceCommit, delivery.sourceDispatchId);
-  assert(producer.headSha === delivery.generatorCommit, "producer workflow commit differs from the candidate binding");
   const free = validateBinding(delivery.free, "free", delivery);
   const pro = validateBinding(delivery.pro, "pro", delivery);
   assert(free.packageSetSha256 !== pro.packageSetSha256, "Free and Pro package sets must be distinct");
+  if (producer.headSha !== delivery.generatorCommit) verifyExecutionWitness({ binding: { ...delivery, free, pro }, producer, sourceDispatchId: delivery.sourceDispatchId, api: gh });
   const idDigest = sha256(`moe-icons-small-package-plugin-v1\n${delivery.sourceDispatchId}\n${free.packageSetSha256}\n${pro.packageSetSha256}\n`);
   const eventId = `package-set:${delivery.resourceVersion}:${idDigest}`;
   assert(delivery.eventId === eventId, "package-set event ID does not bind Source and both exact candidate sets");

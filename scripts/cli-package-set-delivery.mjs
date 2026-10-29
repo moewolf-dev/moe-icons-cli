@@ -27,7 +27,7 @@ export function buildCliPackageSetDelivery({ resource, receipt, run, publishRunI
   assert(binding.free.packageSetSha256 !== binding.pro.packageSetSha256, 'Free and Pro package-set identities must differ');
   const producer = resource.producer;
   exactKeys(producer, ['repository', 'workflowPath', 'runId', 'runAttempt', 'headSha'], 'candidate producer');
-  assert(producer.repository === 'moewolf-dev/moe-icons-code-library' && producer.workflowPath === '.github/workflows/small-pack-candidate.yml' && /^[1-9]\d*$/.test(String(producer.runId)) && Number.isSafeInteger(producer.runAttempt) && producer.runAttempt > 0 && producer.headSha === resource.generatorCommit, 'candidate producer identity is invalid');
+  assert(producer.repository === 'moewolf-dev/moe-icons-code-library' && producer.workflowPath === '.github/workflows/small-pack-candidate.yml' && /^[1-9]\d*$/.test(String(producer.runId)) && Number.isSafeInteger(producer.runAttempt) && producer.runAttempt > 0 && COMMIT.test(producer.headSha || ''), 'candidate producer identity is invalid');
   const descriptorSha256 = sha256(canonicalBytes(binding));
   const resourceDigest = sha256(`moe-icons-package-set-resource-v1\n${resource.resourceVersion}\n${resource.sourceCommit}\n${resource.generatorCommit}\n${binding.free.packageSetSha256}\n${binding.pro.packageSetSha256}\n`);
   assert(resource.packageSetDescriptorSha256 === descriptorSha256 && resource.packageSetResourceDigest === resourceDigest, 'package-set resource digests mismatch');
