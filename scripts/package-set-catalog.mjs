@@ -334,10 +334,12 @@ async function main() {
   assert(inputBytes.byteLength === stat.size, "package-set binding file changed while being read");
   let bindings;
   try { bindings = JSON.parse(inputBytes.toString("utf8")); } catch { throw new Error("package-set catalog: binding file is not JSON"); }
+  const { ACTIONS_OIDC_MARKER, createActionsOidcFetch } = require("./actions-oidc-fetch.cjs");
+  const apiBaseUrl = process.env.MOEICONS_API_BASE_URL || "https://api.moeicons.com";
+  const token = process.env.PRO_PACKAGE_SET_WORKFLOW_TOKEN;
   const catalog = await fetchPackageSetCatalog({
-    bindings,
-    apiBaseUrl: process.env.MOEICONS_API_BASE_URL || "https://api.moeicons.com",
-    proToken: process.env.PRO_PACKAGE_SET_WORKFLOW_TOKEN,
+    bindings, apiBaseUrl, proToken: token || ACTIONS_OIDC_MARKER,
+    ...(token ? {} : { fetcher: createActionsOidcFetch({ apiBaseUrl }) }),
   });
   const output = `${JSON.stringify(catalog, null, 2)}\n`;
   assert(Buffer.byteLength(output) <= 32 * 1024 * 1024, "generated catalog exceeds 32 MiB");

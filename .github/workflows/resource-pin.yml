@@ -68,6 +68,7 @@ jobs:
     permissions:
       contents: write
       actions: write
+      id-token: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -94,12 +95,9 @@ jobs:
 
       - name: Read only exact Free/Pro metadata packages from Worker
         env:
-          PRO_PACKAGE_SET_WORKFLOW_TOKEN: ${{ secrets.PRO_PACKAGE_SET_WORKFLOW_TOKEN }}
           MOEICONS_API_BASE_URL: https://api.moeicons.com
         run: |
           set -euo pipefail
-          test -n "$PRO_PACKAGE_SET_WORKFLOW_TOKEN" || { echo 'Configure PRO_PACKAGE_SET_WORKFLOW_TOKEN for authenticated Pro package-set reads'; exit 1; }
-          echo "::add-mask::$PRO_PACKAGE_SET_WORKFLOW_TOKEN"
           node scripts/package-set-catalog.mjs "$PACKAGE_SET_ROOT/package-set-binding.json" "$RUNNER_TEMP/package-set-catalog.json"
           catalog_sha="$(shasum -a 256 "$RUNNER_TEMP/package-set-catalog.json" | awk '{print $1}')"
           echo "PACKAGE_SET_CATALOG_SHA=$catalog_sha" >> "$GITHUB_ENV"
