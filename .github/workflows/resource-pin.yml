@@ -85,6 +85,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.CODE_LIBRARY_ARTIFACT_READ_TOKEN || secrets.CODE_LIBRARY_READ_TOKEN }}
           EVENT_ID: ${{ github.event.client_payload.eventId }}
+          SMALL_PACK_WITNESS_TRANSPORT_REPORT: ${{ runner.temp }}/cli-witness-transport.json
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN" || { echo 'Configure CODE_LIBRARY_ARTIFACT_READ_TOKEN with private code-library Actions read access'; exit 1; }
@@ -92,6 +93,15 @@ jobs:
           root="$RUNNER_TEMP/moe-cli-package-set-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "PACKAGE_SET_ROOT=$root" >> "$GITHUB_ENV"
           node scripts/verify-package-set-input.mjs "$root"
+
+      - name: Preserve execution witness transfer evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cli-witness-transport-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cli-witness-transport.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Read only exact Free/Pro metadata packages from Worker
         env:

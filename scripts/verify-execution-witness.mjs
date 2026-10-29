@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import transportTools from './small-pack-consumer-transport.cjs';
 
 const REPO = 'moewolf-dev/moe-icons-code-library', HEX = /^[a-f0-9]{64}$/, COMMIT = /^[a-f0-9]{40}$/;
 const assert = (ok, message) => { if (!ok) throw Error(`execution witness: ${message}`); };
@@ -10,7 +11,17 @@ const canonical = value => Array.isArray(value) ? value.map(canonical) : value &
 const bytes = value => Buffer.from(`${JSON.stringify(canonical(value))}\n`);
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 
-export function verifyExecutionWitness({ binding, producer, sourceDispatchId, api, download }) {
+export function verifyExecutionWitness(options) {
+  const reportPath = process.env.SMALL_PACK_WITNESS_TRANSPORT_REPORT;
+  const recorder = reportPath ? transportTools.createRecorder({ scope: 'execution-witness-read' }) : null;
+  // This recorder measures asset bodies only; the GitHub JSON API lookups are
+  // deliberately marked unknown until the complete consumer meter covers them.
+  if (recorder) recorder.risk('unmeasured-github-api');
+  try { return verifyWitness(options, recorder); }
+  finally { if (recorder) transportTools.writeReport(reportPath, recorder.report()); }
+}
+
+function verifyWitness({ binding, producer, sourceDispatchId, api, download }, recorder) {
   assert(binding && COMMIT.test(binding.sourceCommit || '') && COMMIT.test(binding.generatorCommit || '')
     && HEX.test(sourceDispatchId || '') && /^[1-9]\d*$/.test(String(producer?.runId))
     && Number.isSafeInteger(producer?.runAttempt) && producer.runAttempt > 0 && COMMIT.test(producer.headSha || '')
@@ -34,8 +45,19 @@ export function verifyExecutionWitness({ binding, producer, sourceDispatchId, ap
     const asset = matches[0];
     assert(asset.state === 'uploaded' && Number.isSafeInteger(asset.id) && asset.id > 0 && Number.isSafeInteger(asset.size)
       && asset.size > 0 && asset.size <= 1024 * 1024 && /^sha256:[a-f0-9]{64}$/.test(asset.digest || ''), 'asset metadata invalid');
-    const data = download ? download(asset) : execFileSync('gh', ['api', `repos/${REPO}/releases/assets/${asset.id}`, '-H', 'Accept: application/octet-stream'], { timeout: 30000, maxBuffer: 1024 * 1024 });
-    assert(Buffer.isBuffer(data) && data.length === asset.size && `sha256:${sha256(data)}` === asset.digest, 'asset readback mismatch');
+    let data;
+    try {
+      data = download ? download(asset) : execFileSync('gh', ['api', `repos/${REPO}/releases/assets/${asset.id}`, '-H', 'Accept: application/octet-stream'], { timeout: 30000, maxBuffer: 1024 * 1024 });
+      assert(Buffer.isBuffer(data) && data.length === asset.size && `sha256:${sha256(data)}` === asset.digest, 'asset readback mismatch');
+    } catch (error) {
+      const delivered = Buffer.isBuffer(data) ? data.length : Buffer.isBuffer(error.stdout) ? error.stdout.length : null;
+      recorder?.record({ callId: name, route: 'github-release-asset', attempt: 1, status: 'failed',
+        responseBytes: null, deliveredBytes: delivered, expectedBytes: asset.size, errorClass: 'asset-read-or-digest' });
+      throw error;
+    }
+    recorder?.record({ callId: name, route: 'github-release-asset', attempt: 1, status: 'complete',
+      responseBytes: data.length, deliveredBytes: data.length, expectedBytes: asset.size,
+      contentSha256: asset.digest.slice(7), digestVerified: true });
     let value; try { value = JSON.parse(data); } catch { throw Error('execution witness: asset JSON invalid'); }
     assert(bytes(value).equals(data), 'asset is not canonical JSON'); return value;
   };
