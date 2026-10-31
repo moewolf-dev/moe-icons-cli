@@ -68,6 +68,7 @@ jobs:
     permissions:
       contents: write
       actions: write
+      id-token: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -84,6 +85,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.CODE_LIBRARY_ARTIFACT_READ_TOKEN || secrets.CODE_LIBRARY_READ_TOKEN }}
           EVENT_ID: ${{ github.event.client_payload.eventId }}
+          SMALL_PACK_WITNESS_TRANSPORT_REPORT: ${{ runner.temp }}/cli-witness-transport.json
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN" || { echo 'Configure CODE_LIBRARY_ARTIFACT_READ_TOKEN with private code-library Actions read access'; exit 1; }
@@ -92,14 +94,20 @@ jobs:
           echo "PACKAGE_SET_ROOT=$root" >> "$GITHUB_ENV"
           node scripts/verify-package-set-input.mjs "$root"
 
+      - name: Preserve execution witness transfer evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cli-witness-transport-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cli-witness-transport.json
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Read only exact Free/Pro metadata packages from Worker
         env:
-          PRO_PACKAGE_SET_WORKFLOW_TOKEN: ${{ secrets.PRO_PACKAGE_SET_WORKFLOW_TOKEN }}
           MOEICONS_API_BASE_URL: https://api.moeicons.com
         run: |
           set -euo pipefail
-          test -n "$PRO_PACKAGE_SET_WORKFLOW_TOKEN" || { echo 'Configure PRO_PACKAGE_SET_WORKFLOW_TOKEN for authenticated Pro package-set reads'; exit 1; }
-          echo "::add-mask::$PRO_PACKAGE_SET_WORKFLOW_TOKEN"
           node scripts/package-set-catalog.mjs "$PACKAGE_SET_ROOT/package-set-binding.json" "$RUNNER_TEMP/package-set-catalog.json"
           catalog_sha="$(shasum -a 256 "$RUNNER_TEMP/package-set-catalog.json" | awk '{print $1}')"
           echo "PACKAGE_SET_CATALOG_SHA=$catalog_sha" >> "$GITHUB_ENV"
@@ -172,10 +180,7 @@ jobs:
           EVENT_ID: ${{ github.event.client_payload.eventId }}
         run: |
           set -euo pipefail
-          live="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
-          test "$live" = "$PIN_COMMIT" || { echo 'main drifted after package-set pin; refusing publisher dispatch' >&2; exit 1; }
-          gh workflow run publish.yml --repo "$GITHUB_REPOSITORY" --ref main \
-            -f npm_auth_mode=oidc -f dry_run=false -f break_glass=PUBLISH -f correlation_id="$EVENT_ID"
+          node scripts/reconcile-package-set-publisher.mjs
 
   pin:
     # Retired pin flow downloads the aggregate code-library ZIP for catalog

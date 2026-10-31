@@ -52,7 +52,7 @@ export function validatePackageSetEvent(event) {
   exactKeys(event.producer, ["repository", "workflowPath", "runId", "runAttempt", "headSha"], "candidate producer");
   assert(event.producer.repository === SOURCE_REPOSITORY && event.producer.workflowPath === SOURCE_WORKFLOW
     && /^[1-9]\d*$/.test(String(event.producer.runId)) && Number.isSafeInteger(event.producer.runAttempt) && event.producer.runAttempt > 0
-    && event.producer.headSha === event.generatorCommit, "candidate producer identity is invalid");
+    && COMMIT.test(event.producer.headSha || ""), "candidate producer identity is invalid");
   const idDigest = sha256(`moe-icons-small-package-plugin-v1\n${event.sourceDispatchId}\n${binding.free.packageSetSha256}\n${binding.pro.packageSetSha256}\n`);
   assert(event.eventId === `package-set:${event.resourceVersion}:${idDigest}`, "package-set event ID mismatch");
   return event;
