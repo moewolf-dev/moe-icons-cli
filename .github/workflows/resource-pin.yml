@@ -180,10 +180,7 @@ jobs:
           EVENT_ID: ${{ github.event.client_payload.eventId }}
         run: |
           set -euo pipefail
-          live="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
-          test "$live" = "$PIN_COMMIT" || { echo 'main drifted after package-set pin; refusing publisher dispatch' >&2; exit 1; }
-          gh workflow run publish.yml --repo "$GITHUB_REPOSITORY" --ref main \
-            -f npm_auth_mode=oidc -f dry_run=false -f break_glass=PUBLISH -f correlation_id="$EVENT_ID"
+          node scripts/reconcile-package-set-publisher.mjs
 
   pin:
     # Retired pin flow downloads the aggregate code-library ZIP for catalog

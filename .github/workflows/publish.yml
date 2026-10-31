@@ -418,7 +418,7 @@ jobs:
           # is flat (tgz + sidecars at the same level); download keeps that layout.
           path: ${{ runner.temp }}/candidate
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
   acceptance:
     needs: [decide, pack]
