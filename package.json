@@ -1,6 +1,6 @@
 {
   "name": "@moewolf/moe-icons-cli",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "description": "Moeicons CLI: install React, Vue, Vanilla, or Assets icon targets, manage releases and login, and expose an MCP server.",
   "type": "module",
   "main": "./dist/cli.js",
@@ -74,5 +74,5 @@
     "fflate": "^0.8.2",
     "jsonc-parser": "^3.3.1"
   },
-  "payloadHash": "9f0f6d1ff7670d165c423a88ec833e14f62496dd4378b339f13719885764b5d0"
+  "payloadHash": "c453cb7f4725db607e0f5ae585dbe2927cf30060ce485c5695809228c5d187f1"
 }
