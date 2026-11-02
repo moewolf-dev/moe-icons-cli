@@ -142,6 +142,8 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
     expect(sleeps).toEqual([1000, 2000]);
     expect(commands).toHaveLength(5);
     expect(commands[2]).toContain("npx --yes --prefer-online");
+    // Scoped packages do not run by package name; the published bin is `moeicons`.
+    expect(commands[2]).toContain("--package @moewolf/moe-icons-cli@0.0.11 moeicons --version");
   });
 
   it("stops immediately for non-transient npm authorization failures", async () => {

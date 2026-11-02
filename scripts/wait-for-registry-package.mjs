@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
+const BIN_NAME = 'moeicons';
 const RETRY_DELAYS_MS = [10_000, 20_000, 40_000, 60_000];
 const MAX_WAIT_MS = 30 * 60 * 1000;
 const COMMAND_TIMEOUT_MS = 90_000;
@@ -47,7 +48,11 @@ export async function waitForRegistryPackage({
     attempt += 1;
     const metadata = runCommand('npm', ['view', `${packageName}@${version}`, 'version', '--prefer-online']);
     if (metadata.status === 0) {
-      const smoke = runCommand('npx', ['--yes', '--prefer-online', `${packageName}@${version}`, '--version']);
+      // Scoped packages do not run by package name: npx resolves a bin named
+      // after the package (without scope), and this package's bin is `moeicons`.
+      // Name the bin explicitly so the smoke test exercises the published CLI
+      // instead of failing with exit 127 (command not found).
+      const smoke = runCommand('npx', ['--yes', '--prefer-online', '--package', `${packageName}@${version}`, BIN_NAME, '--version']);
       if (smoke.status === 0) {
         return {
           packageName,
