@@ -1,4 +1,7 @@
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const BIN_NAME = 'moeicons';
@@ -20,7 +23,7 @@ function isRetryableRegistryFailure(result) {
   return /(?:\bE404\b|\b404\s+Not Found\b|\b(?:429|500|502|503|504)\b|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|temporary failure|temporarily unavailable|connection reset|unexpected EOF|context deadline exceeded)/i.test(output);
 }
 
-function runNpm(command, args) {
+function runNpm(command, args, options = {}) {
   const env = { ...process.env, NPM_CONFIG_USERCONFIG: '/dev/null' };
   delete env.NODE_AUTH_TOKEN;
   delete env.NPM_TOKEN;
@@ -28,7 +31,13 @@ function runNpm(command, args) {
     encoding: 'utf8',
     timeout: COMMAND_TIMEOUT_MS,
     env,
+    ...(options.cwd ? { cwd: options.cwd } : {}),
   });
+}
+
+function failureOutput(result) {
+  const output = `${result?.stderr || ''}\n${result?.stdout || ''}`.trim().slice(-800);
+  return output ? `: ${output}` : '';
 }
 
 export async function waitForRegistryPackage({
@@ -39,44 +48,56 @@ export async function waitForRegistryPackage({
   now = Date.now,
   maxWaitMs = MAX_WAIT_MS,
   retryDelaysMs = RETRY_DELAYS_MS,
+  smokeDir = null,
 } = {}) {
   validateIdentity(packageName, version);
   const startedAt = now();
   let attempt = 0;
   let lastFailure = null;
-  while (now() - startedAt < maxWaitMs) {
-    attempt += 1;
-    const metadata = runCommand('npm', ['view', `${packageName}@${version}`, 'version', '--prefer-online']);
-    if (metadata.status === 0) {
-      // Scoped packages do not run by package name: npx resolves a bin named
-      // after the package (without scope), and this package's bin is `moeicons`.
-      // Name the bin explicitly so the smoke test exercises the published CLI
-      // instead of failing with exit 127 (command not found).
-      const smoke = runCommand('npx', ['--yes', '--prefer-online', '--package', `${packageName}@${version}`, BIN_NAME, '--version']);
-      if (smoke.status === 0) {
-        return {
-          packageName,
-          version,
-          attempts: attempt,
-          elapsedMs: Math.max(0, now() - startedAt),
-          smokeOutput: String(smoke.stdout || '').trim(),
-        };
+  // npm exec treats a requested package that matches the current project's
+  // name and version as already installed and never fetches it. The release
+  // workflow runs this script from the package root, so the smoke must run from
+  // a clean directory that has no package.json; otherwise npx falls back to a
+  // shell lookup and fails with exit 127 (`moeicons: not found`).
+  const ownedSmokeDir = smokeDir ? null : fs.mkdtempSync(path.join(os.tmpdir(), 'moeicons-npm-smoke-'));
+  const smokeCwd = smokeDir || ownedSmokeDir;
+  try {
+    while (now() - startedAt < maxWaitMs) {
+      attempt += 1;
+      const metadata = runCommand('npm', ['view', `${packageName}@${version}`, 'version', '--prefer-online']);
+      if (metadata.status === 0) {
+        // Scoped packages do not run by package name: npx resolves a bin named
+        // after the package (without scope), and this package's bin is `moeicons`.
+        // Name the bin explicitly so the smoke test exercises the published CLI
+        // instead of failing with exit 127 (command not found).
+        const smoke = runCommand('npx', ['--yes', '--prefer-online', '--package', `${packageName}@${version}`, BIN_NAME, '--version'], { cwd: smokeCwd });
+        if (smoke.status === 0) {
+          return {
+            packageName,
+            version,
+            attempts: attempt,
+            elapsedMs: Math.max(0, now() - startedAt),
+            smokeOutput: String(smoke.stdout || '').trim(),
+          };
+        }
+        lastFailure = { command: 'npx package smoke', result: smoke };
+        if (!isRetryableRegistryFailure(smoke)) {
+          throw new Error(`published package smoke failed permanently (exit ${smoke.status ?? 'unknown'})${failureOutput(smoke)}`);
+        }
+      } else {
+        lastFailure = { command: 'npm registry metadata lookup', result: metadata };
+        if (!isRetryableRegistryFailure(metadata)) {
+          throw new Error(`npm registry lookup failed permanently (exit ${metadata.status ?? 'unknown'})${failureOutput(metadata)}`);
+        }
       }
-      lastFailure = { command: 'npx package smoke', result: smoke };
-      if (!isRetryableRegistryFailure(smoke)) {
-        throw new Error(`published package smoke failed permanently (exit ${smoke.status ?? 'unknown'})`);
-      }
-    } else {
-      lastFailure = { command: 'npm registry metadata lookup', result: metadata };
-      if (!isRetryableRegistryFailure(metadata)) {
-        throw new Error(`npm registry lookup failed permanently (exit ${metadata.status ?? 'unknown'})`);
-      }
-    }
 
-    const elapsed = now() - startedAt;
-    if (elapsed >= maxWaitMs) break;
-    const delay = retryDelaysMs[Math.min(attempt - 1, retryDelaysMs.length - 1)];
-    await sleep(Math.min(delay, maxWaitMs - elapsed));
+      const elapsed = now() - startedAt;
+      if (elapsed >= maxWaitMs) break;
+      const delay = retryDelaysMs[Math.min(attempt - 1, retryDelaysMs.length - 1)];
+      await sleep(Math.min(delay, maxWaitMs - elapsed));
+    }
+  } finally {
+    if (ownedSmokeDir) fs.rmSync(ownedSmokeDir, { recursive: true, force: true });
   }
 
   const output = `${lastFailure?.result?.stderr || ''}\n${lastFailure?.result?.stdout || ''}`.trim().slice(-800);

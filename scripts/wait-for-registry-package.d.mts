@@ -8,11 +8,12 @@ export interface RegistryCommandResult {
 export interface WaitForRegistryPackageOptions {
   packageName: string;
   version: string;
-  runCommand?: (command: string, args: string[]) => RegistryCommandResult;
+  runCommand?: (command: string, args: string[], options?: { cwd?: string }) => RegistryCommandResult;
   sleep?: (milliseconds: number) => Promise<void>;
   now?: () => number;
   maxWaitMs?: number;
   retryDelaysMs?: number[];
+  smokeDir?: string | null;
 }
 
 export interface WaitForRegistryPackageResult {
