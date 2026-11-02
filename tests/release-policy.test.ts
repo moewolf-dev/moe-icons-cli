@@ -158,7 +158,7 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
   });
 
   it("runs the published smoke outside the package project so npm exec fetches the tarball", async () => {
-    const calls: Array<{ command: string; cwd?: string }> = [];
+    const calls: Array<{ command: string; cwd?: string | undefined }> = [];
     const result = await waitForRegistryPackage({
       packageName: "@moewolf/moe-icons-cli",
       version: "0.0.15",
