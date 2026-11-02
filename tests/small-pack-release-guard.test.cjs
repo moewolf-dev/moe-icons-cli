@@ -62,9 +62,12 @@ test('every job that runs repository scripts repairs the workspace first', () =>
       const texts = steps.map(step => step.join('\n'));
       const needsRepair = texts.findIndex(text => /(node scripts\/|bash \.github\/scripts|node \.github\/scripts)/.test(text));
       if (needsRepair < 0) continue;
-      const repairs = texts.findIndex(text => text.includes('- name: Repair a missing-file workspace'));
+      const repairs = texts.findIndex(text => text.includes('- name: Repair a sparse or incomplete runner workspace'));
       assert.ok(repairs >= 0, `${name}:${job} runs a repository script without a workspace repair step`);
       assert.ok(repairs < needsRepair, `${name}:${job} must repair the workspace before running a repository script`);
+      // `git add` refuses tracked paths outside a sparse definition, so the
+      // repair must drop the sparse state, not only re-materialise the files.
+      assert.match(texts[repairs], /core\.sparseCheckout/, `${name}:${job} repair step must clear sparse-checkout state`);
     }
   }
 });

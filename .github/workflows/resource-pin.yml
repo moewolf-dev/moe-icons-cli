@@ -75,18 +75,25 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Repair a missing-file workspace
-        # The shared runner workspace can report the exact SHA while tracked
-        # files are absent. Detect a missing tracked file and rebuild the index
-        # and working tree from HEAD. Nothing closes the listing pipe early, so
-        # `pipefail` cannot turn the probe into SIGPIPE noise.
+      - name: Repair a sparse or incomplete runner workspace
+        # A job that sparse-checks out this repository leaves core.sparseCheckout
+        # (and skip-worktree entries) in the shared runner workspace. Later jobs
+        # then report the exact SHA while files are missing, and `git add` refuses
+        # paths outside the sparse definition. Tear the sparse state down, then
+        # rebuild the index and working tree from HEAD.
         run: |
           set -euo pipefail
+          sparse=false
+          if [ "$(git config --get core.sparseCheckout || true)" = true ]; then sparse=true; fi
+          skipped="$(git ls-files -v | grep -c '^S ' || true)"
           missing=0
           while IFS= read -r -d '' path; do
             [ -e "$path" ] || { missing=1; break; }
           done < <(git ls-files -z)
-          if [ "$missing" = 1 ]; then
+          if [ "$sparse" = true ] || [ "${skipped:-0}" != 0 ] || [ "$missing" = 1 ]; then
+            git config --local --unset-all core.sparseCheckout || true
+            git config --local --unset-all extensions.worktreeConfig || true
+            rm -f .git/info/sparse-checkout
             rm -f .git/index
             git reset -q
             git checkout-index -a -f
@@ -210,18 +217,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Repair a missing-file workspace
-        # The shared runner workspace can report the exact SHA while tracked
-        # files are absent. Detect a missing tracked file and rebuild the index
-        # and working tree from HEAD. Nothing closes the listing pipe early, so
-        # `pipefail` cannot turn the probe into SIGPIPE noise.
+      - name: Repair a sparse or incomplete runner workspace
+        # A job that sparse-checks out this repository leaves core.sparseCheckout
+        # (and skip-worktree entries) in the shared runner workspace. Later jobs
+        # then report the exact SHA while files are missing, and `git add` refuses
+        # paths outside the sparse definition. Tear the sparse state down, then
+        # rebuild the index and working tree from HEAD.
         run: |
           set -euo pipefail
+          sparse=false
+          if [ "$(git config --get core.sparseCheckout || true)" = true ]; then sparse=true; fi
+          skipped="$(git ls-files -v | grep -c '^S ' || true)"
           missing=0
           while IFS= read -r -d '' path; do
             [ -e "$path" ] || { missing=1; break; }
           done < <(git ls-files -z)
-          if [ "$missing" = 1 ]; then
+          if [ "$sparse" = true ] || [ "${skipped:-0}" != 0 ] || [ "$missing" = 1 ]; then
+            git config --local --unset-all core.sparseCheckout || true
+            git config --local --unset-all extensions.worktreeConfig || true
+            rm -f .git/info/sparse-checkout
             rm -f .git/index
             git reset -q
             git checkout-index -a -f
