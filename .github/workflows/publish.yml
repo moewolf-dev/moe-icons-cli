@@ -503,10 +503,15 @@ jobs:
           echo "- release tag: \`${{ needs.pack.outputs.release_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
 
   # P0-6: draft -> upload+readback -> npm (publish or verify) -> finalize.
+  # PROVENANCE-HOSTED: `npm publish --provenance` is rejected by the npm registry
+  # (HTTP 422, "Unsupported GitHub Actions runner environment: self-hosted"); only
+  # GitHub-hosted runners may mint the sigstore provenance bundle. This repository
+  # is public, so provenance is permitted. Keep this job on GitHub-hosted even
+  # though the build/acceptance jobs stay on the self-hosted runners.
   publish:
     needs: [decide, pack, acceptance, recover]
     if: always() && (needs.acceptance.result == 'success' || needs.recover.result == 'success')
-    runs-on: [self-hosted, Linux, X64, moe-ci-server]
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: npm-publish
     permissions:
