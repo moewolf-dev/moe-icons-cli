@@ -20,13 +20,17 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Repair a missing-file workspace
-        # A sparse-checkout or index-bit job on the shared runner can leave the
-        # tree reporting the exact SHA while tracked files are absent. Detect a
-        # missing tracked file and rebuild the index and working tree from HEAD.
+        # The shared runner workspace can report the exact SHA while tracked
+        # files are absent. Detect a missing tracked file and rebuild the index
+        # and working tree from HEAD. Nothing closes the listing pipe early, so
+        # `pipefail` cannot turn the probe into SIGPIPE noise.
         run: |
           set -euo pipefail
-          missing="$(git ls-files -z | tr '\0' '\n' | while IFS= read -r path; do [ -e "$path" ] || echo "$path"; done | head -n 1)"
-          if [ -n "$missing" ]; then
+          missing=0
+          while IFS= read -r -d '' path; do
+            [ -e "$path" ] || { missing=1; break; }
+          done < <(git ls-files -z)
+          if [ "$missing" = 1 ]; then
             rm -f .git/index
             git reset -q
             git checkout-index -a -f
