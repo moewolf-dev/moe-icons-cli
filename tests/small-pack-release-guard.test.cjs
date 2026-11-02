@@ -35,6 +35,39 @@ test('publish receipt persistence runs the gh-backed script with an explicit tok
   assert.match(step, /GH_TOKEN: \$\{\{ github\.token \}\}/, 'gh needs an explicit token outside the runner default');
 });
 
+test('every job that reads repository scripts repairs a stale sparse workspace first', () => {
+  // A failed sparse-checkout job on the shared self-hosted runner can leave
+  // skip-worktree index entries: actions/checkout then reports the exact SHA
+  // while files are absent, so `.github/scripts/...` disappears and every later
+  // job dies at its first repo script, including recovery jobs.
+  const directory = join(__dirname, '../.github/workflows');
+  for (const name of readdirSync(directory).filter(file => file.endsWith('.yml'))) {
+    const text = readFileSync(join(directory, name), 'utf8');
+    const prepares = text.split('- name: Prepare auxiliary runner tools').length - 1;
+    const repairs = text.split('- name: Repair a workspace left in sparse-checkout mode').length - 1;
+    if (prepares > 0) assert.equal(repairs, prepares, `${name}: every auxiliary-tool step needs a workspace repair step`);
+  }
+});
+
+test('no workflow sparse-checks out the shared workspace root', () => {
+  // Sparse-checkout state lives in the shared workspace git dir. Sparse-checking
+  // out the main repository (no `path:`) poisons every later job on that runner;
+  // sparse checkouts are only allowed for extra checkouts into a subdirectory.
+  const directory = join(__dirname, '../.github/workflows');
+  for (const name of readdirSync(directory).filter(file => file.endsWith('.yml'))) {
+    const lines = readFileSync(join(directory, name), 'utf8').split('\n');
+    lines.forEach((line, index) => {
+      if (!/^\s+- uses: actions\/checkout@/.test(line)) return;
+      const indent = line.match(/^\s*/)[0];
+      let end = index + 1;
+      while (end < lines.length && !new RegExp(`^${indent}- `).test(lines[end])) end += 1;
+      const block = lines.slice(index, end).join('\n');
+      if (!/sparse-checkout:/.test(block)) return;
+      assert.match(block, /^\s+path:/m, `${name}: main-repo checkout must not use sparse-checkout`);
+    });
+  }
+});
+
 test('legacy aggregate pin input is rejected before checkout, secrets, or asset transfer', () => {
   const job = workflow.match(/^  small-pack-policy:\n([\s\S]*?)(?=^  [\w-]+:|$(?![\s\S]))/m)?.[1];
   assert.ok(job, 'legacy-entry policy job required');
