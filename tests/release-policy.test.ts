@@ -157,6 +157,39 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
     expect(runCommand).toHaveBeenCalledTimes(1);
   });
 
+  it("runs the published smoke outside the package project so npm exec fetches the tarball", async () => {
+    const calls: Array<{ command: string; cwd?: string }> = [];
+    const result = await waitForRegistryPackage({
+      packageName: "@moewolf/moe-icons-cli",
+      version: "0.0.15",
+      runCommand: (command, args, options) => {
+        calls.push({ command: `${command} ${args.join(" ")}`, cwd: options?.cwd });
+        return { status: 0, stdout: "0.0.15\n" };
+      },
+    });
+    expect(result.smokeOutput).toBe("0.0.15");
+    const smoke = calls.find((call) => call.command.startsWith("npx "));
+    expect(smoke?.cwd).toBeTruthy();
+    expect(smoke?.cwd).not.toBe(process.cwd());
+    // Publish CLI runs this script from the package root, where package.json
+    // already carries the same name/version. npm exec then treats the request
+    // as a local install, never downloads the tarball, and fails with 127.
+    expect(fs.existsSync(path.join(String(smoke?.cwd), "package.json"))).toBe(false);
+    // The temporary smoke directory is removed once the wait completes.
+    expect(fs.existsSync(String(smoke?.cwd))).toBe(false);
+  });
+
+  it("reports the published smoke stderr when the package cannot run", async () => {
+    await expect(waitForRegistryPackage({
+      packageName: "@moewolf/moe-icons-cli",
+      version: "0.0.15",
+      runCommand: (command) => command === "npx"
+        ? { status: 127, stderr: "sh: 1: moeicons: not found" }
+        : { status: 0, stdout: "0.0.15\n" },
+      sleep: async () => { throw new Error("unexpected retry"); },
+    })).rejects.toThrow(/moeicons: not found/);
+  });
+
   it("auto-resumes only one exact publish candidate after a recognized registry timeout", () => {
     const parentRun = { path: ".github/workflows/publish.yml", head_branch: "main", conclusion: "failure" };
     const jobs = [{
