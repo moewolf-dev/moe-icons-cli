@@ -153,6 +153,23 @@ it("fetches exact Free/Pro candidate sets and merges verified scoped metadata in
   assert.ok(f.calls.every(url => url.searchParams.get("packageSetSha256") === f.bindings[url.pathname.includes("/pro/") ? "pro" : "free"].packageSetSha256));
 });
 
+it("accepts content-encoded candidate JSON whose Content-Length describes the compressed body", async () => {
+  const { fetchPackageSetCatalog } = await metadataModule;
+  const f = fixture();
+  const encodedFetcher: typeof fetch = async (request, init) => {
+    const url = new URL(request instanceof Request ? request.url : request.toString());
+    const response = await f.fetcher(request, init);
+    if (url.pathname.endsWith("/root") || /\/pages\/\d+$/.test(url.pathname)) {
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      return new Response(bytes, { headers: { "content-encoding": "gzip", "content-length": "100" } });
+    }
+    return response;
+  };
+  const catalog = await fetchPackageSetCatalog({ bindings: f.bindings, proToken: "t".repeat(40), fetcher: encodedFetcher });
+  assert.equal(catalog.catalogVersion, version);
+  assert.deepEqual(catalog.styleGroups.map((group: any) => group.id), ["moe-game-blue", "moe-outline"]);
+});
+
 it("rejects Pro-set reads without the workflow credential before issuing requests", async () => {
   const { fetchPackageSetCatalog } = await metadataModule;
   const f = fixture();

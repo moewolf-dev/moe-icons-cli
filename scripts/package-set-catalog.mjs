@@ -51,11 +51,15 @@ function validateBindings(value) {
 
 async function readBoundedBody(response, maximumBytes, expectedBytes, label) {
   const declared = response.headers.get("content-length");
+  // fetch decodes Content-Encoding, so a compressed Content-Length cannot be
+  // compared with the decoded binding byte count.
+  const encoding = (response.headers.get("content-encoding") || "").trim().toLowerCase();
+  const lengthComparable = encoding === "" || encoding === "identity";
   if (declared !== null) {
     assert(/^\d+$/.test(declared), `${label} Content-Length is invalid`);
     const size = Number(declared);
     assert(Number.isSafeInteger(size) && size <= maximumBytes, `${label} exceeds its byte budget`);
-    if (expectedBytes !== undefined) assert(size === expectedBytes, `${label} Content-Length differs from its binding`);
+    if (expectedBytes !== undefined && lengthComparable) assert(size === expectedBytes, `${label} Content-Length differs from its binding`);
   }
   assert(response.body, `${label} body is missing`);
   const reader = response.body.getReader();
