@@ -19,17 +19,16 @@ jobs:
       MOEICONS_PACKAGE_MAKER_REPO: ${{ github.workspace }}/moe-icons-package-maker
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Repair a workspace left in sparse-checkout mode
-        # A failed sparse-checkout job can leave skip-worktree index entries, so
-        # actions/checkout reports the exact SHA while files are absent. Clear the
-        # bits and re-materialise the tracked tree before any script reads it.
+      - name: Repair a missing-file workspace
+        # A sparse-checkout or index-bit job on the shared runner can leave the
+        # tree reporting the exact SHA while tracked files are absent. Detect a
+        # missing tracked file and rebuild the index and working tree from HEAD.
         run: |
           set -euo pipefail
-          skipped="$(git ls-files -v | sed -n 's/^S //p')"
-          if [ -n "$skipped" ]; then
-            printf '%s\n' "$skipped" | while IFS= read -r path; do
-              git update-index --no-skip-worktree -- "$path"
-            done
+          missing="$(git ls-files -z | tr '\0' '\n' | while IFS= read -r path; do [ -e "$path" ] || echo "$path"; done | head -n 1)"
+          if [ -n "$missing" ]; then
+            rm -f .git/index
+            git reset -q
             git checkout-index -a -f
           fi
       - name: Checkout shared contract fixture authority

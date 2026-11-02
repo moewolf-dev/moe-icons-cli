@@ -35,17 +35,37 @@ test('publish receipt persistence runs the gh-backed script with an explicit tok
   assert.match(step, /GH_TOKEN: \$\{\{ github\.token \}\}/, 'gh needs an explicit token outside the runner default');
 });
 
-test('every job that reads repository scripts repairs a stale sparse workspace first', () => {
-  // A failed sparse-checkout job on the shared self-hosted runner can leave
-  // skip-worktree index entries: actions/checkout then reports the exact SHA
-  // while files are absent, so `.github/scripts/...` disappears and every later
-  // job dies at its first repo script, including recovery jobs.
+function workflowJobs(text) {
+  const jobs = {};
+  let current = null;
+  let step = null;
+  for (const line of text.split('\n')) {
+    const head = line.match(/^  ([A-Za-z0-9_-]+):\s*$/);
+    if (head) { current = head[1]; jobs[current] = []; step = null; continue; }
+    if (current === null) continue;
+    if (/^      - /.test(line)) { step = [line]; jobs[current].push(step); continue; }
+    if (step) step.push(line);
+  }
+  return jobs;
+}
+
+test('every job that runs repository scripts repairs the workspace first', () => {
+  // The shared self-hosted runner workspace can end up reporting the exact SHA
+  // while tracked files are absent (failed sparse-checkout, index bits, or a
+  // half-cleaned tree). Any job that then shells out to `.github/scripts/...`
+  // or `scripts/...` dies on a missing file, including recovery jobs, so each
+  // such job must run the repair step before its first repository script.
   const directory = join(__dirname, '../.github/workflows');
   for (const name of readdirSync(directory).filter(file => file.endsWith('.yml'))) {
-    const text = readFileSync(join(directory, name), 'utf8');
-    const prepares = text.split('- name: Prepare auxiliary runner tools').length - 1;
-    const repairs = text.split('- name: Repair a workspace left in sparse-checkout mode').length - 1;
-    if (prepares > 0) assert.equal(repairs, prepares, `${name}: every auxiliary-tool step needs a workspace repair step`);
+    const jobs = workflowJobs(readFileSync(join(directory, name), 'utf8'));
+    for (const [job, steps] of Object.entries(jobs)) {
+      const texts = steps.map(step => step.join('\n'));
+      const needsRepair = texts.findIndex(text => /(node scripts\/|bash \.github\/scripts|node \.github\/scripts)/.test(text));
+      if (needsRepair < 0) continue;
+      const repairs = texts.findIndex(text => text.includes('- name: Repair a missing-file workspace'));
+      assert.ok(repairs >= 0, `${name}:${job} runs a repository script without a workspace repair step`);
+      assert.ok(repairs < needsRepair, `${name}:${job} must repair the workspace before running a repository script`);
+    }
   }
 });
 
