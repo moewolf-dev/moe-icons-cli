@@ -75,6 +75,19 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Repair a workspace left in sparse-checkout mode
+        # A failed sparse-checkout job can leave skip-worktree index entries, so
+        # actions/checkout reports the exact SHA while files are absent. Clear the
+        # bits and re-materialise the tracked tree before any script reads it.
+        run: |
+          set -euo pipefail
+          skipped="$(git ls-files -v | sed -n 's/^S //p')"
+          if [ -n "$skipped" ]; then
+            printf '%s\n' "$skipped" | while IFS= read -r path; do
+              git update-index --no-skip-worktree -- "$path"
+            done
+            git checkout-index -a -f
+          fi
       - name: Prepare auxiliary runner tools
         run: bash .github/scripts/prepare-auxiliary-runner.sh
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -194,6 +207,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Repair a workspace left in sparse-checkout mode
+        # A failed sparse-checkout job can leave skip-worktree index entries, so
+        # actions/checkout reports the exact SHA while files are absent. Clear the
+        # bits and re-materialise the tracked tree before any script reads it.
+        run: |
+          set -euo pipefail
+          skipped="$(git ls-files -v | sed -n 's/^S //p')"
+          if [ -n "$skipped" ]; then
+            printf '%s\n' "$skipped" | while IFS= read -r path; do
+              git update-index --no-skip-worktree -- "$path"
+            done
+            git checkout-index -a -f
+          fi
       - name: Prepare auxiliary runner tools
         run: bash .github/scripts/prepare-auxiliary-runner.sh
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
