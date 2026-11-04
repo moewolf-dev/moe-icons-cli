@@ -36,7 +36,9 @@ function tarEntry(name: string, body: Buffer): Buffer {
 function metadataPackage(tier: "free" | "pro", groupId: string, icons: string[]) {
   const catalog = {
     schemaVersion: 1,
-    styleGroups: [{ id: groupId, type: "outline", tiers: ["free", "pro"], formats: ["svg"], imageSizes: [] }],
+    // The Generator metadata packages carry website presentation fields; the CLI
+    // catalog must project them out instead of shipping them in catalog.json.
+    styleGroups: [{ id: groupId, type: "outline", tiers: ["free", "pro"], formats: ["svg"], imageSizes: [], label: groupId, order: 1 }],
     icons: icons.map(id => ({ id, name: id, prefix: id.split("-")[0], label: id, aliases: [], keywords: [], categories: [], targets: ["react", "vue", "vanilla", "assets"], variants: [groupId], availableIn: [groupId] })),
   };
   const manual = Buffer.from(`# ${tier} ${groupId}\n`);
@@ -144,6 +146,15 @@ it("fetches exact Free/Pro candidate sets and merges verified scoped metadata in
   assert.equal(catalog.schemaVersion, 1);
   assert.equal(catalog.manifestSchemaVersion, 2);
   assert.deepEqual(catalog.styleGroups.map((group: any) => group.id), ["moe-game-blue", "moe-outline"]);
+  // The pinned CLI catalog must match CatalogStyleGroup exactly; the metadata
+  // presentation fields (`label`, `order`) belong to the website, not the CLI.
+  for (const group of catalog.styleGroups as Array<Record<string, unknown>>) {
+    assert.deepEqual(Object.keys(group).sort(), ["formats", "id", "imageSizes", "tiers", "type"]);
+  }
+  const { validatePackageSetCatalog } = await import("../scripts/refresh-bundled-catalog.mjs") as {
+    validatePackageSetCatalog(value: unknown): Record<string, unknown>;
+  };
+  assert.equal(validatePackageSetCatalog(catalog).groupCount, 2);
   assert.deepEqual(catalog.icons.map((icon: any) => icon.id), ["archive-box", "pixel-sword"]);
   assert.equal(catalog.icons.find((icon: any) => icon.id === "pixel-sword").availableIn[0], "moe-game-blue");
   const downloaded = f.calls.map(url => /\/packages\/([a-f0-9]{64})\.tgz$/.exec(url.pathname)?.[1]).filter(Boolean);

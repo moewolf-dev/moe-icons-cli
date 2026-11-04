@@ -250,6 +250,26 @@ function stripScopedIcon(icon) {
   return rest;
 }
 
+const CLI_STYLE_GROUP_KEYS = ["id", "type", "tiers", "formats", "imageSizes", "variants"];
+/**
+ * The metadata packages carry website/marketplace presentation fields (`label`
+ * and `order`) that are not part of the CLI catalog contract
+ * (`CatalogStyleGroup` in src/catalog/catalog.ts, exactly
+ * id/type/tiers/formats/imageSizes/variants). Project them out so the pinned
+ * `src/catalog/catalog.json` keeps the exact CLI schema, and refuse any other
+ * unknown field instead of silently shipping it.
+ */
+function catalogStyleGroup(group) {
+  const { label, order, ...rest } = group || {};
+  assert(typeof label === "string" && label.length > 0 && Number.isSafeInteger(order),
+    `catalog group ${group?.id} presentation is invalid`);
+  assert(Object.keys(rest).every(key => CLI_STYLE_GROUP_KEYS.includes(key))
+    && typeof rest.id === "string" && typeof rest.type === "string"
+    && Array.isArray(rest.tiers) && Array.isArray(rest.formats) && Array.isArray(rest.imageSizes),
+  `catalog group ${group?.id} has unsupported fields`);
+  return rest;
+}
+
 function mergeCatalogs(binding, freeGroups, proGroups) {
   const freeById = new Map(freeGroups.map(catalog => [catalog.styleGroups[0].id, catalog]));
   const proById = new Map(proGroups.map(catalog => [catalog.styleGroups[0].id, catalog]));
@@ -286,7 +306,7 @@ function mergeCatalogs(binding, freeGroups, proGroups) {
     sourceCommit: binding.sourceCommit,
     generatorCommit: binding.generatorCommit,
     manifestSchemaVersion: 2,
-    styleGroups: [...proById.values()].map(value => value.styleGroups[0]).sort((a, b) => a.id.localeCompare(b.id, "en")),
+    styleGroups: [...proById.values()].map(value => catalogStyleGroup(value.styleGroups[0])).sort((a, b) => a.id.localeCompare(b.id, "en")),
     icons: [...iconsById.values()].map(icon => ({
       ...icon,
       availableIn: [...new Set(icon.availableIn)].sort((a, b) => a.localeCompare(b, "en")),
