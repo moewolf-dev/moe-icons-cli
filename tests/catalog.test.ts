@@ -12,8 +12,12 @@ describe("bundled catalog", () => {
       [...catalog.styleGroups].map((group) => group.id).sort(),
     );
     expect(findCatalogStyleGroup("moe-outline")?.tiers).toEqual(["free", "pro"]);
-    expect(catalog.styleGroups.map((group) => group.id)).toEqual([...freePolicy.freeStyleGroups].sort());
-    expect(catalog.styleGroups.every((group) => group.tiers.includes("free"))).toBe(true);
+    // Package-set catalogs pin both the Free and Pro roots, so Pro-only groups
+    // are part of the bundle. Every group reachable by the Free tier must still
+    // be inside the frozen policy, and no group may declare an unknown tier.
+    const freeGroups = catalog.styleGroups.filter((group) => group.tiers.includes("free")).map((group) => group.id).sort();
+    expect(freeGroups).toEqual([...freePolicy.freeStyleGroups].sort());
+    expect(catalog.styleGroups.every((group) => group.tiers.every((tier) => tier === "free" || tier === "pro"))).toBe(true);
   });
 
   it("indexes complete icon IDs and their availability", () => {

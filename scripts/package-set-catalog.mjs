@@ -250,6 +250,51 @@ function stripScopedIcon(icon) {
   return rest;
 }
 
+const CLI_STYLE_GROUP_KEYS = ["id", "type", "tiers", "formats", "imageSizes", "variants"];
+/**
+ * The metadata packages carry website/marketplace presentation fields (`label`
+ * and `order`) that are not part of the CLI catalog contract
+ * (`CatalogStyleGroup` in src/catalog/catalog.ts, exactly
+ * id/type/tiers/formats/imageSizes/variants). Project them out so the pinned
+ * `src/catalog/catalog.json` keeps the exact CLI schema, and refuse any other
+ * unknown field instead of silently shipping it.
+ */
+function catalogStyleGroup(group) {
+  const { label, order, ...rest } = group || {};
+  assert(typeof label === "string" && label.length > 0 && Number.isSafeInteger(order),
+    `catalog group ${group?.id} presentation is invalid`);
+  assert(Object.keys(rest).every(key => CLI_STYLE_GROUP_KEYS.includes(key))
+    && typeof rest.id === "string" && typeof rest.type === "string"
+    && Array.isArray(rest.tiers) && Array.isArray(rest.formats) && Array.isArray(rest.imageSizes),
+  `catalog group ${group?.id} has unsupported fields`);
+  return rest;
+}
+
+/**
+ * The npm bundle must never carry Pro identifiers: the publish leak scan
+ * (scripts/scan-bundle.mjs) forbids every non-Free style-group id and variant
+ * id derived from the Pro manifest, and tests/catalog.test.ts pins the bundled
+ * catalog to the frozen Free policy. The pinned CLI catalog is therefore the
+ * Free projection of the verified Free+Pro metadata, while
+ * resource-release.json keeps both immutable roots.
+ */
+function freeCatalog(catalog, freeById) {
+  const freeGroupIds = new Set(freeById.keys());
+  const styleGroups = catalog.styleGroups.filter(group => freeGroupIds.has(group.id));
+  const icons = catalog.icons
+    .map(icon => ({
+      ...icon,
+      availableIn: icon.availableIn.filter(id => freeGroupIds.has(id)),
+      variants: icon.variants.filter(id => freeGroupIds.has(id)),
+    }))
+    .filter(icon => icon.availableIn.length > 0);
+  assert(styleGroups.length === freeGroupIds.size && styleGroups.length > 0,
+    "free catalog projection is missing a verified Free style group");
+  assert(icons.length > 0 && icons.every(icon => icon.variants.length === icon.availableIn.length),
+    "free catalog projection has icons without Free availability");
+  return { ...catalog, styleGroups, icons };
+}
+
 function mergeCatalogs(binding, freeGroups, proGroups) {
   const freeById = new Map(freeGroups.map(catalog => [catalog.styleGroups[0].id, catalog]));
   const proById = new Map(proGroups.map(catalog => [catalog.styleGroups[0].id, catalog]));
@@ -286,7 +331,7 @@ function mergeCatalogs(binding, freeGroups, proGroups) {
     sourceCommit: binding.sourceCommit,
     generatorCommit: binding.generatorCommit,
     manifestSchemaVersion: 2,
-    styleGroups: [...proById.values()].map(value => value.styleGroups[0]).sort((a, b) => a.id.localeCompare(b.id, "en")),
+    styleGroups: [...proById.values()].map(value => catalogStyleGroup(value.styleGroups[0])).sort((a, b) => a.id.localeCompare(b.id, "en")),
     icons: [...iconsById.values()].map(icon => ({
       ...icon,
       availableIn: [...new Set(icon.availableIn)].sort((a, b) => a.localeCompare(b, "en")),
@@ -294,7 +339,7 @@ function mergeCatalogs(binding, freeGroups, proGroups) {
     })).sort((a, b) => a.id.localeCompare(b.id, "en")),
   };
   validateMergedCatalog(catalog, freeById, proById);
-  return catalog;
+  return freeCatalog(catalog, freeById);
 }
 
 function validateMergedCatalog(catalog, freeById, proById) {
