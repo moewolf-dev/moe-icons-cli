@@ -64,7 +64,9 @@ jobs:
           PLUGIN_DISPATCH_TOKEN: ${{ secrets.PLUGIN_DISPATCH_TOKEN }}
           PUBLISHED_VERSION: ${{ inputs.published_version }}
           CLI_PUBLISH_RUN_ID: ${{ github.event.workflow_run.id || inputs.publish_run_id }}
-          CLI_PLUGIN_VERIFICATION_RECEIPT: ${{ runner.temp }}/cli-plugin-verification-${{ github.run_id }}-${{ github.run_attempt }}.json
+          # Stable inner filename: the Generator coordinator reads this exact
+          # name from the correlated artifact (dispatch-small-package-cli.cjs).
+          CLI_PLUGIN_VERIFICATION_RECEIPT: ${{ runner.temp }}/cli-plugin-verification.json
         run: |
           set -euo pipefail
           published="$(gh api "repos/moewolf-dev/moe-icons-cli/actions/runs/$CLI_PUBLISH_RUN_ID/jobs?per_page=100" --jq '[.jobs[] | select(.name == "publish" and .conclusion == "success")] | length')"
@@ -88,7 +90,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: cli-plugin-verification-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/cli-plugin-verification-${{ github.run_id }}-${{ github.run_attempt }}.json
+          path: ${{ runner.temp }}/cli-plugin-verification.json
           if-no-files-found: error
           retention-days: 90
           compression-level: 0
