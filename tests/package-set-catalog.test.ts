@@ -145,7 +145,11 @@ it("fetches exact Free/Pro candidate sets and merges verified scoped metadata in
   const catalog = await fetchPackageSetCatalog({ bindings: f.bindings, proToken: "t".repeat(40), fetcher: f.fetcher });
   assert.equal(catalog.schemaVersion, 1);
   assert.equal(catalog.manifestSchemaVersion, 2);
-  assert.deepEqual(catalog.styleGroups.map((group: any) => group.id), ["moe-game-blue", "moe-outline"]);
+  // The npm bundle is Free-only: Pro group ids are forbidden by the publish leak
+  // scan, so the verified Free+Pro metadata is projected to the Free groups.
+  assert.deepEqual(catalog.styleGroups.map((group: any) => group.id), ["moe-outline"]);
+  assert.deepEqual(catalog.icons.map((icon: any) => icon.id), ["archive-box"]);
+  assert.equal(JSON.stringify(catalog).includes("moe-game-blue"), false);
   // The pinned CLI catalog must match CatalogStyleGroup exactly; the metadata
   // presentation fields (`label`, `order`) belong to the website, not the CLI.
   for (const group of catalog.styleGroups as Array<Record<string, unknown>>) {
@@ -154,9 +158,9 @@ it("fetches exact Free/Pro candidate sets and merges verified scoped metadata in
   const { validatePackageSetCatalog } = await import("../scripts/refresh-bundled-catalog.mjs") as unknown as {
     validatePackageSetCatalog(value: unknown): Record<string, unknown>;
   };
-  assert.equal(validatePackageSetCatalog(catalog).groupCount, 2);
-  assert.deepEqual(catalog.icons.map((icon: any) => icon.id), ["archive-box", "pixel-sword"]);
-  assert.equal(catalog.icons.find((icon: any) => icon.id === "pixel-sword").availableIn[0], "moe-game-blue");
+  assert.equal(validatePackageSetCatalog(catalog).groupCount, 1);
+  assert.deepEqual(validatePackageSetCatalog(catalog).freeGroups, ["moe-outline"]);
+  assert.deepEqual(catalog.icons.map((icon: any) => icon.id), ["archive-box"]);
   const downloaded = f.calls.map(url => /\/packages\/([a-f0-9]{64})\.tgz$/.exec(url.pathname)?.[1]).filter(Boolean);
   assert.equal(downloaded.length, 3);
   assert.ok(downloaded.every(digest => f.archives.has(digest!)));
@@ -178,7 +182,7 @@ it("accepts content-encoded candidate JSON whose Content-Length describes the co
   };
   const catalog = await fetchPackageSetCatalog({ bindings: f.bindings, proToken: "t".repeat(40), fetcher: encodedFetcher });
   assert.equal(catalog.catalogVersion, version);
-  assert.deepEqual(catalog.styleGroups.map((group: any) => group.id), ["moe-game-blue", "moe-outline"]);
+  assert.deepEqual(catalog.styleGroups.map((group: any) => group.id), ["moe-outline"]);
 });
 
 it("rejects Pro-set reads without the workflow credential before issuing requests", async () => {
