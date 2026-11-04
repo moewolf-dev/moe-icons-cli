@@ -151,7 +151,7 @@ it("fetches exact Free/Pro candidate sets and merges verified scoped metadata in
   for (const group of catalog.styleGroups as Array<Record<string, unknown>>) {
     assert.deepEqual(Object.keys(group).sort(), ["formats", "id", "imageSizes", "tiers", "type"]);
   }
-  const { validatePackageSetCatalog } = await import("../scripts/refresh-bundled-catalog.mjs") as {
+  const { validatePackageSetCatalog } = await import("../scripts/refresh-bundled-catalog.mjs") as unknown as {
     validatePackageSetCatalog(value: unknown): Record<string, unknown>;
   };
   assert.equal(validatePackageSetCatalog(catalog).groupCount, 2);
