@@ -263,60 +263,6 @@ jobs:
           echo "next_version=$NEXT" >> "$GITHUB_OUTPUT"
           echo "payload_hash=$HASH" >> "$GITHUB_OUTPUT"
 
-  reused-receipt:
-    # The pin can point at a commit whose exact payload is already released
-    # (a bot release commit or an unchanged payload). The Generator coordinator
-    # still needs a canonical publish receipt for the event, so emit one that
-    # binds the already published version instead of silently publishing
-    # nothing.
-    needs: decide
-    if: always() && needs.decide.result == 'success' && needs.decide.outputs.should_release == '0' && github.event_name == 'workflow_dispatch'
-    runs-on: ${{ fromJSON(vars.SMALL_PACK_CLI_RUNNER || '["self-hosted","Linux","X64","moe-ci-server"]') }}
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Prepare auxiliary runner tools
-        run: bash .github/scripts/prepare-auxiliary-runner.sh
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 24
-      - name: Write the reused publish receipt for the already released payload
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          TAG="$(gh release list --limit 1 --json tagName --jq '.[0].tagName')"
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          VERSION="${TAG#v}"
-          RELEASE_COMMIT="$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)"
-          [[ "$RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]]
-          DIGEST="$(gh release view "$TAG" --json assets --jq '.assets[]|select(.name|endswith(".tgz"))|.digest' | head -1)"
-          [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
-          TGZ_SHA="${DIGEST#sha256:}"
-          INTEGRITY="$(npm view "@moewolf/moe-icons-cli@${VERSION}" dist.integrity)"
-          [[ "$INTEGRITY" =~ ^sha512- ]]
-          ATTESTATIONS="$(curl -fsSL -H 'Accept: application/json' "https://registry.npmjs.org/-/npm/v1/attestations/@moewolf/moe-icons-cli@${VERSION}")"
-          node -e 'const a=JSON.parse(process.argv[1]);if(!Array.isArray(a.attestations)||a.attestations.length===0){console.error("missing provenance attestations");process.exit(1);}' "$ATTESTATIONS"
-          mkdir -p receipt
-          node -e '
-            const fs=require("fs");
-            const receipt={schemaVersion:1,pinCommit:process.env.GITHUB_SHA,releaseCommit:process.argv[2],
-              version:process.argv[1],tag:process.env.TAG,tgzSha256:process.argv[3],npmIntegrity:process.argv[4],
-              provenance:true,repository:process.env.GITHUB_REPOSITORY,workflowPath:".github/workflows/publish.yml",
-              runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,conclusion:"success"};
-            fs.writeFileSync("receipt/cli-publish-receipt.json", JSON.stringify(receipt,null,2)+"\n");
-          ' "$VERSION" "$RELEASE_COMMIT" "$TGZ_SHA" "$INTEGRITY"
-          cat receipt/cli-publish-receipt.json
-      - name: Upload the reused publish receipt
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: cli-publish-receipt-${{ github.sha }}
-          path: receipt/cli-publish-receipt.json
-          if-no-files-found: error
-          retention-days: 14
-
   recover:
     if: always() && inputs.auth_audit_only != true && github.event_name == 'workflow_dispatch' && inputs.resume_run_id != '' && needs.validate.result == 'success' && (needs.npm-auth-preflight.result == 'success' || needs.npm-auth-preflight.result == 'skipped')
     needs: [validate, npm-auth-preflight]
@@ -916,3 +862,57 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/persist-publish-receipt.mjs
+
+  reused-receipt:
+    # The pin can point at a commit whose exact payload is already released
+    # (a bot release commit or an unchanged payload). The Generator coordinator
+    # still needs a canonical publish receipt for the event, so emit one that
+    # binds the already published version instead of silently publishing
+    # nothing.
+    needs: decide
+    if: always() && needs.decide.result == 'success' && needs.decide.outputs.should_release == '0' && github.event_name == 'workflow_dispatch'
+    runs-on: ${{ fromJSON(vars.SMALL_PACK_CLI_RUNNER || '["self-hosted","Linux","X64","moe-ci-server"]') }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Prepare auxiliary runner tools
+        run: bash .github/scripts/prepare-auxiliary-runner.sh
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Write the reused publish receipt for the already released payload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="$(gh release list --limit 1 --json tagName --jq '.[0].tagName')"
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          VERSION="${TAG#v}"
+          RELEASE_COMMIT="$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)"
+          [[ "$RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          DIGEST="$(gh release view "$TAG" --json assets --jq '.assets[]|select(.name|endswith(".tgz"))|.digest' | head -1)"
+          [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          TGZ_SHA="${DIGEST#sha256:}"
+          INTEGRITY="$(npm view "@moewolf/moe-icons-cli@${VERSION}" dist.integrity)"
+          [[ "$INTEGRITY" =~ ^sha512- ]]
+          ATTESTATIONS="$(curl -fsSL -H 'Accept: application/json' "https://registry.npmjs.org/-/npm/v1/attestations/@moewolf/moe-icons-cli@${VERSION}")"
+          node -e 'const a=JSON.parse(process.argv[1]);if(!Array.isArray(a.attestations)||a.attestations.length===0){console.error("missing provenance attestations");process.exit(1);}' "$ATTESTATIONS"
+          mkdir -p receipt
+          node -e '
+            const fs=require("fs");
+            const receipt={schemaVersion:1,pinCommit:process.env.GITHUB_SHA,releaseCommit:process.argv[2],
+              version:process.argv[1],tag:process.env.TAG,tgzSha256:process.argv[3],npmIntegrity:process.argv[4],
+              provenance:true,repository:process.env.GITHUB_REPOSITORY,workflowPath:".github/workflows/publish.yml",
+              runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,conclusion:"success"};
+            fs.writeFileSync("receipt/cli-publish-receipt.json", JSON.stringify(receipt,null,2)+"\n");
+          ' "$VERSION" "$RELEASE_COMMIT" "$TGZ_SHA" "$INTEGRITY"
+          cat receipt/cli-publish-receipt.json
+      - name: Upload the reused publish receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cli-publish-receipt-${{ github.sha }}
+          path: receipt/cli-publish-receipt.json
+          if-no-files-found: error
+          retention-days: 14
