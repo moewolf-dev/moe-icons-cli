@@ -66,8 +66,23 @@ function verifyProducer(producer, sourceCommit, sourceDispatchId) {
     && attempt.head_sha === producer.headSha
     && attempt.display_title === `Source package-set ${sourceCommit} ${sourceDispatchId}`,
   "package-set producer run identity differs from its exact Source/Generator binding");
-  const jobs = readProducerJobs(producer.runId, producer.runAttempt);
-  for (const name of ["durable", "dispatch-free", "dispatch-pro", "dispatch-website"]) {
+  const required = ["durable", "dispatch-free", "dispatch-pro", "dispatch-website"];
+  const missing = (jobs) => required.filter((name) => {
+    const matches = jobs.filter((job) => job.name === name);
+    return !(matches.length === 1 && matches[0].conclusion === "success");
+  });
+  let jobs = readProducerJobs(producer.runId, producer.runAttempt);
+  if (missing(jobs).length) {
+    // The Generator may have recovered by re-running only its failed jobs: the
+    // bound attempt then still shows the failure while the latest attempt has
+    // every required stage successful. Accept that exact latest attempt.
+    const current = gh(`repos/${SOURCE_REPOSITORY}/actions/runs/${producer.runId}`);
+    const latestAttempt = Number(current?.run_attempt);
+    assert(Number.isSafeInteger(latestAttempt) && latestAttempt >= producer.runAttempt,
+      "package-set producer run attempt is invalid");
+    if (latestAttempt > producer.runAttempt) jobs = readProducerJobs(producer.runId, latestAttempt);
+  }
+  for (const name of required) {
     const matches = jobs.filter(job => job.name === name);
     assert(matches.length === 1 && matches[0].conclusion === "success", `producer job ${name} did not succeed`);
   }

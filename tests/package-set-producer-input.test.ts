@@ -111,3 +111,38 @@ it("rejects a Generator run title bound to another Source commit or dispatch ID"
     } finally { await h.cleanup(); }
   }
 });
+
+it("accepts a Generator recovery whose latest attempt made every required stage successful", async () => {
+  const root = await mkdtemp(join(tmpdir(), "moe-plugin-package-set-recovery-"));
+  try {
+    await mkdir(join(root, "bin"));
+    const ghPath = join(root, "bin/gh");
+    const commit = "b".repeat(40);
+    const runJson = (attempt: number, status = "completed", conclusion = "success") => JSON.stringify({ id: 123, run_attempt: attempt,
+      event: "workflow_dispatch", status, conclusion, head_sha: commit, head_branch: "main", path: ".github/workflows/small-pack-candidate.yml",
+      display_title: `Source package-set ${"a".repeat(40)} ${"1".repeat(64)}`,
+      repository: { full_name: "moewolf-dev/moe-icons-code-library" }, head_repository: { full_name: "moewolf-dev/moe-icons-code-library" } });
+    const jobs = (conclusion: string) => JSON.stringify({ total_count: 4,
+      jobs: ["durable", "dispatch-free", "dispatch-pro", "dispatch-website"].map(name => ({ name, conclusion })) });
+    await writeFile(ghPath, `#!/usr/bin/env node
+const route=process.argv[process.argv.indexOf('api')+1]||'';
+if(route.endsWith('/attempts/2/jobs?per_page=100&page=1')) console.log(${JSON.stringify(jobs("failure"))});
+else if(route.endsWith('/attempts/3/jobs?per_page=100&page=1')) console.log(${JSON.stringify(jobs("success"))});
+else if(route.endsWith('/attempts/2')) console.log(${JSON.stringify(runJson(2, "completed", "failure"))});
+else if(route.endsWith('/attempts/3')) console.log(${JSON.stringify(runJson(3, "in_progress", null as any))});
+else console.log(${JSON.stringify(runJson(3, "in_progress", null as any))});
+`, { mode: 0o755 });
+    const payloadPath = join(root, "event.json");
+    await writeFile(payloadPath, JSON.stringify(event()));
+    const envFile = join(root, "github-env");
+    await writeFile(envFile, "");
+    const outputRoot = join(root, "output");
+    await run(process.execPath, ["scripts/verify-package-set-input.mjs", outputRoot], {
+      env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}`, GH_TOKEN: "read-token", GITHUB_EVENT_PATH: payloadPath, GITHUB_ENV: envFile },
+    });
+    const binding = JSON.parse(await readFile(join(outputRoot, "package-set-binding.json"), "utf8"));
+    assert.equal(binding.resourceVersion, "1.2.3");
+    const ledgerEvent = JSON.parse(await readFile(join(outputRoot, "event.json"), "utf8"));
+    assert.equal(ledgerEvent.producer.runAttempt, 2);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
