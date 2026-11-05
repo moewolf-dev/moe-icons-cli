@@ -913,6 +913,7 @@ jobs:
           TAG="$(gh release list --limit 1 --json tagName --jq '.[0].tagName')"
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           VERSION="${TAG#v}"
+          export TAG
           RELEASE_COMMIT="$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)"
           [[ "$RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]]
           DIGEST="$(gh release view "$TAG" --json assets --jq '.assets[]|select(.name|endswith(".tgz"))|.digest' | head -1)"
