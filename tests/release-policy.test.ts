@@ -170,6 +170,23 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
     expect(sleeps.length).toBeGreaterThan(0);
   });
 
+  it("writes the canonical receipt only after the staged evidence agrees", () => {
+    const publish = fs.readFileSync(path.join(root, ".github", "workflows", "publish.yml"), "utf8");
+    const verifyAt = publish.indexOf("Verify the staged recovery evidence matches this receipt");
+    const receiptAt = publish.indexOf("Write the canonical publish receipt");
+    expect(verifyAt).toBeGreaterThanOrEqual(0);
+    expect(receiptAt).toBeGreaterThan(verifyAt);
+    const verify = publish.slice(verifyAt, receiptAt);
+    expect(verify).toContain("verify-publish-evidence.mjs");
+    expect(verify).toContain("--require-accepted");
+    expect(verify).toContain("needs.recover.outputs.pin_commit || github.sha");
+    // The command-result stage is uploaded before any registry read can fail.
+    const commandAt = publish.indexOf("Upload the publish command result before any registry read");
+    const readAt = publish.indexOf("Read the published integrity with a bounded retry");
+    expect(commandAt).toBeGreaterThanOrEqual(0);
+    expect(readAt).toBeGreaterThan(commandAt);
+  });
+
   it("only a proven push no-op may skip a missing publish receipt", () => {
     const notify = fs.readFileSync(path.join(root, ".github", "workflows", "plugin-update.yml"), "utf8");
     // The absence of a receipt may only mean "nothing to publish" for a
