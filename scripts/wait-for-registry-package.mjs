@@ -20,7 +20,9 @@ function validateIdentity(packageName, version) {
 
 function isRetryableRegistryFailure(result) {
   const output = `${result?.stderr || ''}\n${result?.stdout || ''}\n${result?.error?.message || ''}`;
-  return /(?:\bE404\b|\b404\s+Not Found\b|\b(?:429|500|502|503|504)\b|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|temporary failure|temporarily unavailable|connection reset|unexpected EOF|context deadline exceeded)/i.test(output);
+  // npm reports a not-yet-replicated version as ETARGET/notarget; the package is published
+  // but the registry/CDN has not caught up yet, so it must be retried like E404.
+  return /(?:\bE404\b|\b404\s+Not Found\b|\bETARGET\b|notarget|No matching version found|\b(?:429|500|502|503|504)\b|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|temporary failure|temporarily unavailable|connection reset|unexpected EOF|context deadline exceeded)/i.test(output);
 }
 
 function runNpm(command, args, options = {}) {

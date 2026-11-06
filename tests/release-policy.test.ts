@@ -146,6 +146,30 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
     expect(commands[2]).toContain("--package @moewolf/moe-icons-cli@0.0.11 moeicons --version");
   });
 
+  it("retries a not-yet-replicated released version reported as ETARGET", async () => {
+    let time = 0;
+    const sleeps: number[] = [];
+    let attempts = 0;
+    const result = await waitForRegistryPackage({
+      packageName: "@moewolf/moe-icons-cli",
+      version: "0.0.19",
+      maxWaitMs: 300_000,
+      retryDelaysMs: [10_000, 20_000, 40_000],
+      now: () => time,
+      sleep: async (milliseconds) => {
+        sleeps.push(milliseconds);
+        time += milliseconds;
+      },
+      runCommand: () => {
+        attempts += 1;
+        if (attempts <= 3) return { status: 1, stderr: "npm error code ETARGET\nnpm error notarget No matching version found for @moewolf/moe-icons-cli@0.0.19." };
+        return { status: 0, stdout: "0.0.19\n" };
+      },
+    });
+    expect(result).toMatchObject({ version: "0.0.19", attempts: 4, smokeOutput: "0.0.19" });
+    expect(sleeps.length).toBeGreaterThan(0);
+  });
+
   it("stops immediately for non-transient npm authorization failures", async () => {
     const runCommand = vi.fn(() => ({ status: 1, stderr: "npm error E401" }));
     await expect(waitForRegistryPackage({
