@@ -170,6 +170,21 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
     expect(sleeps.length).toBeGreaterThan(0);
   });
 
+  it("resumes the recorded intent version instead of publishing a new one", () => {
+    const publish = fs.readFileSync(path.join(root, ".github", "workflows", "publish.yml"), "utf8");
+    // The intent artifact is discoverable by the original pin identity.
+    expect(publish).toMatch(/name: cli-publish-intent-\$\{\{ needs\.recover\.outputs\.pin_commit \|\| github\.sha \}\}/);
+    // decide must look the intent up before the "payload unchanged" check and
+    // continue that exact version when npm already has it.
+    const resumeAt = publish.indexOf("resuming the recorded intent version");
+    const payloadAt = publish.indexOf('LAST="$(gh release view');
+    expect(resumeAt).toBeGreaterThanOrEqual(0);
+    expect(payloadAt).toBeGreaterThan(resumeAt);
+    const resume = publish.slice(resumeAt - 2500, resumeAt + 1200);
+    expect(resume).toMatch(/actions\/artifacts\?name=cli-publish-intent-\$\{GITHUB_SHA\}/);
+    expect(resume).toMatch(/next_version=\$RESUME_VERSION/);
+  });
+
   it("writes the canonical receipt only after the staged evidence agrees", () => {
     const publish = fs.readFileSync(path.join(root, ".github", "workflows", "publish.yml"), "utf8");
     const verifyAt = publish.indexOf("Verify the staged recovery evidence matches this receipt");
