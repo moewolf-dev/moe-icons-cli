@@ -170,6 +170,28 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
     expect(sleeps.length).toBeGreaterThan(0);
   });
 
+  it("binds a reused receipt to the current candidate instead of the latest release", () => {
+    const publish = fs.readFileSync(path.join(root, ".github", "workflows", "publish.yml"), "utf8");
+    // The reused branch must prove the latest release is THIS candidate before it
+    // may emit a successful receipt; otherwise another publish that advanced
+    // first would be mis-bound to the pin.
+    expect(publish).toMatch(/latest release \$TAG belongs to another candidate/);
+    expect(publish).toMatch(/released resource identity at \$RELEASE_COMMIT differs from this candidate/);
+    expect(publish).toMatch(/release tarball integrity differs from the npm package/);
+    expect(publish).toMatch(/RELEASE_PAYLOAD/);
+  });
+
+  it("records registry-accepted evidence before the install smoke and the receipt", () => {
+    const publish = fs.readFileSync(path.join(root, ".github", "workflows", "publish.yml"), "utf8");
+    const acceptedAt = publish.indexOf("Record registry-accepted evidence for this exact version");
+    const smokeAt = publish.indexOf("Wait for public registry visibility and smoke npx install");
+    const receiptAt = publish.indexOf("Write the canonical publish receipt");
+    expect(acceptedAt).toBeGreaterThanOrEqual(0);
+    expect(smokeAt).toBeGreaterThan(acceptedAt);
+    expect(receiptAt).toBeGreaterThan(smokeAt);
+    expect(publish).toMatch(/cli-registry-accepted-/);
+  });
+
   it("stops immediately for non-transient npm authorization failures", async () => {
     const runCommand = vi.fn(() => ({ status: 1, stderr: "npm error E401" }));
     await expect(waitForRegistryPackage({
