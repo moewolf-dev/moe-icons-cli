@@ -243,25 +243,29 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/release-bump.mjs > "$RUNNER_TEMP/bump.json"
+          HASH="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).payloadHash)" "$RUNNER_TEMP/bump.json")"
+          NEXT="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).nextVersion)" "$RUNNER_TEMP/bump.json")"
+          # The payload hash identifies this exact candidate; every downstream job
+          # (including the reused-receipt path) must bind to it.
+          echo "payload_hash=$HASH" >> "$GITHUB_OUTPUT"
           # R-P0-3 anti-recursion: a forged human commit with the same message
           # must NOT be skipped. Require marker + bot actor + only package*.json.
           GUARD="$(node scripts/release-commit.mjs guard --sha "$GITHUB_SHA" --actor "$GITHUB_ACTOR")"
           if [ "$(node -p "JSON.parse(process.argv[1]).skip" "$GUARD")" = "true" ]; then
             echo "bot release commit already handled; CI only" >&2
             echo "should_release=0" >> "$GITHUB_OUTPUT"
+            echo "reuse_reason=bot-release-commit" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          HASH="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).payloadHash)" "$RUNNER_TEMP/bump.json")"
-          NEXT="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).nextVersion)" "$RUNNER_TEMP/bump.json")"
           LAST="$(gh release view "$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo v0.0.0)" --json body --jq .body 2>/dev/null | grep -o 'payloadHash: [a-f0-9]*' | awk '{print $2}' || true)"
           if [ -n "$LAST" ] && [ "$LAST" = "$HASH" ]; then
             echo "payload unchanged; CI only" >&2
             echo "should_release=0" >> "$GITHUB_OUTPUT"
+            echo "reuse_reason=unchanged-payload" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "should_release=1" >> "$GITHUB_OUTPUT"
           echo "next_version=$NEXT" >> "$GITHUB_OUTPUT"
-          echo "payload_hash=$HASH" >> "$GITHUB_OUTPUT"
 
   recover:
     if: always() && inputs.auth_audit_only != true && github.event_name == 'workflow_dispatch' && inputs.resume_run_id != '' && needs.validate.result == 'success' && (needs.npm-auth-preflight.result == 'success' || needs.npm-auth-preflight.result == 'skipped')
@@ -790,6 +794,36 @@ jobs:
             npm --version
             npm publish "$tgz" --access public --provenance --loglevel verbose
           fi
+      # P2: record that npm accepted this exact version before the install smoke.
+      # A recovery can then read the same version back instead of publishing a
+      # new one; the receipt is still only written after the smoke passes.
+      - name: Record registry-accepted evidence for this exact version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          integrity="$(npm view "@moewolf/moe-icons-cli@${version}" dist.integrity)"
+          [[ "$integrity" =~ ^sha512- ]]
+          mkdir -p accepted
+          node -e '
+            const fs=require("fs");
+            const accepted={schemaVersion:1,version:process.argv[1],tag:process.env.RELEASE_TAG,
+              npmIntegrity:process.argv[2],repository:process.env.GITHUB_REPOSITORY,
+              runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,
+              stage:"registry-accepted",acceptedAt:new Date().toISOString()};
+            fs.writeFileSync("accepted/cli-registry-accepted.json", JSON.stringify(accepted,null,2)+"\n");
+          ' "$version" "$integrity"
+          cat accepted/cli-registry-accepted.json
+      - name: Upload registry-accepted evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cli-registry-accepted-${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}
+          path: accepted/cli-registry-accepted.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Wait for public registry visibility and smoke npx install
         timeout-minutes: 35
         env:
@@ -908,19 +942,43 @@ jobs:
       - name: Write the reused publish receipt for the already released payload
         env:
           GH_TOKEN: ${{ github.token }}
+          PAYLOAD_HASH: ${{ needs.decide.outputs.payload_hash }}
         run: |
           set -euo pipefail
+          [[ "$PAYLOAD_HASH" =~ ^[a-f0-9]{64}$ ]]
           TAG="$(gh release list --limit 1 --json tagName --jq '.[0].tagName')"
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           VERSION="${TAG#v}"
           export TAG
+          # A reused receipt may only describe THIS candidate: "the latest release"
+          # is not "the release that matches this payload".
+          RELEASE_PAYLOAD="$(gh release view "$TAG" --json body --jq .body | grep -o 'payloadHash: [a-f0-9]*' | awk '{print $2}')"
+          if [ "$RELEASE_PAYLOAD" != "$PAYLOAD_HASH" ]; then
+            echo "latest release $TAG belongs to another candidate (payload ${RELEASE_PAYLOAD:-none} != $PAYLOAD_HASH); refusing a reused receipt" >&2
+            exit 1
+          fi
           RELEASE_COMMIT="$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)"
           [[ "$RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          current_resource="$(gh api "repos/$GITHUB_REPOSITORY/contents/src/catalog/resource-release.json?ref=$GITHUB_SHA" --jq .content)"
+          release_resource="$(gh api "repos/$GITHUB_REPOSITORY/contents/src/catalog/resource-release.json?ref=$RELEASE_COMMIT" --jq .content)"
+          if [ "$current_resource" != "$release_resource" ]; then
+            echo "released resource identity at $RELEASE_COMMIT differs from this candidate; refusing a reused receipt" >&2
+            exit 1
+          fi
           DIGEST="$(gh release view "$TAG" --json assets --jq '.assets[]|select(.name|endswith(".tgz"))|.digest' | head -1)"
           [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
           TGZ_SHA="${DIGEST#sha256:}"
+          mkdir -p "$RUNNER_TEMP/release-tarball"
+          gh release download "$TAG" --pattern '*.tgz' --dir "$RUNNER_TEMP/release-tarball"
+          tgz="$(find "$RUNNER_TEMP/release-tarball" -name '*.tgz' -print -quit)"
+          test -f "$tgz"
           INTEGRITY="$(npm view "@moewolf/moe-icons-cli@${VERSION}" dist.integrity)"
           [[ "$INTEGRITY" =~ ^sha512- ]]
+          TARBALL_INTEGRITY="$(node -e 'const c=require("node:crypto"),fs=require("node:fs");process.stdout.write("sha512-"+c.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64"))' "$tgz")"
+          if [ "$TARBALL_INTEGRITY" != "$INTEGRITY" ]; then
+            echo "release tarball integrity differs from the npm package; refusing a reused receipt" >&2
+            exit 1
+          fi
           ATTESTATIONS="$(curl -fsSL -H 'Accept: application/json' "https://registry.npmjs.org/-/npm/v1/attestations/@moewolf/moe-icons-cli@${VERSION}")"
           node -e 'const a=JSON.parse(process.argv[1]);if(!Array.isArray(a.attestations)||a.attestations.length===0){console.error("missing provenance attestations");process.exit(1);}' "$ATTESTATIONS"
           mkdir -p receipt
