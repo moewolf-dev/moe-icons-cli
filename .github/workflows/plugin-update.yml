@@ -81,9 +81,14 @@ jobs:
             fi
           fi
           receipt="$(find "$RUNNER_TEMP/cli-plugin-receipt" -name cli-publish-receipt.json -print -quit)"
-          test -f "$receipt"
           published="$(gh api "repos/moewolf-dev/moe-icons-cli/actions/runs/$CLI_PUBLISH_RUN_ID/jobs?per_page=100" --jq '[.jobs[] | select(.name == "publish" and .conclusion == "success")] | length')"
           if [ "$published" != 1 ]; then
+            # A push publish with an unchanged payload publishes nothing: no
+            # publish job and no run-scoped receipt is the normal no-op case.
+            if [ -z "$receipt" ]; then
+              echo 'No completed publish job and no run receipt: nothing to notify plugins about'
+              exit 0
+            fi
             receipt_run="$(node -e 'process.stdout.write(String(require(process.argv[1]).runId))' "$receipt")"
             receipt_version="$(node -e 'process.stdout.write(String(require(process.argv[1]).version))' "$receipt")"
             if [ "$receipt_run" != "$CLI_PUBLISH_RUN_ID" ]; then
@@ -96,6 +101,7 @@ jobs:
             fi
             echo "Reused publish receipt for v$receipt_version: notifying plugins without a new publish job"
           fi
+          test -f "$receipt"
           node scripts/dispatch-plugin-release.mjs "$receipt"
 
       - name: Preserve verified package-set Marketplace receipt
