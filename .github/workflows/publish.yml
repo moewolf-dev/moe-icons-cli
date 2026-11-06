@@ -257,6 +257,25 @@ jobs:
             echo "reuse_reason=bot-release-commit" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Recovery: a previous attempt for this exact pin may have already
+          # persisted a publish intent. Continue THAT version instead of
+          # publishing a new one; the intent is keyed by the pin commit.
+          INTENT_RUN="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=cli-publish-intent-${GITHUB_SHA}&per_page=1" --jq '.artifacts[0].workflow_run.id // empty' 2>/dev/null || true)"
+          if [ -n "$INTENT_RUN" ]; then
+            mkdir -p "$RUNNER_TEMP/intent"
+            if gh run download "$INTENT_RUN" --repo "$GITHUB_REPOSITORY" --name "cli-publish-intent-${GITHUB_SHA}" --dir "$RUNNER_TEMP/intent" 2>/dev/null \
+                && [ -f "$RUNNER_TEMP/intent/cli-publish-intent.json" ]; then
+              RESUME_VERSION="$(node -e 'process.stdout.write(String(require(process.argv[1]).version))' "$RUNNER_TEMP/intent/cli-publish-intent.json")"
+              if [ -n "$RESUME_VERSION" ] && npm view "@moewolf/moe-icons-cli@${RESUME_VERSION}" version >/dev/null 2>&1; then
+                echo "resuming the recorded intent version ${RESUME_VERSION} for pin ${GITHUB_SHA}" >&2
+                echo "should_release=1" >> "$GITHUB_OUTPUT"
+                echo "next_version=$RESUME_VERSION" >> "$GITHUB_OUTPUT"
+                echo "resume=1" >> "$GITHUB_OUTPUT"
+                echo "reuse_reason=resumed-intent" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+          fi
           LAST="$(gh release view "$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo v0.0.0)" --json body --jq .body 2>/dev/null | grep -o 'payloadHash: [a-f0-9]*' | awk '{print $2}' || true)"
           if [ -n "$LAST" ] && [ "$LAST" = "$HASH" ]; then
             echo "payload unchanged; CI only" >&2
@@ -777,7 +796,7 @@ jobs:
       - name: Upload the publish intent
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: cli-publish-intent-${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}
+          name: cli-publish-intent-${{ needs.recover.outputs.pin_commit || github.sha }}
           path: intent/cli-publish-intent.json
           if-no-files-found: error
           retention-days: 30
