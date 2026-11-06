@@ -745,6 +745,42 @@ jobs:
           actual="$(shasum -a 256 verify/*.tgz | awk '{print $1}')"
           test "$actual" = "$EXPECTED_SHA" || { echo "draft asset digest mismatch" >&2; exit 1; }
       # Explicit manual token override retains provenance and all release gates.
+      # Recovery stage 1: persist the exact publish intent before any external
+      # write. Nothing here reads the registry, so a lagging read path can never
+      # block the intent from being durable.
+      - name: Record the exact publish intent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}
+          CANDIDATE_SHA: ${{ needs.recover.outputs.candidate_sha || needs.pack.outputs.candidate_sha }}
+          RELEASE_COMMIT: ${{ needs.recover.outputs.cli_commit || needs.pack.outputs.cli_commit }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$CANDIDATE_SHA" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          mkdir -p intent
+          node -e '
+            const fs=require("fs");
+            const resource=JSON.parse(fs.readFileSync("src/catalog/resource-release.json","utf8"));
+            const intent={schemaVersion:1,version:process.argv[1],tag:process.env.RELEASE_TAG,
+              candidateSha256:process.argv[2],releaseCommit:process.argv[3],pinCommit:process.env.GITHUB_SHA,
+              repository:process.env.GITHUB_REPOSITORY,runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,
+              resource:{resourceVersion:resource.resourceVersion,sourceCommit:resource.sourceCommit,
+                sourceDispatchId:resource.sourceDispatchId,packageSets:resource.packageSets},
+              stage:"publish-intent"};
+            fs.writeFileSync("intent/cli-publish-intent.json", JSON.stringify(intent,null,2)+"\n");
+          ' "$version" "$CANDIDATE_SHA" "$RELEASE_COMMIT"
+          cat intent/cli-publish-intent.json
+      - name: Upload the publish intent
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cli-publish-intent-${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}
+          path: intent/cli-publish-intent.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Publish to npm or verify the existing registry package
         env:
           AUTH_MODE: ${{ inputs.npm_auth_mode || 'oidc' }}
@@ -794,28 +830,54 @@ jobs:
             npm --version
             npm publish "$tgz" --access public --provenance --loglevel verbose
           fi
-      # P2: record that npm accepted this exact version before the install smoke.
-      # A recovery can then read the same version back instead of publishing a
-      # new one; the receipt is still only written after the smoke passes.
-      - name: Record registry-accepted evidence for this exact version
+      # Recovery stage 2: the publish command returned successfully. This must
+      # not depend on the registry read path: npm can accept a version while its
+      # read path still answers ETARGET/E404 for a while.
+      - name: Record the publish command result
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          integrity="$(npm view "@moewolf/moe-icons-cli@${version}" dist.integrity)"
-          [[ "$integrity" =~ ^sha512- ]]
           mkdir -p accepted
           node -e '
             const fs=require("fs");
             const accepted={schemaVersion:1,version:process.argv[1],tag:process.env.RELEASE_TAG,
-              npmIntegrity:process.argv[2],repository:process.env.GITHUB_REPOSITORY,
-              runId:process.env.GITHUB_RUN_ID,runAttempt:process.env.GITHUB_RUN_ATTEMPT,
-              stage:"registry-accepted",acceptedAt:new Date().toISOString()};
+              repository:process.env.GITHUB_REPOSITORY,runId:process.env.GITHUB_RUN_ID,
+              runAttempt:process.env.GITHUB_RUN_ATTEMPT,stage:"publish-command-succeeded",
+              recordedAt:new Date().toISOString()};
             fs.writeFileSync("accepted/cli-registry-accepted.json", JSON.stringify(accepted,null,2)+"\n");
-          ' "$version" "$integrity"
+          ' "$version"
+          cat accepted/cli-registry-accepted.json
+      # Recovery stage 3: read the published integrity back with a bounded retry
+      # (ETARGET/E404/5xx are propagation states, not authorization failures).
+      - name: Read the published integrity with a bounded retry
+        env:
+          RELEASE_TAG: ${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          integrity=""
+          for attempt in $(seq 1 40); do
+            integrity="$(npm view "@moewolf/moe-icons-cli@${version}" dist.integrity 2>/dev/null || true)"
+            if [[ "$integrity" =~ ^sha512- ]]; then break; fi
+            echo "registry integrity not visible yet (attempt ${attempt}/40)" >&2
+            sleep 20
+          done
+          if [[ ! "$integrity" =~ ^sha512- ]]; then
+            echo "published version $version never became readable with an integrity" >&2
+            exit 1
+          fi
+          node -e '
+            const fs=require("fs");
+            const file="accepted/cli-registry-accepted.json";
+            const accepted=JSON.parse(fs.readFileSync(file,"utf8"));
+            accepted.npmIntegrity=process.argv[1];
+            accepted.stage="registry-accepted";
+            accepted.acceptedAt=new Date().toISOString();
+            fs.writeFileSync(file, JSON.stringify(accepted,null,2)+"\n");
+          ' "$integrity"
           cat accepted/cli-registry-accepted.json
       - name: Upload registry-accepted evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

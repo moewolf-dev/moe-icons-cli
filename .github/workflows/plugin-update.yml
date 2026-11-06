@@ -64,6 +64,10 @@ jobs:
           PLUGIN_DISPATCH_TOKEN: ${{ secrets.PLUGIN_DISPATCH_TOKEN }}
           PUBLISHED_VERSION: ${{ inputs.published_version }}
           CLI_PUBLISH_RUN_ID: ${{ github.event.workflow_run.id || inputs.publish_run_id }}
+          # Only an ordinary push publish can prove "nothing to publish" from the
+          # absence of a receipt; a manual/recovery request must carry evidence.
+          TRIGGER_EVENT: ${{ github.event.workflow_run.event || 'workflow_dispatch' }}
+          TRIGGER_CONCLUSION: ${{ github.event.workflow_run.conclusion || 'unknown' }}
           # Stable inner filename: the Generator coordinator reads this exact
           # name from the correlated artifact (dispatch-small-package-cli.cjs).
           CLI_PLUGIN_VERIFICATION_RECEIPT: ${{ runner.temp }}/cli-plugin-verification.json
@@ -83,11 +87,16 @@ jobs:
           receipt="$(find "$RUNNER_TEMP/cli-plugin-receipt" -name cli-publish-receipt.json -print -quit)"
           published="$(gh api "repos/moewolf-dev/moe-icons-cli/actions/runs/$CLI_PUBLISH_RUN_ID/jobs?per_page=100" --jq '[.jobs[] | select(.name == "publish" and .conclusion == "success")] | length')"
           if [ "$published" != 1 ]; then
-            # A push publish with an unchanged payload publishes nothing: no
-            # publish job and no run-scoped receipt is the normal no-op case.
+            # A successful push publish with an unchanged payload publishes
+            # nothing: no publish job and no run-scoped receipt is the proven
+            # no-op case. Every other shape is missing evidence and must fail.
             if [ -z "$receipt" ]; then
-              echo 'No completed publish job and no run receipt: nothing to notify plugins about'
-              exit 0
+              if [ "$TRIGGER_EVENT" = "push" ] && [ "$TRIGGER_CONCLUSION" = "success" ]; then
+                echo 'Push publish without a new payload published nothing: nothing to notify plugins about'
+                exit 0
+              fi
+              echo "Required publish receipt is missing (trigger=${TRIGGER_EVENT}/${TRIGGER_CONCLUSION}); refusing to report success" >&2
+              exit 1
             fi
             receipt_run="$(node -e 'process.stdout.write(String(require(process.argv[1]).runId))' "$receipt")"
             receipt_version="$(node -e 'process.stdout.write(String(require(process.argv[1]).version))' "$receipt")"

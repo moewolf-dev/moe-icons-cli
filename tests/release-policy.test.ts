@@ -170,6 +170,16 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
     expect(sleeps.length).toBeGreaterThan(0);
   });
 
+  it("only a proven push no-op may skip a missing publish receipt", () => {
+    const notify = fs.readFileSync(path.join(root, ".github", "workflows", "plugin-update.yml"), "utf8");
+    // The absence of a receipt may only mean "nothing to publish" for a
+    // successful ordinary push; a manual/recovery request must carry evidence.
+    expect(notify).toMatch(/TRIGGER_EVENT: \$\{\{ github\.event\.workflow_run\.event \|\| 'workflow_dispatch' \}\}/);
+    expect(notify).toMatch(/TRIGGER_CONCLUSION: \$\{\{ github\.event\.workflow_run\.conclusion \|\| 'unknown' \}\}/);
+    expect(notify).toMatch(/if \[ "\$TRIGGER_EVENT" = "push" \] && \[ "\$TRIGGER_CONCLUSION" = "success" \]/);
+    expect(notify).toMatch(/Required publish receipt is missing/);
+  });
+
   it("binds a reused receipt to the current candidate instead of the latest release", () => {
     const publish = fs.readFileSync(path.join(root, ".github", "workflows", "publish.yml"), "utf8");
     // The reused branch must prove the latest release is THIS candidate before it
@@ -181,14 +191,27 @@ describe("RELEASE-BITMAP-0909 release policy (B7)", () => {
     expect(publish).toMatch(/RELEASE_PAYLOAD/);
   });
 
-  it("records registry-accepted evidence before the install smoke and the receipt", () => {
+  it("records the intent, the publish command result and the retried read before the receipt", () => {
     const publish = fs.readFileSync(path.join(root, ".github", "workflows", "publish.yml"), "utf8");
-    const acceptedAt = publish.indexOf("Record registry-accepted evidence for this exact version");
+    const intentAt = publish.indexOf("Record the exact publish intent");
+    const commandAt = publish.indexOf("Publish to npm or verify the existing registry package");
+    const succeededAt = publish.indexOf("Record the publish command result");
+    const readAt = publish.indexOf("Read the published integrity with a bounded retry");
     const smokeAt = publish.indexOf("Wait for public registry visibility and smoke npx install");
     const receiptAt = publish.indexOf("Write the canonical publish receipt");
-    expect(acceptedAt).toBeGreaterThanOrEqual(0);
-    expect(smokeAt).toBeGreaterThan(acceptedAt);
+    expect(intentAt).toBeGreaterThanOrEqual(0);
+    expect(commandAt).toBeGreaterThan(intentAt);
+    expect(succeededAt).toBeGreaterThan(commandAt);
+    expect(readAt).toBeGreaterThan(succeededAt);
+    expect(smokeAt).toBeGreaterThan(readAt);
     expect(receiptAt).toBeGreaterThan(smokeAt);
+    // The command result must be durable without any registry read.
+    const succeeded = publish.slice(succeededAt, readAt);
+    expect(succeeded).not.toContain("npm view");
+    // The read-back itself must be retried rather than failing on the first
+    // propagation state (ETARGET/E404).
+    expect(publish).toMatch(/for attempt in \$\(seq 1 40\)/);
+    expect(publish).toMatch(/cli-publish-intent-/);
     expect(publish).toMatch(/cli-registry-accepted-/);
   });
 
