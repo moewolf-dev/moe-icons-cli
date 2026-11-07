@@ -638,6 +638,25 @@ jobs:
           checkout_commit="$(git -C cli rev-parse HEAD)"
           test "$checkout_commit" = "$EXPECTED_CLI_COMMIT" || { echo "CLI fixture adapter commit mismatch" >&2; exit 1; }
           echo "candidate_sha=$actual"
+      - name: Require the native test toolchain before installing clitest
+        # clitest depends on node-pty, which has no Linux x64 prebuild and falls
+        # back to node-gyp. A runner without make/gcc/g++ fails deep inside npm ci
+        # with a misleading message, so fail early and name the host requirement.
+        run: |
+          set -euo pipefail
+          missing=""
+          for tool in make gcc g++ python3; do
+            command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+          done
+          if [ -n "$missing" ]; then
+            echo "acceptance runner is missing required native build tools:$missing" >&2
+            echo "install build-essential (make, gcc, g++, python3) on this runner" >&2
+            exit 1
+          fi
+          make --version | head -1
+          gcc --version | head -1
+          g++ --version | head -1
+          python3 --version
       - name: Install clitest
         working-directory: clitest
         run: npm ci
