@@ -151,8 +151,11 @@ jobs:
           set -euo pipefail
           npm ci
           npm run typecheck
-          npm test
+          # The test suite runs the real release-bump/payload-hash path, which
+          # requires the built dist. Build first so a clean self-hosted workspace
+          # cannot pass by accident on a stale dist from an earlier job.
           npm run build
+          npm test
 
       - name: Commit or reuse the exact package-set pin
         id: pin
