@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { decideRelease } from "../scripts/release-decision.mjs";
 
-const candidate = "a".repeat(64);
-const intent = { version: "0.0.19", tag: "v0.0.19", candidateSha256: candidate, pinCommit: "b".repeat(40), stage: "publish-intent" };
+const pin = "b".repeat(40);
+const intent = { version: "0.0.19", tag: "v0.0.19", candidateSha256: "a".repeat(64), pinCommit: pin, stage: "publish-intent" };
 
 const decide = (overrides = {}) =>
   decideRelease({
     intentStatus: "missing",
-    candidateSha256: candidate,
+    pinCommit: pin,
     nextVersion: "0.0.21",
     payloadHash: "c".repeat(64),
     lastPublishedPayloadHash: "d".repeat(64),
@@ -33,9 +33,9 @@ describe("release decision", () => {
     expect(() => decide({ intentStatus: "failed" })).toThrow(/refusing to allocate a new version/);
   });
 
-  it("refuses an intent that belongs to another candidate", () => {
-    expect(() => decide({ intentStatus: "found", intent: { ...intent, candidateSha256: "e".repeat(64) } }))
-      .toThrow(/another candidate/);
+  it("refuses an intent that belongs to another pin", () => {
+    expect(() => decide({ intentStatus: "found", intent: { ...intent, pinCommit: "e".repeat(40) } }))
+      .toThrow(/another pin/);
   });
 
   it("falls through to the payload check only when no intent exists", () => {

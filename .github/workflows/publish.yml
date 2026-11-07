@@ -245,8 +245,6 @@ jobs:
           node scripts/release-bump.mjs > "$RUNNER_TEMP/bump.json"
           HASH="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).payloadHash)" "$RUNNER_TEMP/bump.json")"
           NEXT="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1])).nextVersion)" "$RUNNER_TEMP/bump.json")"
-          # The payload hash identifies this exact candidate; every downstream job
-          # (including the reused-receipt path) must bind to it.
           echo "payload_hash=$HASH" >> "$GITHUB_OUTPUT"
           # R-P0-3 anti-recursion: a forged human commit with the same message
           # must NOT be skipped. Require marker + bot actor + only package*.json.
@@ -292,7 +290,9 @@ jobs:
             done
           fi
           LAST="$(gh release view "$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo v0.0.0)" --json body --jq .body 2>/dev/null | grep -o 'payloadHash: [a-f0-9]*' | awk '{print $2}' || true)"
-          DECISION="$(node scripts/release-decision.mjs --intent-status "$INTENT_STATUS" --registry "$REGISTRY" --candidate "$HASH" --next "$NEXT" --payload "$HASH" ${INTENT_FILE:+--intent "$INTENT_FILE"} ${LAST:+--last-payload "$LAST"})"
+          # One decision, one writer: scripts/release-decision.mjs owns the branch
+          # and this shell writes its outputs exactly once.
+          DECISION="$(node scripts/release-decision.mjs --intent-status "$INTENT_STATUS" --registry "$REGISTRY" --pin "$GITHUB_SHA" --next "$NEXT" --payload "$HASH" ${INTENT_FILE:+--intent "$INTENT_FILE"} ${LAST:+--last-payload "$LAST"})"
           node -e '
             const d=JSON.parse(process.argv[1]);
             const lines=[`should_release=${d.shouldRelease?1:0}`];
@@ -301,44 +301,6 @@ jobs:
             if(d.reuseReason) lines.push(`reuse_reason=${d.reuseReason}`);
             process.stdout.write(lines.join("\n")+"\n");
           ' "$DECISION" >> "$GITHUB_OUTPUT"
-          echo "payload_hash=$HASH" >> "$GITHUB_OUTPUT"
-          # R-P0-3 anti-recursion: a forged human commit with the same message
-          # must NOT be skipped. Require marker + bot actor + only package*.json.
-          GUARD="$(node scripts/release-commit.mjs guard --sha "$GITHUB_SHA" --actor "$GITHUB_ACTOR")"
-          if [ "$(node -p "JSON.parse(process.argv[1]).skip" "$GUARD")" = "true" ]; then
-            echo "bot release commit already handled; CI only" >&2
-            echo "should_release=0" >> "$GITHUB_OUTPUT"
-            echo "reuse_reason=bot-release-commit" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Recovery: a previous attempt for this exact pin may have already
-          # persisted a publish intent. Continue THAT version instead of
-          # publishing a new one; the intent is keyed by the pin commit.
-          INTENT_RUN="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=cli-publish-intent-${GITHUB_SHA}&per_page=1" --jq '.artifacts[0].workflow_run.id // empty' 2>/dev/null || true)"
-          if [ -n "$INTENT_RUN" ]; then
-            mkdir -p "$RUNNER_TEMP/intent"
-            if gh run download "$INTENT_RUN" --repo "$GITHUB_REPOSITORY" --name "cli-publish-intent-${GITHUB_SHA}" --dir "$RUNNER_TEMP/intent" 2>/dev/null \
-                && [ -f "$RUNNER_TEMP/intent/cli-publish-intent.json" ]; then
-              RESUME_VERSION="$(node -e 'process.stdout.write(String(require(process.argv[1]).version))' "$RUNNER_TEMP/intent/cli-publish-intent.json")"
-              if [ -n "$RESUME_VERSION" ] && npm view "@moewolf/moe-icons-cli@${RESUME_VERSION}" version >/dev/null 2>&1; then
-                echo "resuming the recorded intent version ${RESUME_VERSION} for pin ${GITHUB_SHA}" >&2
-                echo "should_release=1" >> "$GITHUB_OUTPUT"
-                echo "next_version=$RESUME_VERSION" >> "$GITHUB_OUTPUT"
-                echo "resume=1" >> "$GITHUB_OUTPUT"
-                echo "reuse_reason=resumed-intent" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-            fi
-          fi
-          LAST="$(gh release view "$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo v0.0.0)" --json body --jq .body 2>/dev/null | grep -o 'payloadHash: [a-f0-9]*' | awk '{print $2}' || true)"
-          if [ -n "$LAST" ] && [ "$LAST" = "$HASH" ]; then
-            echo "payload unchanged; CI only" >&2
-            echo "should_release=0" >> "$GITHUB_OUTPUT"
-            echo "reuse_reason=unchanged-payload" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "should_release=1" >> "$GITHUB_OUTPUT"
-          echo "next_version=$NEXT" >> "$GITHUB_OUTPUT"
 
   recover:
     if: always() && inputs.auth_audit_only != true && github.event_name == 'workflow_dispatch' && inputs.resume_run_id != '' && needs.validate.result == 'success' && (needs.npm-auth-preflight.result == 'success' || needs.npm-auth-preflight.result == 'skipped')

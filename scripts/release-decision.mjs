@@ -22,7 +22,7 @@ export function decideRelease({
   intentStatus,
   intent,
   registry,
-  candidateSha256,
+  pinCommit,
   nextVersion,
   payloadHash,
   lastPublishedPayloadHash,
@@ -35,9 +35,12 @@ export function decideRelease({
     if (typeof intent.version !== "string" || !/^\d+\.\d+\.\d+$/.test(intent.version)) {
       fail(`publish intent version is invalid: ${intent.version}`);
     }
-    if (!/^[a-f0-9]{64}$/.test(String(candidateSha256 || ""))) fail("candidate sha256 is required");
-    if (intent.candidateSha256 !== candidateSha256) {
-      fail(`publish intent belongs to another candidate (${intent.candidateSha256} != ${candidateSha256})`);
+    // The intent is keyed by the pin commit; that is the identity a decision can
+    // check here. The tarball candidateSha256 is checked later, in
+    // verify-publish-evidence, where the candidate tarball actually exists.
+    if (!/^[a-f0-9]{40}$/.test(String(pinCommit || ""))) fail("pin commit is required");
+    if (intent.pinCommit !== pinCommit) {
+      fail(`publish intent belongs to another pin (${intent.pinCommit} != ${pinCommit})`);
     }
     // Registry readability is recorded but never changes the decision.
     return {
@@ -58,7 +61,7 @@ export function decideRelease({
   return { shouldRelease: true, nextVersion, resume: false, reuseReason: "new-payload" };
 }
 
-const FLAGS = new Set(["intent-status", "intent", "registry", "candidate", "next", "payload", "last-payload"]);
+const FLAGS = new Set(["intent-status", "intent", "registry", "pin", "next", "payload", "last-payload"]);
 
 export function parseArgs(argv) {
   const args = new Map();
@@ -83,7 +86,7 @@ function main() {
     intentStatus: args.get("intent-status"),
     intent,
     registry: args.get("registry"),
-    candidateSha256: args.get("candidate"),
+    pinCommit: args.get("pin"),
     nextVersion: args.get("next"),
     payloadHash: args.get("payload"),
     lastPublishedPayloadHash: args.get("last-payload"),
