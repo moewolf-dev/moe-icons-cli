@@ -552,8 +552,6 @@ jobs:
           # window. The repository/org retention ceiling must allow 90 days.
           retention-days: 90
           if-no-files-found: error
-          retention-days: 1
-
   acceptance:
     needs: [decide, pack]
     if: always() && needs.decide.result == 'success' && needs.pack.result == 'success'
