@@ -46,6 +46,14 @@ test('frozen release tag writer can use a narrowly-scoped explicit credential', 
     'the dedicated credential may appear only in this step');
 });
 
+test('immutable candidates remain available for the full recovery window', () => {
+  const pack = publishJob('pack');
+  assert.ok(pack, 'candidate pack job required');
+  const step = pack.match(/      - name: Upload the immutable candidate artifact\n([\s\S]*?)(?=^      - name:|$(?![\s\S]))/m)?.[1];
+  assert.ok(step, 'immutable candidate artifact upload required');
+  assert.match(step, /retention-days: 90\b/, 'candidate artifact must outlive short repository defaults');
+});
+
 function workflowJobs(text) {
   const jobs = {};
   let current = null;
