@@ -30,10 +30,17 @@ if (process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)) 
   if (!acceptanceLog.includes(`candidate_sha=${sha}`))throw Error('original accepted artifact digest not found');
   const frozen=JSON.parse(execFileSync(process.execPath,['scripts/release-commit.mjs','find','--payload-hash',pkg.payloadHash,'--source-commit',run.head_sha],{encoding:'utf8'}));
   if (!frozen||frozen.version!==pkg.version)throw Error('original frozen release commit not found');
-  const draft=JSON.parse(gh(['release','view',frozen.tag,'--repo',process.env.GITHUB_REPOSITORY,'--json','isDraft,targetCommitish,body']));
-  if (!draft.isDraft||draft.targetCommitish!==frozen.sha||!draft.body.includes(`sha256: ${sha}`)||!draft.body.includes(`payloadHash: ${pkg.payloadHash}`)) throw Error('draft release does not bind this immutable candidate');
-  const tag=JSON.parse(gh(['api',`repos/${process.env.GITHUB_REPOSITORY}/git/ref/tags/${frozen.tag}`]));
-  if(tag.object.type!=='commit'||tag.object.sha!==frozen.sha)throw Error('frozen tag mismatch');
+  // The original run failed while creating the tag, so neither a draft Release
+  // nor a tag may exist yet. Recovery is allowed in that shape, but any object
+  // that does exist must still bind this exact candidate and frozen commit.
+  const attempt=args=>{try{return {ok:true,value:JSON.parse(gh(args))};}catch{return {ok:false};}};
+  const draftResult=attempt(['release','view',frozen.tag,'--repo',process.env.GITHUB_REPOSITORY,'--json','isDraft,targetCommitish,body']);
+  const draft=draftResult.ok?draftResult.value:null;
+  if (draft&&(!draft.isDraft||draft.targetCommitish!==frozen.sha||!draft.body.includes(`sha256: ${sha}`)||!draft.body.includes(`payloadHash: ${pkg.payloadHash}`))) throw Error('draft release does not bind this immutable candidate');
+  const tagResult=attempt(['api',`repos/${process.env.GITHUB_REPOSITORY}/git/ref/tags/${frozen.tag}`]);
+  const tag=tagResult.ok?tagResult.value:null;
+  if(tag&&(tag.object.type!=='commit'||tag.object.sha!==frozen.sha))throw Error('frozen tag mismatch');
+  if(!draft&&!tag) console.log(JSON.stringify({recovery:'pre-tag',tag:frozen.tag,commit:frozen.sha,note:'no tag or draft release yet; the frozen commit, tarball and acceptance evidence above are the binding'}));
   const originalPkg=JSON.parse(execFileSync('git',['show',`${frozen.sha}:package.json`],{encoding:'utf8'}));
   if(JSON.stringify(originalPkg)!==JSON.stringify(pkg))throw Error('packed package differs from frozen commit');
   const outputs={candidate_sha:sha,cli_commit:frozen.sha,release_tag:frozen.tag,next_version:pkg.version,payload_hash:pkg.payloadHash,pin_commit:run.head_sha};
