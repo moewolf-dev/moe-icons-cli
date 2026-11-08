@@ -968,7 +968,10 @@ jobs:
           node scripts/wait-for-registry-package.mjs "@moewolf/moe-icons-cli" "$version"
       - name: Finalize the Release
         env:
-          GH_TOKEN: ${{ github.token }}
+          # Publishing a release whose target commit changes workflow files
+          # requires a token with Workflows: write. Reuse the same narrowly
+          # scoped override used to create the frozen tag and draft release.
+          GH_TOKEN: ${{ secrets.CLI_RELEASE_WRITE_TOKEN || github.token }}
           TAG: ${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}
         run: |
           set -euo pipefail
