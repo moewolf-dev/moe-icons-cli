@@ -697,9 +697,6 @@ jobs:
     permissions:
       actions: read
       contents: write
-      # Creating a ref for a frozen release commit may be checked against the
-      # workflows scope as well; the publish job creates the release tag.
-      workflows: write
       id-token: write
     steps:
       # FIX-29-B: check out the exact candidate commit so the scanner script is

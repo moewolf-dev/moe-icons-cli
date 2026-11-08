@@ -138,7 +138,7 @@ describe("CLI workflow token scopes", () => {
     const pin = readFileSync(join(process.cwd(), ".github", "workflows", "resource-pin.yml"), "utf8");
     expect(publish).toMatch(/^permissions: \{\}$/m);
     expect(publish).toMatch(/pack:[\s\S]*?permissions:\n      contents: write/);
-    expect(publish).toMatch(/publish:[\s\S]*?permissions:\n      actions: read\n      contents: write\n(?:      # .*\n)*      workflows: write\n      id-token: write/);
+    expect(publish).toMatch(/publish:[\s\S]*?permissions:\n      actions: read\n      contents: write\n      id-token: write/);
     expect(publish).toMatch(/recover:[\s\S]*?permissions:\n      actions: read\n      contents: read/);
     expect(resume).toMatch(/^permissions: \{\}$/m);
     expect(resume).toMatch(/resume:[\s\S]*?permissions:\n      actions: write\n      contents: read/);
