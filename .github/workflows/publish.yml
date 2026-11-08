@@ -548,6 +548,9 @@ jobs:
           # AUD-OBS-03: upload the single staging directory so the artifact root
           # is flat (tgz + sidecars at the same level); download keeps that layout.
           path: ${{ runner.temp }}/candidate
+          # Recovery uses this exact artifact and must survive the incident
+          # window. The repository/org retention ceiling must allow 90 days.
+          retention-days: 90
           if-no-files-found: error
           retention-days: 1
 
