@@ -776,7 +776,12 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: Create or reuse draft Release and upload the candidate
         env:
-          GH_TOKEN: ${{ github.token }}
+          # Optional fine-grained token for tagging the frozen release commit.
+          # GitHub's create-reference endpoint may require Workflows: write
+          # when the target is not the workflow's triggering commit. The
+          # repository GITHUB_TOKEN remains the default; this secret is only
+          # exposed to this one publish step.
+          GH_TOKEN: ${{ secrets.CLI_RELEASE_WRITE_TOKEN || github.token }}
           TAG: ${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}
           EXPECTED_SHA: ${{ needs.recover.outputs.candidate_sha || needs.pack.outputs.candidate_sha }}
           CLI_COMMIT: ${{ needs.recover.outputs.cli_commit || needs.pack.outputs.cli_commit }}
