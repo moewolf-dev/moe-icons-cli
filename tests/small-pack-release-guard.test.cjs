@@ -52,6 +52,8 @@ test('immutable candidates remain available for the full recovery window', () =>
   const step = pack.match(/      - name: Upload the immutable candidate artifact\n([\s\S]*?)(?=^      - name:|$(?![\s\S]))/m)?.[1];
   assert.ok(step, 'immutable candidate artifact upload required');
   assert.match(step, /retention-days: 90\b/, 'candidate artifact must outlive short repository defaults');
+  assert.equal((step.match(/^\s+retention-days:/gm) ?? []).length, 1,
+    'artifact retention must have one unambiguous YAML value');
 });
 
 function workflowJobs(text) {
