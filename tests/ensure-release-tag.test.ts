@@ -5,13 +5,17 @@ const tag = "v0.0.21";
 const commit = "a".repeat(40);
 const token = "secret-token-value";
 
-function response(status: number, body: unknown = "", requestId = "") {
+function response(status: number, body: unknown = "", requestId = "", acceptedPermissions = "") {
   return {
     status,
-    headers: { get: (name: string) => (name === "x-github-request-id" ? requestId : null) },
+    headers: { get: (name: string) => {
+      if (name === "x-github-request-id") return requestId;
+      if (name === "x-accepted-github-permissions") return acceptedPermissions;
+      return null;
+    } },
     text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
     json: async () => body,
-    clone() { return response(status, body, requestId); },
+    clone() { return response(status, body, requestId, acceptedPermissions); },
   };
 }
 
@@ -24,8 +28,8 @@ describe("release tag diagnostics", () => {
     await expect(base((url, init?: { method?: string }) => {
       calls.push(`${init?.method || "GET"} ${url}`);
       if (url.endsWith(`git/ref/tags/${tag}`)) return response(404);
-      return response(403, { message: "Resource not accessible by integration", documentation_url: "https://docs.github.com/rest" }, "REQ-123");
-    })).rejects.toThrow(/HTTP 403, request REQ-123.*Resource not accessible by integration.*docs\.github\.com.*tag=v0\.0\.21 commit=a{40}/);
+      return response(403, { message: "Resource not accessible by integration", documentation_url: "https://docs.github.com/rest" }, "REQ-123", "contents=write");
+    })).rejects.toThrow(/HTTP 403, request REQ-123.*Resource not accessible by integration.*docs\.github\.com.*accepted-permissions=contents=write.*tag=v0\.0\.21 commit=a{40}/);
     expect(calls.some((call) => call.startsWith("POST"))).toBe(true);
   });
 

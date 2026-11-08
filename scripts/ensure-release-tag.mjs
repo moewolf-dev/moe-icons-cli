@@ -12,8 +12,10 @@ export async function ensureReleaseTag({repo='moewolf-dev/moe-icons-cli',tag,com
     let message='',documentation='';
     try{const parsed=JSON.parse(body);message=String(parsed.message||'');documentation=String(parsed.documentation_url||'');}catch{}
     const requestId=response.headers?.get?.('x-github-request-id')||'';
+    const acceptedPermissions=response.headers?.get?.('x-accepted-github-permissions')||'';
     return `${what} failed (HTTP ${response.status}${requestId?`, request ${requestId}`:''})`+
       `${message?`: ${message}`:''}${documentation?` (${documentation})`:''}`+
+      `${acceptedPermissions?` [accepted-permissions=${acceptedPermissions}]`:''}`+
       ` [tag=${tag} commit=${commit}]`;
   };
   let response=await request(`git/ref/tags/${tag}`);let created=false;
