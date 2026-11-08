@@ -1,5 +1,4 @@
 import {describe,it,expect} from 'vitest';
-// @ts-expect-error Operational guard is an ESM script.
 import {verifyRecoveryIdentity} from '../scripts/recover-candidate.mjs';
 const valid=()=>({run:{id:1,repository:{full_name:'owner/cli'},head_branch:'main',path:'.github/workflows/publish.yml',status:'completed',conclusion:'failure'},jobs:{total_count:4,jobs:[...['validate','pack','acceptance'].map((name,id)=>({id,name,status:'completed',conclusion:'success'})),{id:4,name:'publish',conclusion:'failure'}]},pkg:{name:'@moewolf/moe-icons-cli',version:'0.0.2',payloadHash:'a'.repeat(64)},manifest:{schemaVersion:1,version:'0.0.2',sha256:'b'.repeat(64)},sha:'b'.repeat(64),repository:'owner/cli',runId:1});
 describe('immutable publish recovery',()=>{
