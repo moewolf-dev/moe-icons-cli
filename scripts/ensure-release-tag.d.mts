@@ -1,7 +1,8 @@
-export function ensureReleaseTag(options: {
+export function ensureReleaseTag(input: {
   repo?: string;
   tag: string;
   commit: string;
   token: string;
-  fetchImpl?: (url: string, options: RequestInit) => Promise<Response>;
-}): Promise<{ status: 'verified'; repo: string; tag: string; commit: string; created: boolean }>;
+  // The production code passes fetch; tests inject narrow stubs.
+  fetchImpl?: (...args: any[]) => any;
+}): Promise<{ status: string; repo: string; tag: string; commit: string; created: boolean }>;
