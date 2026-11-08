@@ -4,6 +4,25 @@ import {join,resolve} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
+export function runGh(gh,args){try{return {ok:true,stdout:gh(args)};}catch(error){return {ok:false,stderr:String(error?.stderr||''),message:String(error?.message||error)};}}
+// A lookup may only report "absent" for an explicit 404. Permission errors,
+// throttling and transport failures must abort (after a bounded retry for the
+// transient ones) instead of being read as "not created yet".
+export function lookupOrAbsent({run,args,label,retries=3}){
+  let last='';
+  for(let attempt=1;attempt<=retries;attempt+=1){
+    const result=run(args);
+    if(result.ok){return {exists:true,value:JSON.parse(result.stdout)};}
+    const text=`${result.stderr||''} ${result.message||''}`.replace(/\s+/g,' ').trim();
+    last=text;
+    if(/HTTP 404|\bNot Found\b/.test(text))return {exists:false};
+    if(/HTTP 403|Resource not accessible|forbidden/i.test(text))throw Error(`${label}: GitHub denied the lookup: ${text}`);
+    const transient=/HTTP 5\d\d|rate limit|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|temporarily unavailable|connection reset/i.test(text);
+    if(transient){if(attempt<retries)continue;throw Error(`${label}: lookup failed after ${retries} attempts: ${text}`);}
+    throw Error(`${label}: lookup failed: ${text}`);
+  }
+  throw Error(`${label}: lookup failed after ${retries} attempts: ${last}`);
+}
 export function verifyRecoveryIdentity({run,jobs,pkg,manifest,sha,repository,runId}) {
   if (String(run.id)!==String(runId)||run.repository?.full_name!==repository||run.head_branch!=='main'||!workflowRunPathMatches(run, '.github/workflows/publish.yml')||run.status!=='completed'||run.conclusion!=='failure') throw Error('not a failed main publish workflow from this repository');
   if (jobs.total_count>100) throw Error('job history exceeds verified page');
@@ -33,12 +52,11 @@ if (process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)) 
   // The original run failed while creating the tag, so neither a draft Release
   // nor a tag may exist yet. Recovery is allowed in that shape, but any object
   // that does exist must still bind this exact candidate and frozen commit.
-  const attempt=args=>{try{return {ok:true,value:JSON.parse(gh(args))};}catch{return {ok:false};}};
-  const draftResult=attempt(['release','view',frozen.tag,'--repo',process.env.GITHUB_REPOSITORY,'--json','isDraft,targetCommitish,body']);
-  const draft=draftResult.ok?draftResult.value:null;
+  const draftResult=lookupOrAbsent({run:args=>runGh(gh,args),args:['release','view',frozen.tag,'--repo',process.env.GITHUB_REPOSITORY,'--json','isDraft,targetCommitish,body'],label:`draft release ${frozen.tag}`});
+  const draft=draftResult.exists?draftResult.value:null;
   if (draft&&(!draft.isDraft||draft.targetCommitish!==frozen.sha||!draft.body.includes(`sha256: ${sha}`)||!draft.body.includes(`payloadHash: ${pkg.payloadHash}`))) throw Error('draft release does not bind this immutable candidate');
-  const tagResult=attempt(['api',`repos/${process.env.GITHUB_REPOSITORY}/git/ref/tags/${frozen.tag}`]);
-  const tag=tagResult.ok?tagResult.value:null;
+  const tagResult=lookupOrAbsent({run:args=>runGh(gh,args),args:['api',`repos/${process.env.GITHUB_REPOSITORY}/git/ref/tags/${frozen.tag}`],label:`tag ${frozen.tag}`});
+  const tag=tagResult.exists?tagResult.value:null;
   if(tag&&(tag.object.type!=='commit'||tag.object.sha!==frozen.sha))throw Error('frozen tag mismatch');
   if(!draft&&!tag) console.log(JSON.stringify({recovery:'pre-tag',tag:frozen.tag,commit:frozen.sha,note:'no tag or draft release yet; the frozen commit, tarball and acceptance evidence above are the binding'}));
   const originalPkg=JSON.parse(execFileSync('git',['show',`${frozen.sha}:package.json`],{encoding:'utf8'}));
