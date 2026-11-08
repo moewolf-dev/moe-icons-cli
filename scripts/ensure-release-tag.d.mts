@@ -1,7 +1,7 @@
-export function ensureReleaseTag(options: {
+export function ensureReleaseTag(input: {
   repo?: string;
   tag: string;
   commit: string;
   token: string;
-  fetchImpl?: (url: string, options: RequestInit) => Promise<Response>;
-}): Promise<{ status: 'verified'; repo: string; tag: string; commit: string; created: boolean }>;
+  fetchImpl?: (url: string, init?: { method?: string; body?: string }) => unknown;
+}): Promise<{ status: string; repo: string; tag: string; commit: string; created: boolean }>;
