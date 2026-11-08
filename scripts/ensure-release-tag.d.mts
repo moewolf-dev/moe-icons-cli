@@ -3,5 +3,6 @@ export function ensureReleaseTag(input: {
   tag: string;
   commit: string;
   token: string;
-  fetchImpl?: (url: string, init?: { method?: string; body?: string }) => unknown;
+  // The production code passes fetch; tests inject narrow stubs.
+  fetchImpl?: (...args: any[]) => any;
 }): Promise<{ status: string; repo: string; tag: string; commit: string; created: boolean }>;
