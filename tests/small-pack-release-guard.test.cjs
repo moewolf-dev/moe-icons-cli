@@ -35,6 +35,17 @@ test('publish receipt persistence runs the gh-backed script with an explicit tok
   assert.match(step, /GH_TOKEN: \$\{\{ github\.token \}\}/, 'gh needs an explicit token outside the runner default');
 });
 
+test('frozen release tag writer can use a narrowly-scoped explicit credential', () => {
+  const publish = publishJob('publish');
+  assert.ok(publish, 'publish job required');
+  const step = publish.match(/      - name: Create or reuse draft Release and upload the candidate\n([\s\S]*?)(?=^      - name:|$(?![\s\S]))/m)?.[1];
+  assert.ok(step, 'release creation step required');
+  assert.match(step, /GH_TOKEN: \$\{\{ secrets\.CLI_RELEASE_WRITE_TOKEN \|\| github\.token \}\}/,
+    'prefer the optional dedicated credential while preserving the default token');
+  assert.equal((publish.match(/CLI_RELEASE_WRITE_TOKEN/g) ?? []).length, 1,
+    'the dedicated credential may appear only in this step');
+});
+
 function workflowJobs(text) {
   const jobs = {};
   let current = null;
