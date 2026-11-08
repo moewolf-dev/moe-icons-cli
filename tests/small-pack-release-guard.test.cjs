@@ -35,15 +35,17 @@ test('publish receipt persistence runs the gh-backed script with an explicit tok
   assert.match(step, /GH_TOKEN: \$\{\{ github\.token \}\}/, 'gh needs an explicit token outside the runner default');
 });
 
-test('frozen release tag writer can use a narrowly-scoped explicit credential', () => {
+test('frozen release creation and finalization share the narrowly-scoped credential', () => {
   const publish = publishJob('publish');
   assert.ok(publish, 'publish job required');
-  const step = publish.match(/      - name: Create or reuse draft Release and upload the candidate\n([\s\S]*?)(?=^      - name:|$(?![\s\S]))/m)?.[1];
-  assert.ok(step, 'release creation step required');
-  assert.match(step, /GH_TOKEN: \$\{\{ secrets\.CLI_RELEASE_WRITE_TOKEN \|\| github\.token \}\}/,
-    'prefer the optional dedicated credential while preserving the default token');
-  assert.equal((publish.match(/CLI_RELEASE_WRITE_TOKEN/g) ?? []).length, 1,
-    'the dedicated credential may appear only in this step');
+  for (const name of ['Create or reuse draft Release and upload the candidate', 'Finalize the Release']) {
+    const step = publish.match(new RegExp(`      - name: ${name}\\n([\\s\\S]*?)(?=^      - name:|$(?![\\s\\S]))`, 'm'))?.[1];
+    assert.ok(step, `${name} step required`);
+    assert.match(step, /GH_TOKEN: \$\{\{ secrets\.CLI_RELEASE_WRITE_TOKEN \|\| github\.token \}\}/,
+      `${name} must prefer the optional credential while preserving the default token`);
+  }
+  assert.equal((publish.match(/CLI_RELEASE_WRITE_TOKEN/g) ?? []).length, 2,
+    'the credential may be exposed only to the two release mutation steps');
 });
 
 test('immutable candidates remain available for the full recovery window', () => {
