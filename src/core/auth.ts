@@ -5,6 +5,7 @@ import { requestJson } from "../api/client.js";
 import { selectedStore, rememberFileStore, stateRoot } from "../auth/session-policy.cjs";
 import { resolve } from "node:path";
 import { boundedResponse } from "../auth/transport.js";
+import { abortableSleep } from "../auth/abortable-sleep.js";
 import { CliError } from "../errors/index.js";
 import type { CommandContext } from "./context.js";
 
@@ -211,10 +212,7 @@ export async function runLoginUseCase(context: CommandContext, deps: AuthUseCase
   const session = await loginWithDeviceSession(auth0Config(context), {
     request,
     openBrowser: browserOpener,
-    sleep: deps.sleep ?? ((milliseconds, signal) => new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(resolve, milliseconds);
-      signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new CliError("CANCELLED", "login cancelled")); }, { once: true });
-    })),
+    sleep: deps.sleep ?? abortableSleep,
     tokenStore,
     now: () => context.now().getTime(),
   }, context.signal);
