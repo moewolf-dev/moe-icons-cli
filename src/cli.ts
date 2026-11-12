@@ -1167,6 +1167,9 @@ async function runInstall(
   if (!result.ok && result.reason === "checksum-mismatch") {
     throw new CliError("VALIDATION_ERROR", result.message);
   }
+  if (!result.ok && result.reason === "forbidden") {
+    throw new CliError("FORBIDDEN", result.message);
+  }
   if (!result.ok && (result.reason === "network" || result.reason === "offline-no-cache")) {
     throw new CliError("NETWORK_ERROR", result.message);
   }
