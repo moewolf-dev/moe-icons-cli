@@ -54,4 +54,17 @@ test('canonical reused roots are tied to the registry and exact execution before
   }
   assert.throws(() => verifyExecutionWitness({ binding: { ...binding, pro: { ...binding.pro, candidateRootSha256: '0'.repeat(64) } }, producer, sourceDispatchId, api, download }), /root mismatch/);
   assert.throws(() => verifyExecutionWitness({ binding, producer: { ...producer, headSha: '0'.repeat(40) }, sourceDispatchId, api, download }), /execution identity mismatch/);
+  // Generator witness v2 adds the authenticated unit input fingerprints.
+  const v2 = { ...witness, schemaVersion: 2, unitInputs: [{ resourceKey: 'svg/pro/moe-private',
+    inputSha256: '1'.repeat(64), packageSha256: binding.pro.packageSetSha256 }] };
+  payloads[1] = bytes(v2);
+  assets[1].size = payloads[1].length;
+  assets[1].digest = `sha256:${sha(payloads[1])}`;
+  assert.equal(verifyExecutionWitness({ binding, producer, sourceDispatchId, api, download }).witness.schemaVersion, 2);
+  const broken = structuredClone(v2);
+  broken.unitInputs[0].inputSha256 = 'zz';
+  payloads[1] = bytes(broken);
+  assets[1].size = payloads[1].length;
+  assets[1].digest = `sha256:${sha(payloads[1])}`;
+  assert.throws(() => verifyExecutionWitness({ binding, producer, sourceDispatchId, api, download }), /unit input fingerprint/);
 });

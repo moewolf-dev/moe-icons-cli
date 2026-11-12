@@ -86,11 +86,28 @@ function verifyWitness({ binding, producer, sourceDispatchId, api, download, api
     && record.sourceCommit === binding.sourceCommit && record.sourceVersion === binding.resourceVersion
     && record.generatorCommit === binding.generatorCommit && exact(record.candidateSets, ['free', 'pro']), 'registry identity mismatch');
   const witness = fetchAsset(`execution-${producer.runId}-${producer.runAttempt}.json`);
-  assert(exact(witness, ['schemaVersion', 'sourceCommit', 'sourceDispatchId', 'registrySha256', 'producer', 'candidates'])
-    && witness.schemaVersion === 1 && witness.sourceCommit === binding.sourceCommit && witness.sourceDispatchId === sourceDispatchId
+  // Generator witness v2 retains authenticated unit input fingerprints on top
+  // of the v1 identity fields. Accept the exact key set for the declared
+  // schema; v1 witnesses remain valid for older immutable releases.
+  const witnessKeys = witness && witness.schemaVersion === 1
+    ? ['schemaVersion', 'sourceCommit', 'sourceDispatchId', 'registrySha256', 'producer', 'candidates']
+    : ['schemaVersion', 'sourceCommit', 'sourceDispatchId', 'registrySha256', 'producer', 'candidates', 'unitInputs'];
+  assert(exact(witness, witnessKeys) && [1, 2].includes(witness.schemaVersion)
+    && witness.sourceCommit === binding.sourceCommit && witness.sourceDispatchId === sourceDispatchId
     && witness.registrySha256 === recordSha256 && exact(witness.producer, ['runId', 'runAttempt', 'headSha'])
     && String(witness.producer.runId) === String(producer.runId) && witness.producer.runAttempt === producer.runAttempt
     && witness.producer.headSha === producer.headSha && exact(witness.candidates, ['free', 'pro']), 'execution identity mismatch');
+  if (witness.schemaVersion === 2) {
+    assert(Array.isArray(witness.unitInputs) && witness.unitInputs.length > 0 && witness.unitInputs.length <= 20_000,
+      'unit input fingerprints invalid');
+    let previous = '';
+    for (const item of witness.unitInputs) {
+      assert(exact(item, ['inputSha256', 'packageSha256', 'resourceKey'])
+        && typeof item.resourceKey === 'string' && item.resourceKey > previous
+        && HEX.test(item.inputSha256 || '') && HEX.test(item.packageSha256 || ''), 'unit input fingerprint invalid');
+      previous = item.resourceKey;
+    }
+  }
   for (const tier of ['free', 'pro']) {
     const item = witness.candidates[tier], expected = binding[tier];
     assert(exact(item, ['packageSetSha256', 'candidateRootSha256', 'candidateRootBytes']) && expected
