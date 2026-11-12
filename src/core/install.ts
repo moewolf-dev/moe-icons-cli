@@ -52,8 +52,28 @@ export type InstallResult =
   | { readonly ok: false; readonly reason: "not-found"; readonly message: string }
   | { readonly ok: false; readonly reason: "offline-no-cache"; readonly message: string }
   | { readonly ok: false; readonly reason: "disk-full"; readonly message: string }
+  | { readonly ok: false; readonly reason: "forbidden"; readonly message: string }
   | { readonly ok: false; readonly reason: "validation"; readonly message: string }
   | { readonly ok: false; readonly reason: "write-failed"; readonly message: string };
+
+/**
+ * Map a package-install failure message to its user-facing reason. A 403 from
+ * the Pro package-set endpoint is an entitlement denial (FORBIDDEN), not an
+ * unexpected write failure; denied accounts must see the same code as the
+ * documented Pro authorization contract.
+ */
+export function classifyInstallError(
+  message: string,
+): "cancelled" | "disk-full" | "not-found" | "forbidden" | "network" | "checksum-mismatch" | "validation" | "write-failed" {
+  if (/CANCELLED|cancelled/i.test(message)) return "cancelled";
+  if (/ENOSPC|no space left/i.test(message)) return "disk-full";
+  if (/HTTP_ERROR[^\n]*\b404\b/i.test(message)) return "not-found";
+  if (/HTTP_ERROR[^\n]*\b403\b|FORBIDDEN|active pro entitlement required/i.test(message)) return "forbidden";
+  if (/HTTP_ERROR[^\n]*\b5\d\d\b|NETWORK_ERROR|network|fetch failed|timed out/i.test(message)) return "network";
+  if (/checksum|SHA-256|digest mismatch|differs from immutable version pointer/i.test(message)) return "checksum-mismatch";
+  if (/config changed|unsafe|invalid|requires downloadMode|candidate-set:|config package plan:|small package install currently/i.test(message)) return "validation";
+  return "write-failed";
+}
 
 export interface InstallUseCaseDeps {
   readonly fs: TransactionalFs;
@@ -209,12 +229,7 @@ export async function runInstallUseCase(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (context.signal?.aborted || /CANCELLED|cancelled/i.test(message)) return { ok: false, reason: "cancelled", message };
-      if (/ENOSPC|no space left/i.test(message)) return { ok: false, reason: "disk-full", message };
-      if (/HTTP_ERROR[^\n]*\b404\b/i.test(message)) return { ok: false, reason: "not-found", message };
-      if (/HTTP_ERROR[^\n]*\b5\d\d\b|NETWORK_ERROR|network|fetch failed|timed out/i.test(message)) return { ok: false, reason: "network", message };
-      if (/checksum|SHA-256|digest mismatch|differs from immutable version pointer/i.test(message)) return { ok: false, reason: "checksum-mismatch", message };
-      if (/config changed|unsafe|invalid|requires downloadMode|candidate-set:|config package plan:|small package install currently/i.test(message)) return { ok: false, reason: "validation", message };
-      return { ok: false, reason: "write-failed", message };
+      return { ok: false, reason: classifyInstallError(message), message };
     }
   }
 
