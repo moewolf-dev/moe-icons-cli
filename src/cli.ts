@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { runGenerateUseCase } from "./core/generate.js";
 import { recoverManagedReconcile, safeManagedPath } from "./project/install.js";
 import { withProjectLockSync } from "./project/project-lock.js";
-import { runInstallUseCase } from "./core/install.js";
+import { classifyInstallError, runInstallUseCase } from "./core/install.js";
 import { runWizardUseCase, loginRecoveryChoices } from "./core/wizard.js";
 import type { CommandContext } from "./core/context.js";
 import { createCommandUi } from "./ui/create-ui.js";
@@ -1128,6 +1128,12 @@ async function runInstall(
       return 0;
     } catch (error) {
       progress.stop("Icon library download stopped");
+      if (error instanceof CliError) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      const reason = classifyInstallError(message);
+      if (reason === "forbidden") throw new CliError("FORBIDDEN", message);
+      if (reason === "not-found") throw new CliError("NOT_FOUND", message);
+      if (reason === "network") throw new CliError("NETWORK_ERROR", message);
       throw error;
     }
   }
