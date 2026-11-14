@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.0.38",
-  "sourceVersion": "0.0.38",
-  "sourceCommit": "ea4746d2ed9c944077b8d2be523f78cf6d4ee2ae",
-  "generatorCommit": "17ab613eb0a384034ab8eda9b00eb6cb54df6a50",
+  "catalogVersion": "0.0.39",
+  "sourceVersion": "0.0.39",
+  "sourceCommit": "b47b5bd1f36ad5b1949fb1c105b6b60124a3e950",
+  "generatorCommit": "90f930799b3131a12fb386ba173b5de301a509d8",
   "manifestSchemaVersion": 2,
   "styleGroups": [
     {
