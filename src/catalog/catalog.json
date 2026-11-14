@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.0.39",
-  "sourceVersion": "0.0.39",
-  "sourceCommit": "b47b5bd1f36ad5b1949fb1c105b6b60124a3e950",
+  "catalogVersion": "0.0.40",
+  "sourceVersion": "0.0.40",
+  "sourceCommit": "d4bc0fef3c4e2a540b423c396942498aed82021f",
   "generatorCommit": "90f930799b3131a12fb386ba173b5de301a509d8",
   "manifestSchemaVersion": 2,
   "styleGroups": [
@@ -15188,6 +15188,32 @@
         "moe-lite-outline",
         "moe-outline",
         "moe-solid"
+      ]
+    },
+    {
+      "id": "test-cube",
+      "name": "test-cube",
+      "prefix": "test",
+      "label": "test-cube",
+      "keywords": [
+        "cube",
+        "test"
+      ],
+      "categories": [
+        "test"
+      ],
+      "variants": [
+        "moe-outline"
+      ],
+      "targets": [
+        "react",
+        "vue",
+        "vanilla",
+        "assets"
+      ],
+      "aliases": [],
+      "availableIn": [
+        "moe-outline"
       ]
     },
     {
