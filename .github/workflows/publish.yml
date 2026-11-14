@@ -249,7 +249,7 @@ jobs:
           # the CLI independently (that is how npm reached 0.0.32 while the
           # resource was 0.0.31).
           RESOURCE_VERSION="${MOEICONS_RELEASE_TRAIN_VERSION:-$(node -p "require('./src/catalog/resource-release.json').resourceVersion")}"
-          CURRENT_VERSION="$(node -p "require('./package.json').version")"
+          CURRENT_VERSION="${MOEICONS_RELEASE_CURRENT_VERSION:-$(node -p "require('./package.json').version")}"
           [[ "$RESOURCE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           if [ "$RESOURCE_VERSION" = "$CURRENT_VERSION" ]; then
             echo "resource train $RESOURCE_VERSION already published; CI only" >&2

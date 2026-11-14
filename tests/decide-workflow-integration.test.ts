@@ -113,6 +113,7 @@ exit 0
           GITHUB_REPOSITORY: "moewolf-dev/moe-icons-cli",
           GITHUB_ACTOR: "someone",
           MOEICONS_RELEASE_TRAIN_VERSION: "0.0.34",
+          MOEICONS_RELEASE_CURRENT_VERSION: "0.0.32",
         },
       });
       child.on("exit", (code: number | null) => resolve(code));
