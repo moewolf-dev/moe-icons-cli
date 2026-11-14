@@ -11,7 +11,7 @@ import { join } from "node:path";
  * gh/npm/sleep, so the assertions cover the workflow's observable outputs
  * (should_release / next_version / resume) rather than the presence of a string
  * in the file. This is the gate that caught the stale branch appended after the
- * new decision: it emitted 0.0.19 and then overwrote it with 0.0.21.
+ * new decision: it emitted 0.0.34 and then overwrote it with 0.0.35.
  */
 
 const root = process.cwd();
@@ -50,8 +50,8 @@ function harness(mode: string) {
 
   const intent = JSON.stringify({
     schemaVersion: 1,
-    version: "0.0.19",
-    tag: "v0.0.19",
+    version: "0.0.34",
+    tag: "v0.0.34",
     candidateSha256: "a".repeat(64),
     releaseCommit: "c".repeat(40),
     pinCommit: headSha,
@@ -63,7 +63,7 @@ function harness(mode: string) {
     npm: `#!/bin/sh
 case "$MODE" in
   etarget) echo "npm error code ETARGET" >&2; exit 1 ;;
-  *) echo "0.0.19"; exit 0 ;;
+  *) echo "0.0.34"; exit 0 ;;
 esac
 `,
     gh: `#!/bin/sh
@@ -81,7 +81,7 @@ case "$1 $2" in
     printf '%s\\n' "$INTENT_JSON" > "$RUNNER_TEMP/intent/cli-publish-intent.json"
     exit 0 ;;
   "release list")
-    echo "v0.0.20"; exit 0 ;;
+    echo "v0.0.35"; exit 0 ;;
   "release view")
     printf 'payloadHash: %s\\n' "$LAST_HASH"; exit 0 ;;
 esac
@@ -112,6 +112,7 @@ exit 0
           GITHUB_SHA: headSha,
           GITHUB_REPOSITORY: "moewolf-dev/moe-icons-cli",
           GITHUB_ACTOR: "someone",
+          MOEICONS_RELEASE_TRAIN_VERSION: "0.0.34",
         },
       });
       child.on("exit", (code: number | null) => resolve(code));
@@ -125,12 +126,12 @@ exit 0
 }
 
 describe("decide step behaviour", () => {
-  it("pins 0.0.19 when an intent exists and npm is not readable yet (ETARGET)", async () => {
+  it("pins 0.0.34 when an intent exists and npm is not readable yet (ETARGET)", async () => {
     const h = harness("etarget");
     try {
       expect(await h.run()).toBe(0);
       const out = h.outputs();
-      expect(out.next_version).toBe("0.0.19");
+      expect(out.next_version).toBe("0.0.34");
       expect(out.should_release).toBe("1");
       expect(out.resume).toBe("1");
       expect(out.reuse_reason).toBe("resumed-intent");
@@ -139,11 +140,11 @@ describe("decide step behaviour", () => {
     }
   });
 
-  it("pins 0.0.19 when the recorded version is already readable", async () => {
+  it("pins 0.0.34 when the recorded version is already readable", async () => {
     const h = harness("intent");
     try {
       expect(await h.run()).toBe(0);
-      expect(h.outputs()).toMatchObject({ next_version: "0.0.19", resume: "1" });
+      expect(h.outputs()).toMatchObject({ next_version: "0.0.34", resume: "1" });
     } finally {
       h.cleanup();
     }
@@ -181,7 +182,7 @@ describe("decide step behaviour", () => {
     }
   });
 
-  it("bumps when no intent exists and the payload is new", async () => {
+  it("publishes the train version when no intent exists and the payload is new", async () => {
     const h = harness("new");
     try {
       expect(await h.run()).toBe(0);
@@ -190,7 +191,7 @@ describe("decide step behaviour", () => {
       expect(out.reuse_reason).toBe("new-payload");
       expect(out.resume).toBeUndefined();
       expect(out.next_version).toMatch(/^\d+\.\d+\.\d+$/);
-      expect(out.next_version).not.toBe("0.0.19");
+      expect(out.next_version).toBe("0.0.34");
     } finally {
       h.cleanup();
     }
