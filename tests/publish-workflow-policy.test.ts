@@ -64,6 +64,14 @@ describe("R-P0-3/R-P0-4 recoverable release commit and identity", () => {
   });
 });
 
+describe("Release train version", () => {
+  it("uses the pinned resource version instead of a CLI patch bump", () => {
+    expect(workflow).toMatch(/src\/catalog\/resource-release\.json/);
+    expect(workflow).toMatch(/NEXT="\$RESOURCE_VERSION"/);
+    expect(workflow).toMatch(/must be greater than CLI/);
+  });
+});
+
 describe("R-P0-2 kill switch cannot be bypassed manually", () => {
   it("manual dispatch requires the switch and an explicit break-glass", () => {
     expect(workflow).toMatch(/dry_run:/);
