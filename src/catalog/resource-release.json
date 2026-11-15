@@ -1,34 +1,34 @@
 {
   "schemaVersion": 2,
-  "resourceVersion": "0.0.43",
-  "sourceCommit": "32854389e6415365b0390e7b1c6d5aa76d7731b4",
-  "generatorCommit": "1cb30759a0e74a170f929f518ff76700ac3734ef",
-  "sourceDispatchId": "58eac48c742d0847ddcba7ef3ad34873a147b98c14d94e9eda8d0eafeac9e0ea",
+  "resourceVersion": "0.0.44",
+  "sourceCommit": "a5041402fa6b4ddff397285a2b985f7cc79ed0d5",
+  "generatorCommit": "925fd8eb211b804fdf405d6c920e8a2cd8d31ef6",
+  "sourceDispatchId": "4cc783a017b94bcec7e49bfa3d8268c1c3231cc7e7ce6805516212267997e0e2",
   "producer": {
     "repository": "moewolf-dev/moe-icons-code-library",
     "workflowPath": ".github/workflows/small-pack-candidate.yml",
-    "runId": "43701867878",
+    "runId": "43719424453",
     "runAttempt": 1,
-    "headSha": "1cb30759a0e74a170f929f518ff76700ac3734ef"
+    "headSha": "925fd8eb211b804fdf405d6c920e8a2cd8d31ef6"
   },
   "packageSets": {
     "schemaVersion": 1,
-    "resourceVersion": "0.0.43",
-    "sourceCommit": "32854389e6415365b0390e7b1c6d5aa76d7731b4",
-    "generatorCommit": "1cb30759a0e74a170f929f518ff76700ac3734ef",
+    "resourceVersion": "0.0.44",
+    "sourceCommit": "a5041402fa6b4ddff397285a2b985f7cc79ed0d5",
+    "generatorCommit": "925fd8eb211b804fdf405d6c920e8a2cd8d31ef6",
     "free": {
       "candidateRootBytes": 455,
-      "candidateRootSha256": "fcbfbe846d06f6d6629a29f407e3087c012472e58496a403bf4be17debaeabc7",
-      "packageSetSha256": "1c45d4fe805123cb9073126f0bd983fd2a61cc6eb1f1d4e9eccb0467c50427ea"
+      "candidateRootSha256": "87c9898e21918833f7b5501d6616883b435fbc289b863b94f36e2b7544224dae",
+      "packageSetSha256": "4097abf165925cedcde3293cec9c940c4745c090fed82f5048abea73c64fe220"
     },
     "pro": {
       "candidateRootBytes": 453,
-      "candidateRootSha256": "ef09203948ed477719a348799d1bbf89cc45d3c41cd6b84e63c6b2cb198a7fc3",
-      "packageSetSha256": "0016e90deb29788545dcee251dcee046887ff182ea2f3ca3efdd8fd9251a65e2"
+      "candidateRootSha256": "83624f84b7980646210a3fa9c63233705cfbf9875a8881c907473ca30a7a4b9f",
+      "packageSetSha256": "be909cab4648b9928f3c87079859908d551136c49b65446d37b6f8877f0b5ee0"
     }
   },
-  "packageSetResourceDigest": "883194337c74b13b88ff71f26f122f9ea16e06fca38eca93491d3caf00517358",
-  "packageSetDescriptorSha256": "a281996c534386a70d3c5f0cbdd67cdc547925d39023f6ac9bb56d141ff49c8f",
-  "catalogSha256": "e471ee0d39fa552e55778be2ea2715dce2ab2ccdf940be5af3a2bc4ef910c10a",
-  "appliedAt": "2026-11-15T12:26:13.461Z"
+  "packageSetResourceDigest": "2cf6caa1bf0c29efc65ae1caa1478055bc41c90fcba071dfee3c59a612539e97",
+  "packageSetDescriptorSha256": "5f66a1d002bcdd4d69b21906fb836f8cb137095a308473b7a16fdc62fd0d2d75",
+  "catalogSha256": "462b93be11486acf1590c468ee33956ac504fb77c6561566165c1013c568968b",
+  "appliedAt": "2026-11-15T15:59:56.997Z"
 }
