@@ -1021,15 +1021,24 @@ jobs:
           PIN_COMMIT: ${{ needs.recover.outputs.pin_commit || github.sha }}
         run: |
           set -euo pipefail
+          fetch_attestations() {
+            local version="$1" attempt
+            for attempt in $(seq 1 36); do
+              if [ -f scripts/metered-curl.cjs ]; then
+                if node scripts/metered-curl.cjs --url "https://registry.npmjs.org/-/npm/v1/attestations/@moewolf/moe-icons-cli@${version}" --header 'Accept: application/json' --output "$RUNNER_TEMP/cli-attestations.json" --scope cli-registry-attestation --transport-report "$RUNNER_TEMP/cli-attestation-transport.json"; then
+                  cat "$RUNNER_TEMP/cli-attestations.json"; return 0
+                fi
+              elif curl -fsSL -H 'Accept: application/json' "https://registry.npmjs.org/-/npm/v1/attestations/@moewolf/moe-icons-cli@${version}"; then
+                return 0
+              fi
+              if [ "$attempt" -eq 36 ]; then echo "attestation endpoint did not become visible" >&2; return 1; fi
+              sleep 10
+            done
+          }
           version="${TAG#v}"
           integrity="$(npm view "@moewolf/moe-icons-cli@${version}" dist.integrity)"
           [[ "$integrity" =~ ^sha512- ]] || { echo "missing npm integrity" >&2; exit 1; }
-          if [ -f scripts/metered-curl.cjs ]; then
-            node scripts/metered-curl.cjs --url "https://registry.npmjs.org/-/npm/v1/attestations/@moewolf/moe-icons-cli@${version}" --header 'Accept: application/json' --output "$RUNNER_TEMP/cli-attestations.json" --scope cli-registry-attestation --transport-report "$RUNNER_TEMP/cli-attestation-transport.json"
-            prov="$(cat "$RUNNER_TEMP/cli-attestations.json")"
-          else
-            prov="$(curl -fsSL -H 'Accept: application/json' "https://registry.npmjs.org/-/npm/v1/attestations/@moewolf/moe-icons-cli@${version}")"
-          fi
+          prov="$(fetch_attestations "$version")"
           node -e 'const a=JSON.parse(process.argv[1]);if(!Array.isArray(a.attestations)||a.attestations.length===0){console.error("missing provenance attestations");process.exit(1);}' "$prov"
           mkdir -p receipt
           node -e '
@@ -1146,7 +1155,12 @@ jobs:
             echo "release tarball integrity differs from the npm package; refusing a reused receipt" >&2
             exit 1
           fi
-          ATTESTATIONS="$(curl -fsSL -H 'Accept: application/json' "https://registry.npmjs.org/-/npm/v1/attestations/@moewolf/moe-icons-cli@${VERSION}")"
+          ATTESTATIONS=""
+          for attempt in $(seq 1 36); do
+            if ATTESTATIONS="$(curl -fsSL -H 'Accept: application/json' "https://registry.npmjs.org/-/npm/v1/attestations/@moewolf/moe-icons-cli@${VERSION}")"; then break; fi
+            if [ "$attempt" -eq 36 ]; then echo "attestation endpoint did not become visible" >&2; exit 1; fi
+            sleep 10
+          done
           node -e 'const a=JSON.parse(process.argv[1]);if(!Array.isArray(a.attestations)||a.attestations.length===0){console.error("missing provenance attestations");process.exit(1);}' "$ATTESTATIONS"
           mkdir -p receipt
           node -e '
