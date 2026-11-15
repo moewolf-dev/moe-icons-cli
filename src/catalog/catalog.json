@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.0.41",
-  "sourceVersion": "0.0.41",
-  "sourceCommit": "59349ed0bbe3d352f3899c1f20f06119a08b5d61",
+  "catalogVersion": "0.0.42",
+  "sourceVersion": "0.0.42",
+  "sourceCommit": "29e9e0c19b7667357189560df083bdcecd314b97",
   "generatorCommit": "1cb30759a0e74a170f929f518ff76700ac3734ef",
   "manifestSchemaVersion": 2,
   "styleGroups": [
