@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.0.40",
-  "sourceVersion": "0.0.40",
-  "sourceCommit": "d4bc0fef3c4e2a540b423c396942498aed82021f",
-  "generatorCommit": "90f930799b3131a12fb386ba173b5de301a509d8",
+  "catalogVersion": "0.0.41",
+  "sourceVersion": "0.0.41",
+  "sourceCommit": "59349ed0bbe3d352f3899c1f20f06119a08b5d61",
+  "generatorCommit": "1cb30759a0e74a170f929f518ff76700ac3734ef",
   "manifestSchemaVersion": 2,
   "styleGroups": [
     {
@@ -15203,6 +15203,7 @@
         "test"
       ],
       "variants": [
+        "moe-lite-outline",
         "moe-outline"
       ],
       "targets": [
@@ -15213,6 +15214,7 @@
       ],
       "aliases": [],
       "availableIn": [
+        "moe-lite-outline",
         "moe-outline"
       ]
     },
