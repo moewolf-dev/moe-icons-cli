@@ -1025,7 +1025,7 @@ jobs:
             local version="$1" attempt
             for attempt in $(seq 1 36); do
               if [ -f scripts/metered-curl.cjs ]; then
-                if node scripts/metered-curl.cjs --url "https://registry.npmjs.org/-/npm/v1/attestations/@moewolf/moe-icons-cli@${version}" --header 'Accept: application/json' --output "$RUNNER_TEMP/cli-attestations.json" --scope cli-registry-attestation --transport-report "$RUNNER_TEMP/cli-attestation-transport.json"; then
+                if node scripts/metered-curl.cjs --url "https://registry.npmjs.org/-/npm/v1/attestations/@moewolf/moe-icons-cli@${version}" --header 'Accept: application/json' --output "$RUNNER_TEMP/cli-attestations.json" --scope cli-registry-attestation --transport-report "$RUNNER_TEMP/cli-attestation-transport.json" >&2; then
                   cat "$RUNNER_TEMP/cli-attestations.json"; return 0
                 fi
               elif curl -fsSL -H 'Accept: application/json' "https://registry.npmjs.org/-/npm/v1/attestations/@moewolf/moe-icons-cli@${version}"; then
