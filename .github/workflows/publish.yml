@@ -706,6 +706,8 @@ jobs:
   publish:
     needs: [decide, pack, acceptance, recover]
     if: always() && (needs.acceptance.result == 'success' || needs.recover.result == 'success')
+    outputs:
+      version: ${{ steps.published-version.outputs.version }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: npm-publish
@@ -1072,6 +1074,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/persist-publish-receipt.mjs
+
+
+      - name: Export published version
+        id: published-version
+        env:
+          TAG: ${{ needs.recover.outputs.release_tag || needs.pack.outputs.release_tag }}
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  notify-plugin:
+    needs: [publish]
+    if: needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch plugin notifier with exact publish identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISHED_VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$PUBLISHED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh workflow run plugin-update.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f publish_run_id="$GITHUB_RUN_ID" -f published_version="$PUBLISHED_VERSION"
 
   reused-receipt:
     # The pin can point at a commit whose exact payload is already released
