@@ -1080,7 +1080,9 @@ jobs:
     # binds the already published version instead of silently publishing
     # nothing.
     needs: decide
-    if: always() && needs.decide.result == 'success' && needs.decide.outputs.should_release == '0' && github.event_name == 'workflow_dispatch'
+    # A manual dry-run has no payload hash; there is nothing to reuse. Skip
+    # instead of failing the validation-only run.
+    if: always() && needs.decide.result == 'success' && needs.decide.outputs.should_release == '0' && needs.decide.outputs.payload_hash != '' && github.event_name == 'workflow_dispatch'
     runs-on: ${{ fromJSON(vars.SMALL_PACK_CLI_RUNNER || '["self-hosted","Linux","X64","moe-ci-server"]') }}
     timeout-minutes: 10
     permissions:
