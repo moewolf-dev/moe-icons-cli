@@ -213,6 +213,12 @@ export function createReadlineUiRuntime(
   options: {
     readonly input?: NodeJS.ReadStream;
     readonly output?: NodeJS.WriteStream;
+    /**
+     * REF-07: readline consumes Ctrl+C as a line-editor SIGINT instead of
+     * delivering a process signal. Forward it to the wrapper-owned shutdown
+     * handler so the first Ctrl+C still aborts with 130.
+     */
+    readonly onInterrupt?: () => void;
   } = {},
 ): AccessibleUiRuntime & { readonly close: () => void } {
   const input = options.input ?? process.stdin;
@@ -230,6 +236,13 @@ export function createReadlineUiRuntime(
   };
   rl.on("close", () => {
     closed = true;
+  });
+  rl.on("SIGINT", () => {
+    try {
+      options.onInterrupt?.();
+    } finally {
+      close();
+    }
   });
   return {
     write: (text) => output.write(text),

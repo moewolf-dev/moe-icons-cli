@@ -122,6 +122,9 @@ if (args.length === 1 && ["--help", "-h", "help"].includes(args[0])) {
     rows: () => process.stdout.rows,
     signal: controller.signal,
     onCleanup: (cleanup) => cleanups.push(cleanup),
+    // Canonical readline consumes Ctrl+C in --accessible mode; forward it to the
+    // same bounded shutdown path as an OS signal.
+    onInterrupt: () => handleSignal("SIGINT"),
   };
 
   try {

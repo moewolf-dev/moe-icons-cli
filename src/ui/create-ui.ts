@@ -24,6 +24,8 @@ export interface CreateUiOptions {
   /** Present in tests (and optional in production). When set, skip Clack so prompts are injectable. */
   readonly streams?: StreamUiRuntime;
   readonly env: Readonly<Record<string, string | undefined>>;
+  /** REF-07: wrapper-owned interrupt hook (Ctrl+C in canonical readline). */
+  readonly onInterrupt?: () => void;
 }
 
 function capabilitiesOf(options: Omit<CreateUiOptions, "streams">): TerminalCapabilities {
@@ -59,7 +61,9 @@ export function createCommandUi(options: CreateUiOptions): CommandUi {
     return createStreamUi(options.streams, { yes: options.yes, capabilities });
   }
   if (capabilities.accessible) {
-    const runtime = createReadlineUiRuntime();
+    const runtime = createReadlineUiRuntime({
+      ...(options.onInterrupt ? { onInterrupt: options.onInterrupt } : {}),
+    });
     const ui = createAccessibleUi(runtime, { yes: options.yes, capabilities });
     return { ...ui, dispose: () => runtime.close() };
   }

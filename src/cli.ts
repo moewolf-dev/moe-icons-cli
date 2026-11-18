@@ -123,6 +123,8 @@ export interface CliRuntime {
   readonly mcpLines?: AsyncIterable<string>;
   /** REF-07: wrapper-owned shutdown hook; business code only registers cleanup. */
   readonly onCleanup?: (cleanup: () => void | Promise<void>) => void;
+  /** REF-07: wrapper-owned interrupt hook for readline-consumed Ctrl+C. */
+  readonly onInterrupt?: () => void;
 }
 
 const uiCache = new WeakMap<object, Map<string, ReturnType<typeof createCommandUi>>>();
@@ -159,6 +161,7 @@ function uiForRuntime(runtime: CliRuntime, flags: { json: boolean; yes: boolean 
     ...(runtime.accessible !== undefined ? { accessible: runtime.accessible } : {}),
     env: runtime.env,
     ...(streams ? { streams } : {}),
+    ...(runtime.onInterrupt ? { onInterrupt: runtime.onInterrupt } : {}),
   });
   perRuntime.set(key, created);
   return created;
