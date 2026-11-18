@@ -106,8 +106,11 @@ if (args.length === 1 && ["--help", "-h", "help"].includes(args[0])) {
     });
   };
 
-  process.once("SIGINT", () => handleSignal("SIGINT"));
-  process.once("SIGTERM", () => handleSignal("SIGTERM"));
+  // Persistent handlers are required so a second signal reaches handleSignal
+  // and exits immediately; `once` would restore the default action while
+  // readline still owns its own SIGINT listener.
+  process.on("SIGINT", () => handleSignal("SIGINT"));
+  process.on("SIGTERM", () => handleSignal("SIGTERM"));
 
   const runtime = {
     cwd: () => process.cwd(),

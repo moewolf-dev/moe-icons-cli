@@ -107,6 +107,32 @@ describe("REF-07 wrapper startup matrix", () => {
     expect(stderr).not.toMatch(/fatal:|SyntaxError/);
     child.stdin.destroy();
   });
+  it("terminates promptly when a second SIGINT arrives during cleanup", async () => {
+    const child = spawn(process.execPath, [bin, "mcp"], {
+      cwd: root,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const exit = new Promise<number | null>((resolve) => {
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        resolve(null);
+      }, 3_000);
+      child.once("exit", (exitCode) => {
+        clearTimeout(timer);
+        resolve(exitCode);
+      });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    child.kill("SIGINT");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    child.kill("SIGINT");
+    const started = Date.now();
+    const code = await exit;
+    expect(code).toBe(130);
+    expect(Date.now() - started).toBeLessThan(2_500);
+    child.stdin.destroy();
+  });
+
   afterEach(() => {
     delete process.env.MOEICONS_TEST_MODE;
   });

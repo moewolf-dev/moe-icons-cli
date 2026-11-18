@@ -136,6 +136,26 @@ describe("REF-09 diagnostic bundle", () => {
     expect(live.length).toBeLessThanOrEqual(5);
   });
 
+  it("keeps the directory under 5 MiB by removing the oldest bundles", () => {
+    const diagnostics = join(cache, "diagnostics");
+    mkdirSync(diagnostics, { recursive: true });
+    const now = new Date("2026-11-18T00:00:00Z");
+    const payload = "x".repeat(2 * 1024 * 1024);
+    for (let index = 0; index < 3; index += 1) {
+      const path = join(
+        diagnostics,
+        diagnosticFileName("1.0.0", new Date(now.getTime() - index * 1_000), () => `big${index}`),
+      );
+      writeFileSync(path, payload);
+      utimesSync(path, now, new Date(now.getTime() - index * 1_000));
+    }
+    pruneDiagnosticBundles(diagnostics, { now });
+    const live = readdirSync(diagnostics).filter((name) => name.startsWith(DIAGNOSTIC_FILE_PREFIX));
+    expect(live.length).toBeLessThanOrEqual(2);
+    const total = live.reduce((sum, name) => sum + statSync(join(diagnostics, name)).size, 0);
+    expect(total).toBeLessThanOrEqual(5 * 1024 * 1024);
+  });
+
   it("does not create a file for a plain doctor run", async () => {
     const env = { MOEICONS_CACHE_DIR: cache };
     const runtime = {
