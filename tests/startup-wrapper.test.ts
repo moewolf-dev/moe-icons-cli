@@ -1,5 +1,13 @@
 import { execFileSync, spawn } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -19,6 +27,46 @@ function run(
       cwd: root,
       encoding: "utf8",
       env: { ...process.env, ...env },
+    });
+    return { code: 0, stdout, stderr: "" };
+  } catch (error) {
+    const failure = error as { status?: number; stdout?: string; stderr?: string };
+    return {
+      code: failure.status ?? 1,
+      stdout: failure.stdout ?? "",
+      stderr: failure.stderr ?? "",
+    };
+  }
+}
+
+/** Build a minimal installed-like tree: bin + package + (optionally) dist. */
+function fixture(kind: "missing-dependency" | "syntax-error" | "permission"): string {
+  const dir = mkdtempSync(join(tmpdir(), "moeicons-startup-"));
+  mkdirSync(join(dir, "bin"), { recursive: true });
+  cpSync(join(root, "bin", "moeicons.js"), join(dir, "bin", "moeicons.js"));
+  cpSync(join(root, "bin", "check-node.cjs"), join(dir, "bin", "check-node.cjs"));
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify({ name: "moeicons-fixture", version, type: "module" }),
+  );
+  if (kind !== "syntax-error") {
+    cpSync(join(root, "dist"), join(dir, "dist"), { recursive: true });
+  } else {
+    mkdirSync(join(dir, "dist"), { recursive: true });
+    writeFileSync(join(dir, "dist", "cli.js"), "export const = ;\n");
+  }
+  if (kind === "permission") {
+    chmodSync(join(dir, "dist", "cli.js"), 0o000);
+  }
+  return dir;
+}
+
+function runFixture(dir: string, args: string[]): { code: number; stdout: string; stderr: string } {
+  try {
+    const stdout = execFileSync(process.execPath, [join(dir, "bin", "moeicons.js"), ...args], {
+      cwd: dir,
+      encoding: "utf8",
+      stdio: "pipe",
     });
     return { code: 0, stdout, stderr: "" };
   } catch (error) {
@@ -95,6 +143,27 @@ describe("REF-07 wrapper startup matrix", () => {
     expect(body).toMatchObject({ ok: false, code: "NODE_VERSION_UNSUPPORTED", required: ">=24" });
     expect(String(body.hint)).toContain("Node.js 24");
   });
+
+  for (const kind of ["missing-dependency", "syntax-error", "permission"] as const) {
+    it(`reports ${kind} as a structured startup failure`, () => {
+      const dir = fixture(kind);
+      try {
+        const result = runFixture(dir, ["account", "--json"]);
+        const body = JSON.parse(result.stdout) as Record<string, unknown>;
+        expect(result.code).toBe(1);
+        expect(body).toMatchObject({ ok: false, code: "CLI_IMPORT_FAILED" });
+        expect(String(body.hint)).toContain("reinstall");
+        expect(result.stderr).not.toMatch(/^\s+at /m);
+      } finally {
+        try {
+          chmodSync(join(dir, "dist", "cli.js"), 0o644);
+        } catch {
+          /* The syntax-error fixture has a readable file. */
+        }
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
 
   it("reports a missing dist as a structured startup failure, not a raw stack", () => {
     const fixture = mkdtempSync(join(tmpdir(), "moeicons-wrapper-"));

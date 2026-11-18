@@ -1,4 +1,4 @@
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { diagnoseProject, type DiagnoseOutcome } from "../project/anchors/diagnose.js";
 import { applyPlannedChanges } from "../project/anchors/apply.js";
@@ -38,14 +38,12 @@ export function formatDoctorReport(report: DiagnosticReport): string {
   const lines: string[] = [];
   for (const anchor of report.anchors) {
     const label = STATUS_LABEL[anchor.status] ?? anchor.status.toUpperCase();
-    const path = anchor.path
-      ? report.projectRoot
-        ? toPosixRelative(report.projectRoot, anchor.path)
-        : anchor.path
-      : "-";
+    const path = anchor.path ? safeDisplayPath(report.projectRoot, anchor.path) : "-";
     const name = anchorName(anchor.kind);
     lines.push(`${name.padEnd(22)} ${label.padEnd(10)} ${path}`);
-    for (const evidence of anchor.evidence) lines.push(`  - ${evidence}`);
+    for (const evidence of anchor.evidence) {
+      lines.push(`  - ${sanitizeEvidence(evidence, report.projectRoot, anchor.path)}`);
+    }
     if (anchor.fixes.length) {
       lines.push(`  fixes: ${anchor.fixes.map((f) => `${f.kind} ${f.path}`).join(", ")}`);
     }
@@ -66,6 +64,31 @@ function anchorName(kind: DiagnosticReport["anchors"][number]["kind"]): string {
   }
 }
 
+/**
+ * Display path contract: project-relative when a root is known, otherwise a
+ * basename/category. Never emit an absolute home path, even when the project
+ * manifest itself is ambiguous or invalid.
+ */
+function safeDisplayPath(root: string | undefined, path: string): string {
+  if (!isAbsolute(path)) return path.split(sep).join("/");
+  if (root) return toPosixRelative(root, path);
+  return basename(path);
+}
+
+function sanitizeEvidence(
+  evidence: string,
+  root: string | undefined,
+  anchorPath: string | undefined,
+): string {
+  let value = evidence;
+  if (root) value = value.split(root).join(".");
+  if (anchorPath && isAbsolute(anchorPath)) {
+    const display = safeDisplayPath(root, anchorPath);
+    value = value.split(anchorPath).join(display);
+  }
+  return value;
+}
+
 function toPosixRelative(root: string, path: string): string {
   if (!isAbsolute(path)) return path.split(sep).join("/");
   const rel = relative(root, path);
@@ -82,11 +105,9 @@ export function doctorJson(report: DiagnosticReport): Record<string, unknown> {
     anchors: report.anchors.map((a) => ({
       kind: a.kind,
       status: a.status,
-      ...(a.path && root ? { path: toPosixRelative(root, a.path) } : a.path ? { path: a.path } : {}),
-      candidates: root
-        ? a.candidates.map((c) => toPosixRelative(root, c))
-        : [...a.candidates],
-      evidence: a.evidence,
+      ...(a.path ? { path: safeDisplayPath(root, a.path) } : {}),
+      candidates: a.candidates.map((c) => safeDisplayPath(root, c)),
+      evidence: a.evidence.map((evidence) => sanitizeEvidence(evidence, root, a.path)),
       fixes: a.fixes.map((f) => ({
         kind: f.kind,
         path: f.path,
@@ -121,9 +142,30 @@ function diagnosticCatalog(cwd: string): IconCatalog | undefined {
 }
 
 /** Build the complete init plan (config create + application + style fixes). */
-export function buildInitPlan(cwd: string, target?: Target, confirmed?: { adapter?: string; entry?: string; style?: string }, sourceCatalog?: IconCatalog): { readonly outcome: DiagnoseOutcome } {
-  const adapter = confirmed?.adapter ?? (target === "vue" ? "vite-vue" : target === "react" ? "vite-react" : target === "vanilla" ? "vanilla" : target === "assets" ? "assets-only" : undefined);
-  return { outcome: diagnoseProject({ cwd, sourceCatalog: sourceCatalog ?? diagnosticCatalog(cwd), ...(adapter ? { confirmed: { ...confirmed, adapter } } : {}) }) };
+export function buildInitPlan(
+  cwd: string,
+  target?: Target,
+  confirmed?: { adapter?: string; entry?: string; style?: string },
+  sourceCatalog?: IconCatalog,
+): { readonly outcome: DiagnoseOutcome } {
+  const adapter =
+    confirmed?.adapter ??
+    (target === "vue"
+      ? "vite-vue"
+      : target === "react"
+        ? "vite-react"
+        : target === "vanilla"
+          ? "vanilla"
+          : target === "assets"
+            ? "assets-only"
+            : undefined);
+  return {
+    outcome: diagnoseProject({
+      cwd,
+      sourceCatalog: sourceCatalog ?? diagnosticCatalog(cwd),
+      ...(adapter ? { confirmed: { ...confirmed, adapter } } : {}),
+    }),
+  };
 }
 
 /** Collect safe planned fixes from a diagnose outcome (already deduped). */
@@ -144,7 +186,10 @@ export function formatPlannedDiffs(changes: readonly PlannedFileChange[]): strin
 function formatOneDiff(change: PlannedFileChange): string {
   const path = change.path;
   if (change.kind === "create" || change.before === undefined) {
-    const added = change.after.split("\n").map((line) => `+${line}`).join("\n");
+    const added = change.after
+      .split("\n")
+      .map((line) => `+${line}`)
+      .join("\n");
     return `*** create ${path}\n--- /dev/null\n+++ b/${path}\n${added}`;
   }
   const beforeLines = change.before.split("\n");
@@ -214,7 +259,11 @@ export function runDoctorApply(
   try {
     outcome = withProjectLockSync(root, "doctor", () => applyPlannedChanges(root, fixes, FS));
   } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : String(error), written: [] };
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error),
+      written: [],
+    };
   }
   if (!outcome.ok) {
     return { ok: false, message: outcome.message, written: [] };
