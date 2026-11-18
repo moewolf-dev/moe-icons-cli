@@ -316,7 +316,7 @@ function reportFailure(runtime: CliRuntime, json: boolean, error: unknown): numb
       // payload stays byte-identical for existing JSON consumers.
       writeJson(
         runtime,
-        cliErrorJson({ ...error, message } as CliError, runtime.debug ? operationId : undefined),
+        cliErrorJson({ ...error, message }, runtime.debug ? operationId : undefined),
       );
     } else {
       runtime.stderr(`error [${error.code}] ${message}\n`);

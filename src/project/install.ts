@@ -614,10 +614,6 @@ export function executeInstallPlan(plan: InstallPlan, fs_: TransactionalFs): voi
   const prior = priorMetadataText !== undefined
     ? parseInstallMetadata(priorMetadataText, { allowLocalTest: true }) ?? parsePackageInstallMetadata(priorMetadataText)
     : undefined;
-  const prior =
-    priorMetadataText !== undefined
-      ? parseInstallMetadata(priorMetadataText, { allowLocalTest: true })
-      : undefined;
   if (existsOnDisk(metadataPath) && !prior)
     throw new Error("existing install metadata is invalid; refusing to overwrite project files");
   if (prior) {

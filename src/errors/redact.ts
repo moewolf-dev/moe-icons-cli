@@ -105,5 +105,5 @@ export function redactValue(value: unknown, budget = { nodes: 500 }): unknown {
     }
     return result;
   }
-  return String(value);
+  return typeof value === "symbol" ? value.toString() : "<unserializable>";
 }

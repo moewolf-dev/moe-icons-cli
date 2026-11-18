@@ -233,7 +233,7 @@ async function drainStream(
       }
     }
     return reader.result();
-  } catch (error) {
+  } catch {
     return {
       files: {},
       errors: [signal?.aborted ? "archive extraction cancelled" : "invalid gzip"],

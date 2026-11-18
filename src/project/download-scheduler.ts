@@ -63,7 +63,10 @@ class SlotPool {
   }
 
   acquire(signal?: AbortSignal): Promise<() => void> {
-    if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("cancelled"));
+    if (signal?.aborted) {
+      const reason: unknown = signal.reason;
+      return Promise.reject(reason instanceof Error ? reason : new Error("cancelled"));
+    }
     return new Promise<() => void>((resolve, reject) => {
       const waiter: Waiter = { resolve, reject };
       this.waiters.push(waiter);
