@@ -1,5 +1,7 @@
 import { createServer, type Server } from "node:http";
-import { readFile, stat } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import { cleanupDownloadTempDirsSync, downloadArtifactToFile } from "../src/project/download.js";
@@ -174,6 +176,78 @@ describe("download to verified file (REF-04)", () => {
     if (!result.ok) {
       expect(result.code).toBe("NETWORK_ERROR");
       expect(result.message).toMatch(/truncated response/);
+    }
+  });
+
+  it("classifies DNS and TLS failures without retrying certificates", async () => {
+    const dns = await downloadArtifactToFile(
+      "https://signed.example/object",
+      {
+        maxBytes: 1024,
+        timeoutMs: 5_000,
+        maxRedirects: 0,
+        allowedHosts: ["signed.example"],
+        maxAttempts: 1,
+      },
+      {
+        fetchFn: (async () => {
+          throw Object.assign(new Error("getaddrinfo ENOTFOUND signed.example"), {
+            code: "ENOTFOUND",
+          });
+        }) as typeof fetch,
+      },
+    );
+    expect(dns.ok).toBe(false);
+    if (!dns.ok) expect(dns.message).toMatch(/DNS lookup failed/);
+
+    const tls = await downloadArtifactToFile(
+      "https://signed.example/object",
+      {
+        maxBytes: 1024,
+        timeoutMs: 5_000,
+        maxRedirects: 0,
+        allowedHosts: ["signed.example"],
+        maxAttempts: 3,
+      },
+      {
+        fetchFn: (async () => {
+          throw new Error("self-signed certificate in certificate chain");
+        }) as typeof fetch,
+      },
+    );
+    expect(tls.ok).toBe(false);
+    if (!tls.ok) {
+      expect(tls.message).toMatch(/TLS verification failed/);
+      expect(tls.attempts).toBe(1);
+    }
+  });
+
+  it("reports a read-only staging directory as a non-retryable IO error", async () => {
+    const staging = await mkdtemp(join(tmpdir(), "moeicons-readonly-"));
+    await chmod(staging, 0o500);
+    try {
+      const result = await downloadArtifactToFile(
+        "https://signed.example/object",
+        {
+          maxBytes: 1024,
+          timeoutMs: 5_000,
+          maxRedirects: 0,
+          allowedHosts: ["signed.example"],
+          maxAttempts: 1,
+          tempDir: staging,
+        },
+        {
+          fetchFn: (async () => new Response(BODY)) as typeof fetch,
+        },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.code).toBe("IO_ERROR");
+        expect(result.attempts).toBe(1);
+      }
+    } finally {
+      await chmod(staging, 0o700);
+      await rm(staging, { recursive: true, force: true });
     }
   });
 

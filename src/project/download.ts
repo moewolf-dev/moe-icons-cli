@@ -34,6 +34,8 @@ export interface DownloadLimits {
   readonly maxAttempts?: number;
   /** Abort when no body chunk arrives for this long (default 30s). */
   readonly stallTimeoutMs?: number;
+  /** Staging directory override (tests/embedding); defaults to os.tmpdir(). */
+  readonly tempDir?: string;
   readonly retryAfterCapMs?: number;
   readonly scheduler?: DownloadScheduler;
   readonly random?: () => number;
@@ -124,6 +126,44 @@ function validateUrl(url: string, limits: DownloadLimits): AttemptFailure | unde
     return { ok: false, code: "HOST_NOT_ALLOWED", message: `host ${parsed.host} not in allowlist` };
   }
   return undefined;
+}
+
+function classifyDownloadError(error: unknown): AttemptFailure {
+  const raw = error instanceof Error ? error.message : String(error);
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  if (code === "ENOSPC") {
+    return {
+      ok: false,
+      code: "DISK_FULL",
+      message: "not enough disk space for the download",
+      retryable: false,
+    };
+  }
+  if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
+    return {
+      ok: false,
+      code: "IO_ERROR",
+      message: `cannot write the temporary download: ${raw}`,
+      retryable: false,
+    };
+  }
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
+    return {
+      ok: false,
+      code: "NETWORK_ERROR",
+      message: `DNS lookup failed: ${raw}`,
+      retryable: true,
+    };
+  }
+  if (/certificate|self[- ]signed|TLS|SSL/i.test(raw)) {
+    return {
+      ok: false,
+      code: "NETWORK_ERROR",
+      message: `TLS verification failed: ${raw}`,
+      retryable: false,
+    };
+  }
+  return { ok: false, code: "NETWORK_ERROR", message: raw, retryable: true };
 }
 
 class DownloadAbortError extends Error {
@@ -241,7 +281,7 @@ async function attemptOnce(
       };
     }
 
-    directory = await mkdtemp(join(tmpdir(), "moeicons-download-"));
+    directory = await mkdtemp(join(limits.tempDir ?? tmpdir(), "moeicons-download-"));
     liveTempDirectories.add(directory);
     const path = join(directory, "payload");
     file = await open(path, "wx", 0o600);
@@ -321,12 +361,7 @@ async function attemptOnce(
         retryable: false,
       };
     }
-    return {
-      ok: false,
-      code: "NETWORK_ERROR",
-      message: error instanceof Error ? error.message : String(error),
-      retryable: true,
-    };
+    return classifyDownloadError(error);
   } finally {
     if (reader) {
       try {
