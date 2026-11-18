@@ -158,6 +158,8 @@ export function renderNoticeBox(
 export interface RenderBannerOptions {
   readonly columns: number;
   readonly color: boolean;
+  /** ASCII terminals must never receive box-drawing or block glyphs. */
+  readonly unicode?: boolean;
 }
 
 export type WordmarkTier = "large" | "figlet" | "single";
@@ -237,14 +239,19 @@ export function renderWordmarkText(options: RenderBannerOptions): string {
   const columns = normalizeColumns(options.columns);
   const tier = selectWordmarkTier(columns);
   if (tier === "single") return "MOEICONS";
-  if (tier === "figlet") return centerLines(contentLines(MOEICONS_BANNER)).join("\n");
+  if (tier === "figlet" || options.unicode === false) {
+    return centerLines(contentLines(MOEICONS_BANNER)).join("\n");
+  }
   const theme = createTheme(options.color);
   return paintWordmarkLarge([...MOEICONS_WORDMARK_LARGE], theme).join("\n");
 }
 
 /** Project-root / dependency notice box for the current terminal width. */
-export function renderProjectNotice(columns: number): string {
-  return renderNoticeBox(CLI_NOTICE_LINES, { width: Math.max(20, normalizeColumns(columns)) });
+export function renderProjectNotice(columns: number, unicode = true): string {
+  return renderNoticeBox(CLI_NOTICE_LINES, {
+    width: Math.max(20, normalizeColumns(columns)),
+    unicode,
+  });
 }
 
 /**
@@ -254,7 +261,7 @@ export function renderProjectNotice(columns: number): string {
 export function renderBannerText(options: RenderBannerOptions): string {
   const columns = normalizeColumns(options.columns);
   const wordmark = renderWordmarkText(options);
-  const notice = renderProjectNotice(columns);
+  const notice = renderProjectNotice(columns, options.unicode ?? true);
   return `${wordmark}\n${notice}\n`;
 }
 

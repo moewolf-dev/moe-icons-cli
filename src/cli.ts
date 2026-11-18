@@ -537,7 +537,9 @@ async function offerProPreviewWarmup(runtime: CliRuntime): Promise<void> {
     const result = await runProPreviewPackageWarmupUseCase(context, runtime.auth ?? {}, {
       ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
       onPlan: async (plan) => {
-        progress.phase(`${plan.groups} preview groups · ${plan.packages} packages · ${formatBytes(plan.compressedBytes)}`);
+        progress.phase(
+          `${plan.groups} preview groups · ${plan.packages} packages · ${formatBytes(plan.compressedBytes)}`,
+        );
         const accepted = await context.ui.confirm(
           `Warm ${plan.groups} Pro preview groups (${formatBytes(plan.compressedBytes)} compressed package data)?`,
           context.signal,
@@ -546,14 +548,20 @@ async function offerProPreviewWarmup(runtime: CliRuntime): Promise<void> {
       },
     });
     progress.stop("Pro preview package warm-up complete");
-    runtime.stdout(`Warmed ${result.groups} Pro preview groups (${result.downloaded} downloaded, ${result.reused} cached).\n`);
+    runtime.stdout(
+      `Warmed ${result.groups} Pro preview groups (${result.downloaded} downloaded, ${result.reused} cached).\n`,
+    );
   } catch (error) {
     progress.stop("Pro preview warm-up stopped");
     if (error instanceof CliError && error.code === "CANCELLED") {
-      runtime.stdout("Skipped Pro preview warm-up; project installs still fetch only configured packages.\n");
+      runtime.stdout(
+        "Skipped Pro preview warm-up; project installs still fetch only configured packages.\n",
+      );
       return;
     }
-    runtime.stderr(`warning: Pro preview warm-up skipped (${error instanceof Error ? error.message : String(error)}).\n`);
+    runtime.stderr(
+      `warning: Pro preview warm-up skipped (${error instanceof Error ? error.message : String(error)}).\n`,
+    );
   }
 }
 
@@ -594,7 +602,9 @@ async function runProResources(runtime: CliRuntime, yes: boolean): Promise<numbe
     const result = await runProPreviewPackageWarmupUseCase(context, runtime.auth ?? {}, {
       ...(runtime.auth?.fetch ? { fetch: runtime.auth.fetch } : {}),
       onPlan: async (plan) => {
-        progress.phase(`${plan.groups} preview groups · ${plan.packages} packages · ${formatBytes(plan.compressedBytes)}`);
+        progress.phase(
+          `${plan.groups} preview groups · ${plan.packages} packages · ${formatBytes(plan.compressedBytes)}`,
+        );
         const confirmed = await context.ui.confirm(
           `Warm ${plan.groups} Pro preview groups (${formatBytes(plan.compressedBytes)} compressed package data)?`,
           context.signal,
@@ -603,7 +613,9 @@ async function runProResources(runtime: CliRuntime, yes: boolean): Promise<numbe
       },
     });
     progress.stop("Pro preview package warm-up complete");
-    runtime.stdout(`Warmed ${result.groups} Pro preview groups (${result.downloaded} downloaded, ${result.reused} cached).\n`);
+    runtime.stdout(
+      `Warmed ${result.groups} Pro preview groups (${result.downloaded} downloaded, ${result.reused} cached).\n`,
+    );
     return 0;
   } catch (error) {
     progress.stop("Pro preview warm-up stopped");
@@ -614,7 +626,9 @@ async function runProResources(runtime: CliRuntime, yes: boolean): Promise<numbe
     if (error instanceof CliError && (error.code === "FORBIDDEN" || error.code === "AUTH_ERROR")) {
       throw error;
     }
-    runtime.stderr(`Pro preview warm-up failed (${error instanceof Error ? error.message : String(error)}).\n`);
+    runtime.stderr(
+      `Pro preview warm-up failed (${error instanceof Error ? error.message : String(error)}).\n`,
+    );
     return 0;
   }
 }
@@ -945,12 +959,15 @@ function versionString(): string {
  * can produce an executable upgrade command; GitHub-only evidence is labelled
  * as a separate release channel and never impersonates an npm upgrade.
  */
-function renderCliVersionNotice(check: CliVersionCheck): string {
+function renderCliVersionNotice(check: CliVersionCheck, unicode = true): string {
   if (check.npm.status !== "ok" && check.github.status !== "ok") {
-    return renderNoticeBox([
-      "Moeicons CLI version status",
-      `Current ${check.currentVersion} / Latest unavailable / Update: unavailable`,
-    ]);
+    return renderNoticeBox(
+      [
+        "Moeicons CLI version status",
+        `Current ${check.currentVersion} / Latest unavailable / Update: unavailable`,
+      ],
+      { unicode },
+    );
   }
   const npmLine =
     check.npm.status === "ok"
@@ -972,7 +989,7 @@ function renderCliVersionNotice(check: CliVersionCheck): string {
   if (check.githubUpdateAvailable && !check.npmUpdateAvailable) {
     lines.push(check.githubNote);
   }
-  return renderNoticeBox(["Moeicons CLI version status", ...lines]);
+  return renderNoticeBox(["Moeicons CLI version status", ...lines], { unicode });
 }
 
 function cliVersionCheckOptions(runtime: CliRuntime, timeoutMs = 1_000) {
@@ -1014,16 +1031,21 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
         code: "CLI_VERSION_CHECK",
         message: `npm=${update.npm.status}:${update.npm.latestVersion ?? "-"} github=${update.github.status}:${update.github.latestVersion ?? "-"}`,
       });
-      runtime.stdout(`${renderCliVersionNotice(update)}\n`);
+      runtime.stdout(`${renderCliVersionNotice(update, capabilities.unicode)}\n`);
     } catch {
       runtime.stdout(
-        `${renderNoticeBox([
-          "Moeicons CLI version status",
-          `Current ${versionString()} / Latest unavailable / Update: unavailable`,
-        ])}\n`,
+        `${renderNoticeBox(
+          [
+            "Moeicons CLI version status",
+            `Current ${versionString()} / Latest unavailable / Update: unavailable`,
+          ],
+          { unicode: capabilities.unicode },
+        )}\n`,
       );
     }
-    runtime.stdout(`${renderProjectNotice(resolveColumns(capabilities.columns))}\n`);
+    runtime.stdout(
+      `${renderProjectNotice(resolveColumns(capabilities.columns), capabilities.unicode)}\n`,
+    );
     if (runtime.readLine === undefined) await runBootstrap(runtime);
   }
 
@@ -1115,13 +1137,16 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
       }).catch(() => undefined);
       if (!update) {
         runtime.stdout(
-          `${renderNoticeBox([
-            "Moeicons CLI version status",
-            `Current ${versionString()} / Latest unavailable / Update: unavailable`,
-          ])}\n`,
+          `${renderNoticeBox(
+            [
+              "Moeicons CLI version status",
+              `Current ${versionString()} / Latest unavailable / Update: unavailable`,
+            ],
+            { unicode: capabilities.unicode },
+          )}\n`,
         );
       } else {
-        runtime.stdout(`${renderCliVersionNotice(update)}\n`);
+        runtime.stdout(`${renderCliVersionNotice(update, capabilities.unicode)}\n`);
         if (update.npmUpdateAvailable && update.npmInstruction) {
           runtime.stdout(`Run: ${update.npmInstruction}\n`);
         }
@@ -1240,9 +1265,10 @@ async function runLibraryUpdate(
       },
       { tier, version, descriptorSha256, ...(packageSetSha256 ? { packageSetSha256 } : {}) },
     );
-    const output = preflightIdentityBytes === undefined
-      ? result
-      : { ...result, networkBytes: (result.networkBytes ?? 0) + preflightIdentityBytes };
+    const output =
+      preflightIdentityBytes === undefined
+        ? result
+        : { ...result, networkBytes: (result.networkBytes ?? 0) + preflightIdentityBytes };
     progress.stop("Icon library update complete");
     if (json) writeJson(runtime, { ok: true, ...output });
     else {
@@ -1331,34 +1357,79 @@ async function runUpdate(
     throw new CliError("VALIDATION_ERROR", status.message);
   if (status.kind === "package-set-update-check-required") {
     const tier = status.metadata.candidate.tier;
-    const identity = tier === "free"
-      ? await fetchFreeStablePackageSet({
-          ...(runtime.env.MOEICONS_API_BASE_URL ? { apiBaseUrl: runtime.env.MOEICONS_API_BASE_URL } : {}),
-          ...(runtime.auth?.fetch ? { fetchFn: runtime.auth.fetch } : {}),
-          signal: context.signal,
-        })
-      : await fetchProStablePackageSet({
-          accessToken: await runAccessTokenUseCase(context, runtime.auth ?? {}),
-          ...(runtime.env.MOEICONS_API_BASE_URL ? { apiBaseUrl: runtime.env.MOEICONS_API_BASE_URL } : {}),
-          ...(runtime.auth?.fetch ? { fetchFn: runtime.auth.fetch } : {}),
-          signal: context.signal,
-        });
+    const identity =
+      tier === "free"
+        ? await fetchFreeStablePackageSet({
+            ...(runtime.env.MOEICONS_API_BASE_URL
+              ? { apiBaseUrl: runtime.env.MOEICONS_API_BASE_URL }
+              : {}),
+            ...(runtime.auth?.fetch ? { fetchFn: runtime.auth.fetch } : {}),
+            signal: context.signal,
+          })
+        : await fetchProStablePackageSet({
+            accessToken: await runAccessTokenUseCase(context, runtime.auth ?? {}),
+            ...(runtime.env.MOEICONS_API_BASE_URL
+              ? { apiBaseUrl: runtime.env.MOEICONS_API_BASE_URL }
+              : {}),
+            ...(runtime.auth?.fetch ? { fetchFn: runtime.auth.fetch } : {}),
+            signal: context.signal,
+          });
     const current = status.metadata.candidate;
-    const decision = decideUpdate({ installedTier: tier, remoteTier: tier, installedVersion: current.fullVersion, remoteVersion: identity.fullVersion });
+    const decision = decideUpdate({
+      installedTier: tier,
+      remoteTier: tier,
+      installedVersion: current.fullVersion,
+      remoteVersion: identity.fullVersion,
+    });
     if (decision.kind === "current") {
-      if (current.packageSetSha256 !== identity.packageSetSha256 || current.candidateRootSha256 !== identity.candidateRootSha256)
-        throw new CliError("VALIDATION_ERROR", "published package-set identity changed for the installed version; refusing replacement");
-      if (json) writeJson(runtime, { ok: true, status: "current", version: current.fullVersion, packageSetSha256: current.packageSetSha256 });
-      else runtime.stdout(`Current: ${current.fullVersion} / Latest: ${identity.fullVersion} / Status: up to date\n`);
+      if (
+        current.packageSetSha256 !== identity.packageSetSha256 ||
+        current.candidateRootSha256 !== identity.candidateRootSha256
+      )
+        throw new CliError(
+          "VALIDATION_ERROR",
+          "published package-set identity changed for the installed version; refusing replacement",
+        );
+      if (json)
+        writeJson(runtime, {
+          ok: true,
+          status: "current",
+          version: current.fullVersion,
+          packageSetSha256: current.packageSetSha256,
+        });
+      else
+        runtime.stdout(
+          `Current: ${current.fullVersion} / Latest: ${identity.fullVersion} / Status: up to date\n`,
+        );
       return 0;
     }
     if (decision.kind !== "update") {
-      const label = decision.reason === "channel-mismatch" ? "prerelease channel differs" : "remote version is older";
-      if (json) writeJson(runtime, { ok: true, status: decision.reason === "channel-mismatch" ? "channel-mismatch" : "remote-older", currentVersion: current.fullVersion, latestVersion: identity.fullVersion });
-      else runtime.stdout(`Current: ${current.fullVersion} / Latest: ${identity.fullVersion} / Status: ${label}\n`);
+      const label =
+        decision.reason === "channel-mismatch"
+          ? "prerelease channel differs"
+          : "remote version is older";
+      if (json)
+        writeJson(runtime, {
+          ok: true,
+          status: decision.reason === "channel-mismatch" ? "channel-mismatch" : "remote-older",
+          currentVersion: current.fullVersion,
+          latestVersion: identity.fullVersion,
+        });
+      else
+        runtime.stdout(
+          `Current: ${current.fullVersion} / Latest: ${identity.fullVersion} / Status: ${label}\n`,
+        );
       return 0;
     }
-    return runLibraryUpdate(runtime, tier, identity.fullVersion, identity.packageSetSha256, json, identity.packageSetSha256, identity.networkBytes);
+    return runLibraryUpdate(
+      runtime,
+      tier,
+      identity.fullVersion,
+      identity.packageSetSha256,
+      json,
+      identity.packageSetSha256,
+      identity.networkBytes,
+    );
   }
   if (
     status.kind === "current" &&
