@@ -170,6 +170,23 @@ describe("REF-09 diagnostic bundle", () => {
     expect(statSync(String(body.path)).isFile()).toBe(true);
   });
 
+  it("returns a structured diagnostic error when the cache path is not writable", async () => {
+    const cacheFile = join(cache, "not-a-directory");
+    writeFileSync(cacheFile, "x");
+    const out: string[] = [];
+    const runtime = {
+      cwd: () => dir,
+      stdout: (text: string) => out.push(text),
+      stderr: () => undefined,
+      env: { MOEICONS_CACHE_DIR: cacheFile },
+      isTTY: () => false,
+    };
+    expect(await main(["doctor", "--export-diagnostics", "--json"], runtime)).toBe(1);
+    const body = JSON.parse(out.join("")) as Record<string, unknown>;
+    expect(body).toMatchObject({ ok: false, code: "VALIDATION_ERROR", phase: "diagnostic" });
+    expect(String(body.hint)).toContain("MOEICONS_CACHE_DIR");
+  });
+
   it("prunes expired bundles at startup without failing the command", async () => {
     const diagnostics = join(cache, "diagnostics");
     mkdirSync(diagnostics, { recursive: true });

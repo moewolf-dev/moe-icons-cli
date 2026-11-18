@@ -26,9 +26,11 @@ let server: ReturnType<typeof createServer>;
 let origin = "";
 let active = 0;
 let peak = 0;
+const flakyAttempts = new Map<string, number>();
 
 beforeAll(async () => {
-  server = createServer((_request, response) => {
+  server = createServer((request, response) => {
+    const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
     active += 1;
     peak = Math.max(peak, active);
     let finished = false;
@@ -39,6 +41,32 @@ beforeAll(async () => {
     };
     response.on("finish", release);
     response.on("close", release);
+    if (path.startsWith("/flaky-")) {
+      const attempts = (flakyAttempts.get(path) ?? 0) + 1;
+      flakyAttempts.set(path, attempts);
+      if (attempts === 1) {
+        response.writeHead(503, { "content-length": "0", connection: "keep-alive" });
+        response.end();
+        return;
+      }
+    }
+    if (path.startsWith("/slow-")) {
+      const chunks = 4;
+      response.writeHead(200, {
+        "content-length": String(BODY.byteLength * chunks),
+        connection: "keep-alive",
+      });
+      let sent = 0;
+      const timer = setInterval(() => {
+        sent += 1;
+        response.write(BODY);
+        if (sent === chunks) {
+          clearInterval(timer);
+          response.end();
+        }
+      }, 10);
+      return;
+    }
     response.writeHead(200, {
       "content-length": String(BODY.byteLength),
       connection: "keep-alive",
@@ -164,4 +192,82 @@ describe("10,000 package download gate", () => {
     expect(stats.packageQueued).toBe(0);
     expect(report.tempDirsAfter).toBe(report.tempDirsBefore);
   }, 600_000);
+});
+
+describe("error storm and slow-stream gate", () => {
+  it("retries a transient 503 storm without exceeding the shared ceiling", async () => {
+    const scheduler = createDownloadScheduler({ packageConcurrency: MAX_PACKAGE_CONCURRENCY });
+    const beforePeak = scheduler.stats().packagePeak;
+    let cursor = 0;
+    let completed = 0;
+    const failures: string[] = [];
+    const tasks = 300;
+    await Promise.all(
+      Array.from({ length: WORKERS }, async () => {
+        for (;;) {
+          const index = cursor++;
+          if (index >= tasks) return;
+          const result = await downloadArtifactToFile(`${origin}/flaky-${index}`, {
+            maxBytes: BODY.byteLength,
+            timeoutMs: 10_000,
+            maxRedirects: 0,
+            allowedHosts: [new URL(origin).host],
+            allowHttpLoopback: true,
+            scheduler,
+            maxAttempts: 2,
+            sleep: async () => undefined,
+          });
+          if (!result.ok) {
+            failures.push(result.code);
+            continue;
+          }
+          await result.file.cleanup();
+          completed += 1;
+        }
+      }),
+    );
+    const stats = scheduler.stats();
+    console.log(
+      `PERF_STORM ${JSON.stringify({ tasks, completed, failures: failures.length, activePeak: stats.packagePeak, beforePeak })}`,
+    );
+    expect(failures).toHaveLength(0);
+    expect(completed).toBe(tasks);
+    expect(stats.packagePeak).toBeLessThanOrEqual(3);
+    expect(stats.packageActive).toBe(0);
+  }, 120_000);
+
+  it("keeps slow streams bounded and drains the queue", async () => {
+    const scheduler = createDownloadScheduler({ packageConcurrency: MAX_PACKAGE_CONCURRENCY });
+    let cursor = 0;
+    let completed = 0;
+    const tasks = 60;
+    await Promise.all(
+      Array.from({ length: WORKERS }, async () => {
+        for (;;) {
+          const index = cursor++;
+          if (index >= tasks) return;
+          const result = await downloadArtifactToFile(`${origin}/slow-${index}`, {
+            maxBytes: BODY.byteLength * 4,
+            timeoutMs: 10_000,
+            maxRedirects: 0,
+            allowedHosts: [new URL(origin).host],
+            allowHttpLoopback: true,
+            scheduler,
+            maxAttempts: 1,
+          });
+          expect(result.ok).toBe(true);
+          if (result.ok) {
+            expect(result.file.size).toBe(BODY.byteLength * 4);
+            await result.file.cleanup();
+          }
+          completed += 1;
+        }
+      }),
+    );
+    const stats = scheduler.stats();
+    console.log(`PERF_SLOW ${JSON.stringify({ tasks, completed, activePeak: stats.packagePeak })}`);
+    expect(completed).toBe(tasks);
+    expect(stats.packagePeak).toBeLessThanOrEqual(3);
+    expect(stats.packageQueued).toBe(0);
+  }, 120_000);
 });
