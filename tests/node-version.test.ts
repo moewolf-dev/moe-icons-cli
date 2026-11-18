@@ -56,6 +56,27 @@ describe("bin Node version guard", () => {
     expect(unknown.message).not.toContain("sudo");
   });
 
+  it("emits the detected manager's own upgrade command only", () => {
+    const cases: Array<[Record<string, string>, string]> = [
+      [{ NVM_DIR: "/tmp/nvm" }, "nvm install 24"],
+      [{ FNM_MULTISHELL_PATH: "/tmp/fnm" }, "fnm install 24"],
+      [{ VOLTA_HOME: "/tmp/volta" }, "volta install node@24"],
+      [{ ASDF_DIR: "/tmp/asdf" }, "asdf install nodejs latest:24"],
+    ];
+    for (const [env, command] of cases) {
+      const result = check.assertSupportedNode("v22.0.0", { env });
+      expect(result.message).toContain(command);
+      for (const other of ["nvm install", "fnm install", "volta install", "asdf install"]) {
+        if (!command.startsWith(other)) expect(result.message).not.toContain(other);
+      }
+    }
+    const unknown = check.assertSupportedNode("v22.0.0", { env: {} });
+    expect(unknown.message).toContain("https://nodejs.org/en/download");
+    for (const command of ["nvm install", "fnm install", "volta install", "asdf install"]) {
+      expect(unknown.message).not.toContain(command);
+    }
+  });
+
   it("returns a stable startup JSON contract for --json", () => {
     const result = check.assertSupportedNode("v22.0.0");
     expect(check.startupFailureJson(result)).toMatchObject({

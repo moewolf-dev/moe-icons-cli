@@ -146,6 +146,37 @@ describe("download to verified file (REF-04)", () => {
     if (!result.ok) expect(["CANCELLED", "NETWORK_ERROR"]).toContain(result.code);
   });
 
+  it("fails closed on a truncated body with a declared Content-Length", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(BODY.subarray(0, 4));
+        controller.close();
+      },
+    });
+    const result = await downloadArtifactToFile(
+      "https://signed.example/object",
+      {
+        maxBytes: 1024,
+        timeoutMs: 5_000,
+        maxRedirects: 0,
+        allowedHosts: ["signed.example"],
+        maxAttempts: 1,
+      },
+      {
+        fetchFn: (async () =>
+          new Response(body, {
+            status: 200,
+            headers: { "content-length": String(BODY.byteLength) },
+          })) as typeof fetch,
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("NETWORK_ERROR");
+      expect(result.message).toMatch(/truncated response/);
+    }
+  });
+
   it("rejects a body above the byte limit", async () => {
     const result = await downloadArtifactToFile(`${origin}/object`, {
       ...limits(),

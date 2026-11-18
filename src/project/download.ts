@@ -284,6 +284,14 @@ async function attemptOnce(
 
     await file.close();
     file = undefined;
+    if (contentLength !== undefined && downloadedBytes !== contentLength) {
+      return {
+        ok: false,
+        code: "NETWORK_ERROR",
+        message: `truncated response: expected ${contentLength} bytes, received ${downloadedBytes}`,
+        retryable: true,
+      };
+    }
     if (deps.signal?.aborted || abortReason?.reason === "cancelled") {
       return { ok: false, code: "CANCELLED", message: "download cancelled" };
     }
