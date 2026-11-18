@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.49
 
 ### Supported platforms (first release candidate)
 
@@ -18,9 +18,7 @@
 
 ### Node.js support
 
-The published CLI now requires **Node.js 22 or later**. Node 20 reached
-end-of-life on 2026-03-24 and no longer receives security patches, so it is
-not part of the supported product line. The `moeicons` bin checks the Node
+The published CLI now requires **Node.js 24 or later**. Node 20 and 22 are no longer supported and do not receive security patches on this line, so they are not part of the supported product line. The `moeicons` bin checks the Node
 major version before loading the ESM program and prints the current version,
 the minimum version, and the LTS download URL instead of a `SyntaxError`.
 
