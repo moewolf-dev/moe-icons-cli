@@ -107,6 +107,35 @@ describe("REF-07 wrapper startup matrix", () => {
     expect(stderr).not.toMatch(/fatal:|SyntaxError/);
     child.stdin.destroy();
   });
+  it("keeps MCP stdout protocol-clean with --debug", async () => {
+    const child = spawn(process.execPath, [bin, "--debug", "mcp"], {
+      cwd: root,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" })}
+`);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    child.kill("SIGTERM");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    for (const line of stdout.split("\n").filter(Boolean)) {
+      expect(() => JSON.parse(line)).not.toThrow();
+    }
+    expect(stdout).toContain('"serverInfo"');
+    expect(stdout).not.toContain("MOEICONS");
+    expect(stderr).toContain("debug [info] command mcp");
+    child.stdin.destroy();
+  });
+
   it("terminates promptly when a second SIGINT arrives during cleanup", async () => {
     const child = spawn(process.execPath, [bin, "mcp"], {
       cwd: root,
