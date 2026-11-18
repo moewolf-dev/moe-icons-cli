@@ -16,6 +16,8 @@ export interface CacheIo {
   readonly rmSync: (path: string, options?: { readonly force?: boolean }) => void;
   readonly readFileSync?: (path: string) => Uint8Array;
   readonly readdirSync?: (path: string) => readonly string[];
+  /** REF-04: stream-copy a verified file into the cache without buffering it. */
+  readonly copyFileSync?: (from: string, to: string) => void;
 }
 
 function sha256Hex(bytes: Uint8Array): string {
@@ -106,6 +108,37 @@ export function cacheArtifact(
       io.rmSync(staging, { force: true });
     } catch {
       // Best-effort cleanup; the writer-unique staging file is never read.
+    }
+    throw error;
+  }
+}
+
+/**
+ * P0-02/REF-04: persist an already-verified local file into the cache without
+ * reading the whole payload into memory. Falls back to the byte path only when
+ * the injected IO has no copy primitive (test fixtures).
+ */
+export function cacheArtifactFile(
+  io: CacheIo,
+  path: string,
+  sourcePath: string,
+  expectedSha256?: string,
+): void {
+  if (!io.copyFileSync) {
+    if (!io.readFileSync) throw new Error("cache IO cannot copy or read the artifact");
+    cacheArtifact(io, path, io.readFileSync(sourcePath), expectedSha256);
+    return;
+  }
+  io.mkdirSync(join(path, ".."));
+  const staging = `${path}.staging-${process.pid}-${randomBytes(4).toString("hex")}`;
+  try {
+    io.copyFileSync(sourcePath, staging);
+    io.renameSync(staging, path);
+  } catch (error) {
+    try {
+      io.rmSync(staging, { force: true });
+    } catch {
+      /* Best-effort cleanup; staging is never read. */
     }
     throw error;
   }

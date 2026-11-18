@@ -4,7 +4,7 @@
 
 ### Supported platforms (first release candidate)
 
-- Officially tested: Linux x64 and macOS ARM64 on Node 22 and Node 24.
+- Requires Node 24+ (`engines.node >= 24.0.0`). Officially tested: Linux x64 and macOS ARM64 on Node 24.
 - **Windows is not certified** for this first release candidate (CLI-OPT-0827
   release exception). Package/bin/PATH behavior on Windows is unverified; do
   not treat Linux/macOS CI as Windows coverage. A dedicated Windows runner

@@ -21,7 +21,7 @@ import { parsePackageInstallMetadata } from "../project/package-install-metadata
 import { withProjectLock } from "../project/project-lock.js";
 import { ensureClassMergeDependencies, planTailwindIntegration } from "../project/tailwind.js";
 import {
-  extractTarGzAsync,
+  extractTarGzFile,
   ICON_ARCHIVE_MAX_ENTRIES,
   ICON_ARCHIVE_MAX_EXPANDED_BYTES,
 } from "../project/tar-gz.js";
@@ -158,7 +158,7 @@ export async function runLibraryUpdateUseCase(
   let selected: SelectedResourceDownload | undefined;
   let catalogJson: string;
   let fullArchiveFiles: Readonly<Record<string, Uint8Array>> | undefined;
-  let archiveBytes: Uint8Array;
+  let archivePath: string | undefined;
   let artifactSha256: string;
   let catalogSha256: string;
   let manifestJson: string;
@@ -196,7 +196,7 @@ export async function runLibraryUpdateUseCase(
     }
     selected = downloaded.selected;
     catalogJson = downloaded.catalogJson;
-    archiveBytes = downloaded.artifactBytes;
+    archivePath = downloaded.artifactPath;
     fullArchiveFiles = downloaded.archiveFiles;
     artifactSha256 = downloaded.descriptor.free.sha256;
     catalogSha256 = downloaded.descriptor.catalog.sha256;
@@ -204,15 +204,20 @@ export async function runLibraryUpdateUseCase(
     manualMd = downloaded.manualMd;
     tierSource = downloaded.descriptor.free;
   } else {
-    const downloaded = await downloadProArtifact(context, deps.auth, { version: expected.version, descriptorSha256: expected.descriptorSha256 }, {
-      selection: { config: bootstrap.config, document },
-      ...(deps.fetch ? { fetch: deps.fetch } : {}),
-      ...(deps.allowedProHosts ? { allowedHosts: deps.allowedProHosts } : {}),
-      ...(deps.onProgress ? { onProgress: deps.onProgress } : {}),
-    });
+    const downloaded = await downloadProArtifact(
+      context,
+      deps.auth,
+      { version: expected.version, descriptorSha256: expected.descriptorSha256 },
+      {
+        selection: { config: bootstrap.config, document },
+        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+        ...(deps.allowedProHosts ? { allowedHosts: deps.allowedProHosts } : {}),
+        ...(deps.onProgress ? { onProgress: deps.onProgress } : {}),
+      },
+    );
     selected = downloaded.selected;
     catalogJson = downloaded.catalogJson;
-    archiveBytes = downloaded.artifactBytes;
+    archivePath = downloaded.artifactPath;
     fullArchiveFiles = downloaded.archiveFiles;
     artifactSha256 = downloaded.descriptor.sha256;
     catalogSha256 = downloaded.descriptor.catalogSha256;
@@ -225,9 +230,9 @@ export async function runLibraryUpdateUseCase(
       downloaded.descriptor.version,
       downloaded.descriptor.sha256,
     );
-    if (!selected && !deps.fs.existsSync(cached)) {
+    if (!selected && !deps.fs.existsSync(cached) && downloaded.artifactPath) {
       deps.fs.mkdirSync(join(cached, ".."), { recursive: true });
-      deps.fs.writeFileSync(cached, downloaded.artifactBytes);
+      deps.fs.copyFileSync(downloaded.artifactPath, cached);
     }
     if (downloaded.metadataBytes && downloaded.descriptor.metadata) {
       const metaCached = metadataCachePath(
@@ -267,10 +272,18 @@ export async function runLibraryUpdateUseCase(
     : undefined;
   const unpacked = selected
     ? { files: selected.files, errors: [] }
-    : fullArchiveFiles ? { files: fullArchiveFiles, errors: [] } : await extractTarGzAsync(archiveBytes, {
-        maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
-        maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
-      }, context.signal);
+    : fullArchiveFiles
+      ? { files: fullArchiveFiles, errors: [] }
+      : archivePath
+        ? await extractTarGzFile(
+            archivePath,
+            {
+              maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
+              maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
+            },
+            context.signal,
+          )
+        : { files: {}, errors: ["verified archive file is missing"] };
   if (unpacked.errors.length)
     throw new CliError("VALIDATION_ERROR", unpacked.errors[0] ?? "invalid artifact");
   const target = loaded.config.target;
@@ -300,6 +313,7 @@ export async function runLibraryUpdateUseCase(
       rmSync: deps.fs.rmSync,
       readFileSync: deps.fs.readFileSync,
       readdirSync: deps.fs.readdirSync,
+      copyFileSync: deps.fs.copyFileSync,
     };
     const cacheManifest = readBitmapShardCacheManifest(cacheDir, cacheIo);
     const metadataPath = join(project.root, ".moeicons", "install-metadata.json");

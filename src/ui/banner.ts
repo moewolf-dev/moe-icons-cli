@@ -58,35 +58,71 @@ function stripAnsi(value: string): string {
   return value.replace(ANSI_ESCAPE, "");
 }
 
+const SEGMENTER =
+  typeof Intl !== "undefined" && "Segmenter" in Intl
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : undefined;
+
+/** Grapheme clusters (fallback: code points) so emoji ZWJ/flag sequences count once. */
+function graphemes(value: string): string[] {
+  if (!SEGMENTER) return [...value];
+  return [...SEGMENTER.segment(value)].map((part) => part.segment);
+}
+
+/**
+ * Width of one extended grapheme cluster. A ZWJ/emoji cluster is two columns;
+ * combining marks add zero. Terminal emoji width varies by font/emulator, which
+ * is documented as a limitation rather than guaranteed.
+ */
+function graphemeWidth(cluster: string): number {
+  if (cluster === "" || cluster === "\u200d") return 0;
+  if (/\p{Extended_Pictographic}/u.test(cluster) || /\u200d/u.test(cluster)) return 2;
+  let width = 0;
+  for (const character of cluster) width += codepointWidth(character);
+  return width;
+}
+
 /** Visible terminal width: ANSI sequences and combining marks take no columns. */
 export function visibleWidth(value: string): number {
   let width = 0;
-  for (const character of stripAnsi(value)) width += codepointWidth(character);
+  for (const cluster of graphemes(stripAnsi(value))) width += graphemeWidth(cluster);
   return width;
 }
 
 const ANSI_OR_CHAR = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]|[\\s\\S]`, "gu");
+const SGR_SEQUENCE = new RegExp(`${String.fromCharCode(27)}\\[\\d*(?:;\\d+)*m`);
 
-/** Truncate to `maxWidth` visible columns, preserving ANSI sequences seen so far. */
+/**
+ * Truncate to `maxWidth` visible columns without splitting an ANSI sequence or a
+ * grapheme cluster. SGR state seen so far is preserved (a reset is appended when
+ * the original value contained one).
+ */
 function truncateLine(value: string, maxWidth: number): string {
   if (visibleWidth(value) <= maxWidth) return value;
-  const budget = maxWidth - 1;
+  const budget = Math.max(0, maxWidth - 1);
   let result = "";
   let width = 0;
+  let truncating = false;
+  // Walk ANSI tokens and plain spans separately, then segment plain spans.
   for (const token of value.matchAll(ANSI_OR_CHAR)) {
     const part = token[0];
     if (part.startsWith(String.fromCharCode(27))) {
       result += part;
       continue;
     }
-    const tokenWidth = codepointWidth(part);
-    if (width + tokenWidth > budget) {
-      result += "…";
-      break;
+    for (const cluster of graphemes(part)) {
+      const clusterWidth = graphemeWidth(cluster);
+      if (width + clusterWidth > budget) {
+        result += "…";
+        truncating = true;
+        break;
+      }
+      result += cluster;
+      width += clusterWidth;
     }
-    result += part;
-    width += tokenWidth;
+    if (truncating) break;
   }
+  if (truncating && SGR_SEQUENCE.test(value)) result += ANSI_FG_RESET;
   return result;
 }
 
@@ -112,7 +148,9 @@ export function renderNoticeBox(
   const horizontal = unicode ? "─" : "-";
   return [
     `${top}${horizontal.repeat(contentWidth + 2)}${topRight}`,
-    ...lines.map((line) => `${side} ${padLine(truncateLine(line, contentWidth), contentWidth)} ${side}`),
+    ...lines.map(
+      (line) => `${side} ${padLine(truncateLine(line, contentWidth), contentWidth)} ${side}`,
+    ),
     `${bottom}${horizontal.repeat(contentWidth + 2)}${bottomRight}`,
   ].join("\n");
 }

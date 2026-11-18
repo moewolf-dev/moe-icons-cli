@@ -9,7 +9,7 @@ import { parseCatalog } from "../catalog/catalog.js";
 import type { SelectedResourceDownload } from "./free-download.js";
 import { CliError } from "../errors/index.js";
 import {
-  extractTarGzAsync,
+  extractTarGzFile,
   decodeUtf8,
   ICON_ARCHIVE_MAX_ENTRIES,
   ICON_ARCHIVE_MAX_EXPANDED_BYTES,
@@ -17,6 +17,7 @@ import {
 import { sha256Bytes } from "../project/install-metadata.js";
 import {
   downloadSignedArtifact,
+  downloadSignedArtifactToFile,
   parseSignedDescriptor,
   type SignedArtifactDescriptor,
 } from "./signed-artifact.js";
@@ -362,7 +363,10 @@ export async function downloadProArtifact(
   } = {},
 ): Promise<{
   readonly descriptor: ProArtifactDescriptor;
-  readonly artifactBytes: Uint8Array;
+  /** P0-02: verified local archive file (absent for selected-resource downloads). */
+  readonly artifactPath?: string;
+  readonly artifactSize: number;
+  readonly artifactCleanup?: () => Promise<void>;
   readonly archiveFiles?: Readonly<Record<string, Uint8Array>>;
   readonly catalogJson: string;
   readonly manifestJson: string;
@@ -407,7 +411,7 @@ export async function downloadProArtifact(
     if (selected)
       return {
         descriptor,
-        artifactBytes: new Uint8Array(),
+        artifactSize: 0,
         ...selected,
         metadataSha256: descriptor.metadata!.sha256,
       };
@@ -465,22 +469,37 @@ export async function downloadProArtifact(
       );
     }
   }
-  const artifactBytes = await downloadSignedArtifact(
+  const artifactFile = await downloadSignedArtifactToFile(
     {
       url: descriptor.url,
       expiresAt: descriptor.expiresAt,
       size: descriptor.size,
       sha256: descriptor.sha256,
     },
-    downloadOptions,
+    { ...downloadOptions, maxAttempts: 3 },
   );
-  const extracted = await extractTarGzAsync(artifactBytes, {
-    maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
-    maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
-  }, context.signal);
-  if (context.signal.aborted) throw new CliError("CANCELLED", "archive extraction cancelled");
-  if (extracted.errors.length > 0)
+  let extracted;
+  try {
+    extracted = await extractTarGzFile(
+      artifactFile.path,
+      {
+        maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
+        maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
+      },
+      context.signal,
+    );
+  } catch (error) {
+    await artifactFile.cleanup();
+    throw error;
+  }
+  if (context.signal.aborted) {
+    await artifactFile.cleanup();
+    throw new CliError("CANCELLED", "archive extraction cancelled");
+  }
+  if (extracted.errors.length > 0) {
+    await artifactFile.cleanup();
     throw new CliError("VALIDATION_ERROR", extracted.errors[0] ?? "invalid pro archive");
+  }
   const catalog =
     extracted.files[descriptor.catalogFilename] ??
     extracted.files[`./${descriptor.catalogFilename}`];
@@ -489,7 +508,9 @@ export async function downloadProArtifact(
 
   return {
     descriptor,
-    artifactBytes,
+    artifactPath: artifactFile.path,
+    artifactSize: artifactFile.size,
+    artifactCleanup: artifactFile.cleanup,
     archiveFiles: extracted.files,
     catalogJson: decodeUtf8(catalog),
     manifestJson: metadata.manifestJson,

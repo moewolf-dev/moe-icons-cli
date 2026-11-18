@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { sha256Bytes } from "../project/install-metadata.js";
 import { CliError } from "../errors/index.js";
 import { cacheArtifact, type CacheIo } from "./cache.js";
+import { getDownloadScheduler, type DownloadScheduler } from "../project/download-scheduler.js";
 import { resolveIconTheme } from "./icon-selection.js";
 import { findCatalogStyleGroup, type IconCatalog } from "../catalog/catalog.js";
 import { toProxyName } from "./icon-names.js";
@@ -269,6 +270,8 @@ export async function downloadSelectedResources(
     offline?: boolean;
     getBundleUrl: () => Promise<string>;
     readRange?: (start: number, size: number) => Promise<Uint8Array>;
+    /** P0-03: shared package scheduler; defaults to the process singleton. */
+    scheduler?: DownloadScheduler;
   },
 ): Promise<{ files: Record<string, Uint8Array>; networkBytes: number; cacheHits: number }> {
   const files: Record<string, Uint8Array> = {};
@@ -277,6 +280,7 @@ export async function downloadSelectedResources(
   let cursor = 0;
   let urlPromise: Promise<string> | undefined;
   let failure: CliError | undefined;
+  const scheduler = deps.scheduler ?? getDownloadScheduler();
   const controller = new AbortController();
   const abort = () => controller.abort();
   deps.signal.addEventListener("abort", abort, { once: true });
@@ -321,92 +325,97 @@ export async function downloadSelectedResources(
                 if (deps.readRange)
                   bytes = await deps.readRange(entry.offset, entry.compressedSize);
                 else {
-                  let url = new URL(await getUrl());
-                  let response: Response | undefined;
-                  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]);
-                  for (let redirects = 0; redirects <= 5; redirects++) {
-                    const loopback =
-                      deps.allowLoopback &&
-                      url.protocol === "http:" &&
-                      ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
-                    if (
-                      (url.protocol !== "https:" && !loopback) ||
-                      url.username ||
-                      url.password ||
-                      !deps.allowedHosts.includes(url.host)
-                    )
-                      return fail("resource URL uses an untrusted host or protocol");
-                    response = await deps.fetch(url, {
-                      headers: {
-                        Range: `bytes=${entry.offset}-${entry.offset + entry.compressedSize - 1}`,
-                        "Accept-Encoding": "identity",
-                      },
-                      redirect: "manual",
-                      signal,
-                    });
-                    if ([301, 302, 303, 307, 308].includes(response.status)) {
-                      const location = response.headers.get("location");
+                  const release = await scheduler.acquire("package");
+                  try {
+                    let url = new URL(await getUrl());
+                    let response: Response | undefined;
+                    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]);
+                    for (let redirects = 0; redirects <= 5; redirects++) {
+                      const loopback =
+                        deps.allowLoopback &&
+                        url.protocol === "http:" &&
+                        ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+                      if (
+                        (url.protocol !== "https:" && !loopback) ||
+                        url.username ||
+                        url.password ||
+                        !deps.allowedHosts.includes(url.host)
+                      )
+                        return fail("resource URL uses an untrusted host or protocol");
+                      response = await deps.fetch(url, {
+                        headers: {
+                          Range: `bytes=${entry.offset}-${entry.offset + entry.compressedSize - 1}`,
+                          "Accept-Encoding": "identity",
+                        },
+                        redirect: "manual",
+                        signal,
+                      });
+                      if ([301, 302, 303, 307, 308].includes(response.status)) {
+                        const location = response.headers.get("location");
+                        await response.body?.cancel();
+                        if (!location || redirects === 5)
+                          return fail("resource redirect limit exceeded");
+                        url = new URL(location, url);
+                        continue;
+                      }
+                      break;
+                    }
+                    if (!response) throw new Error("resource response unavailable");
+                    if ([401, 403].includes(response.status)) {
                       await response.body?.cancel();
-                      if (!location || redirects === 5)
-                        return fail("resource redirect limit exceeded");
-                      url = new URL(location, url);
+                      if (attempt === 2)
+                        throw new CliError(
+                          "AUTH_ERROR",
+                          "resource URL expired or access revoked; retry moeicons install/login",
+                        );
+                      urlPromise = undefined;
                       continue;
                     }
-                    break;
-                  }
-                  if (!response) throw new Error("resource response unavailable");
-                  if ([401, 403].includes(response.status)) {
-                    await response.body?.cancel();
-                    if (attempt === 2)
-                      throw new CliError(
-                        "AUTH_ERROR",
-                        "resource URL expired or access revoked; retry moeicons install/login",
-                      );
-                    urlPromise = undefined;
-                    continue;
-                  }
-                  if ([429, 500, 502, 503, 504].includes(response.status)) {
-                    await response.body?.cancel();
-                    throw new Error(`resource service returned ${response.status}`);
-                  }
-                  if (
-                    response.status !== 206 ||
-                    response.headers.get("content-range") !==
-                      `bytes ${entry.offset}-${entry.offset + entry.compressedSize - 1}/${index.bundle.size}` ||
-                    (response.headers.get("content-encoding") &&
-                      response.headers.get("content-encoding") !== "identity")
-                  ) {
-                    await response.body?.cancel();
-                    return fail(
-                      `server did not honor the exact resource Range for ${name}; retry or explicitly set downloadMode=full`,
-                    );
-                  }
-                  const length = response.headers.get("content-length");
-                  if (length && Number(length) !== entry.compressedSize) {
-                    await response.body?.cancel();
-                    return fail(`resource response length mismatch: ${name}`);
-                  }
-                  const reader = response.body?.getReader() as
-                    ReadableStreamDefaultReader<Uint8Array> | undefined;
-                  if (!reader) return fail("resource response has no body");
-                  const chunks: Uint8Array[] = [];
-                  let lengthRead = 0;
-                  try {
-                    for (;;) {
-                      const part = await reader.read();
-                      if (part.done) break;
-                      lengthRead += part.value.length;
-                      if (lengthRead > entry.compressedSize) {
-                        await reader.cancel();
-                        return fail(`oversized resource response: ${name}`);
-                      }
-                      chunks.push(part.value);
+                    if ([429, 500, 502, 503, 504].includes(response.status)) {
+                      await response.body?.cancel();
+                      throw new Error(`resource service returned ${response.status}`);
                     }
+                    if (
+                      response.status !== 206 ||
+                      response.headers.get("content-range") !==
+                        `bytes ${entry.offset}-${entry.offset + entry.compressedSize - 1}/${index.bundle.size}` ||
+                      (response.headers.get("content-encoding") &&
+                        response.headers.get("content-encoding") !== "identity")
+                    ) {
+                      await response.body?.cancel();
+                      return fail(
+                        `server did not honor the exact resource Range for ${name}; retry or explicitly set downloadMode=full`,
+                      );
+                    }
+                    const length = response.headers.get("content-length");
+                    if (length && Number(length) !== entry.compressedSize) {
+                      await response.body?.cancel();
+                      return fail(`resource response length mismatch: ${name}`);
+                    }
+                    const reader = response.body?.getReader() as
+                      ReadableStreamDefaultReader<Uint8Array> | undefined;
+                    if (!reader) return fail("resource response has no body");
+                    const chunks: Uint8Array[] = [];
+                    let lengthRead = 0;
+                    try {
+                      for (;;) {
+                        const part = await reader.read();
+                        if (part.done) break;
+                        lengthRead += part.value.length;
+                        if (lengthRead > entry.compressedSize) {
+                          await reader.cancel();
+                          return fail(`oversized resource response: ${name}`);
+                        }
+                        chunks.push(part.value);
+                      }
+                    } finally {
+                      reader.releaseLock();
+                    }
+                    bytes = Buffer.concat(chunks);
+                    networkBytes += lengthRead;
                   } finally {
-                    reader.releaseLock();
+                    release();
                   }
-                  bytes = Buffer.concat(chunks);
-                  networkBytes += lengthRead;
                 }
                 break;
               } catch (error) {

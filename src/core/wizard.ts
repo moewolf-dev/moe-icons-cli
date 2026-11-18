@@ -1,6 +1,6 @@
 import { detectProject } from "../project/detect.js";
 import { CliError } from "../errors/index.js";
-import type { CommandContext, UiChoice } from "./context.js";
+import { promptConfirm, promptSelect, type CommandContext, type UiChoice } from "./context.js";
 
 export type WizardResult =
   | { readonly ok: true; readonly action: "json-hint"; readonly message: string }
@@ -105,18 +105,19 @@ export async function runWizardUseCase(
   const proLabel =
     session === "authenticated" ? await options.getProResourceLabel?.().catch(() => undefined) : undefined;
   const message = options.historyLine ? `${options.historyLine}\n\n${HOME_MESSAGE}` : HOME_MESSAGE;
-  const choice = await context.ui.select(message, homeChoices(session, proLabel), context.signal);
-  // Esc on home == Exit (cancel path); explicit Exit menu item uses via=menu.
-  if (choice === undefined) return { ok: true, action: "exit", via: "cancel" };
+  const home = await promptSelect(context.ui, message, homeChoices(session, proLabel), context.signal);
+  // Esc/Ctrl+C on home == Exit (cancel path); explicit Exit uses via=menu.
+  if (home.kind !== "submit") return { ok: true, action: "exit", via: "cancel" };
+  const choice = home.value;
   if (choice === "exit") return { ok: true, action: "exit", via: "menu" };
 
   if (choice === "login") return { ok: true, action: "pending", flow: "login" };
   if (choice === "pro-resources") return { ok: true, action: "pro-resources" };
 
   if (choice === "settings") {
-    const setting = await context.ui.select("Settings", settingsChoices(session), context.signal);
-    if (setting === undefined || setting === "back") return { ok: true, action: "back" };
-    return { ok: true, action: "settings", flow: setting as "logout" | "cli-update" };
+    const setting = await promptSelect(context.ui, "Settings", settingsChoices(session), context.signal);
+    if (setting.kind !== "submit" || setting.value === "back") return { ok: true, action: "back" };
+    return { ok: true, action: "settings", flow: setting.value as "logout" | "cli-update" };
   }
 
   const project = detectProject(context.cwd);
@@ -128,29 +129,38 @@ export async function runWizardUseCase(
 
   if (choice === "manage") {
     const status = await options.getLibraryStatus?.();
-    const management = await context.ui.select(
+    const management = await promptSelect(
+      context.ui,
       "Manage project icons",
       manageChoices(status),
       context.signal,
     );
-    if (management === undefined || management === "back") return { ok: true, action: "back" };
-    return { ok: true, action: "manage", flow: management as "reload" | "library-update" };
+    if (management.kind !== "submit" || management.value === "back") return { ok: true, action: "back" };
+    return { ok: true, action: "manage", flow: management.value as "reload" | "library-update" };
   }
 
   if (choice === "free" || choice === "pro") {
-    const target = await context.ui.select("Choose an output target", targetChoices(), context.signal);
-    if (target === undefined || target === "back") return { ok: true, action: "back" };
-    if (target !== "react" && target !== "vue" && target !== "vanilla" && target !== "assets") {
-      return { ok: true, action: "back" };
-    }
-    const confirmed = await context.ui.confirm(
-      `Install ${choice} ${target} into ${project.root}?`,
+    const target = await promptSelect(
+      context.ui,
+      "Choose an output target",
+      targetChoices(),
       context.signal,
     );
-    // Esc / Ctrl+C on confirm exits; No returns to home (back)
-    if (confirmed === undefined) return { ok: false, reason: "cancelled" };
-    if (confirmed !== true) return { ok: true, action: "back" };
-    return { ok: true, action: "install", group: choice, target };
+    // Esc/Back in a submenu returns to its parent (Home), per the frozen table.
+    if (target.kind !== "submit" || target.value === "back") return { ok: true, action: "back" };
+    const value = target.value;
+    if (value !== "react" && value !== "vue" && value !== "vanilla" && value !== "assets") {
+      return { ok: true, action: "back" };
+    }
+    const confirmed = await promptConfirm(
+      context.ui,
+      `Install ${choice} ${value} into ${project.root}?`,
+      context.signal,
+    );
+    // Cancel on a destructive confirmation exits without writing; No returns Home.
+    if (confirmed.kind !== "submit") return { ok: false, reason: "cancelled" };
+    if (confirmed.value !== true) return { ok: true, action: "back" };
+    return { ok: true, action: "install", group: choice, target: value };
   }
 
   throw new CliError("VALIDATION_ERROR", `unknown wizard choice: ${choice}`);

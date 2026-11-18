@@ -3,7 +3,15 @@ import { safeMcpValue } from "./mcp/server.js";
 import { createProjectMcpServices } from "./mcp/services.js";
 import { assertDownloadSelection } from "./core/selected-resources.js";
 import { parseArgs, HELP_TEXT, type Command } from "./commands/parser.js";
-import { CliError, isCliError, jsonErrorBody, type CliErrorCode } from "./errors/index.js";
+import {
+  CliError,
+  cliErrorJson,
+  isCliError,
+  jsonErrorBody,
+  type CliErrorCode,
+} from "./errors/index.js";
+import { redactText } from "./errors/redact.js";
+import { createOperationId, diagnosticsFor } from "./core/diagnostics.js";
 import { detectProject } from "./project/detect.js";
 import {
   readMoeiconsConfig,
@@ -24,12 +32,17 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { runGenerateUseCase } from "./core/generate.js";
-import { recoverManagedReconcile, safeManagedPath } from "./project/install.js";
+import {
+  cleanupDownloadTempDirsSync,
+  recoverManagedReconcile,
+  safeManagedPath,
+} from "./project/install.js";
 import { withProjectLockSync } from "./project/project-lock.js";
 import { classifyInstallError, runInstallUseCase } from "./core/install.js";
 import { runWizardUseCase, loginRecoveryChoices } from "./core/wizard.js";
 import type { CommandContext } from "./core/context.js";
 import { createCommandUi } from "./ui/create-ui.js";
+import { detectCapabilities, type TerminalCapabilities } from "./ui/capabilities.js";
 import {
   CLI_VERSION,
   MOEICONS_BANNER,
@@ -37,7 +50,8 @@ import {
   renderProjectNotice,
   renderWordmarkText,
 } from "./ui/banner.js";
-import { createTheme, isThemeEnabled } from "./ui/theme.js";
+import { createTheme } from "./ui/theme.js";
+import { resolveColumns } from "./ui/terminal.js";
 import { renderHistoryBar, type HistoryEntry } from "./tui/components.js";
 import {
   describeAuthEnvironment,
@@ -50,8 +64,10 @@ import {
   type AuthUseCaseDependencies,
 } from "./core/auth.js";
 import { formatLibraryVersionStatus, getLibraryVersionStatus } from "./core/manage.js";
-import { runCliUpdateCheck } from "./core/cli-update.js";
+import { detectInstallSource, detectLocalInstall } from "./core/cli-update.js";
+import { exportDiagnosticBundle, pruneDiagnosticBundles } from "./core/doctor-diagnostics.js";
 import { fetchLibraryVersions } from "./core/version-service.js";
+import { runCliVersionCheck, type CliVersionCheck } from "./core/version-sources.js";
 import { runProInstallUseCase } from "./core/pro-install.js";
 import { resolveLocalTestContext } from "./core/local-test-env.js";
 import { runLibraryUpdateUseCase } from "./core/library-update.js";
@@ -88,19 +104,38 @@ export interface CliRuntime {
   readonly stderr: (text: string) => void;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly isTTY: () => boolean;
+  /** REF-02: separately measured streams; default to `isTTY`. */
+  readonly stdinTTY?: () => boolean;
+  readonly stdoutTTY?: () => boolean;
+  readonly stderrTTY?: () => boolean;
+  /** REF-08/02: set by `--debug` / `--accessible`. */
+  readonly debug?: boolean;
+  readonly accessible?: boolean;
+  readonly rows?: () => number | undefined;
   readonly columns?: () => number | undefined;
   readonly readLine?: (prompt: string) => Promise<string>;
   readonly readKey?: () => Promise<string>;
   readonly auth?: AuthUseCaseDependencies;
   readonly fetchVersions?: () => Promise<readonly string[]>;
+  /** REF-06: injectable network seam for the independent GitHub evidence check. */
+  readonly fetch?: typeof fetch;
   readonly signal?: AbortSignal;
   readonly mcpLines?: AsyncIterable<string>;
+  /** REF-07: wrapper-owned shutdown hook; business code only registers cleanup. */
+  readonly onCleanup?: (cleanup: () => void | Promise<void>) => void;
 }
 
-function commandContext(
-  runtime: CliRuntime,
-  flags: { json: boolean; yes: boolean },
-): CommandContext {
+const uiCache = new WeakMap<object, Map<string, ReturnType<typeof createCommandUi>>>();
+
+function uiForRuntime(runtime: CliRuntime, flags: { json: boolean; yes: boolean }) {
+  let perRuntime = uiCache.get(runtime);
+  if (!perRuntime) {
+    perRuntime = new Map();
+    uiCache.set(runtime, perRuntime);
+  }
+  const key = `${flags.json}:${flags.yes}`;
+  const existing = perRuntime.get(key);
+  if (existing) return existing;
   const streams =
     runtime.readLine !== undefined && runtime.readKey !== undefined
       ? {
@@ -110,14 +145,58 @@ function commandContext(
           readKey: runtime.readKey,
         }
       : undefined;
+  const stdinTTY = runtime.stdinTTY?.() ?? runtime.isTTY();
+  const stdoutTTY = runtime.stdoutTTY?.() ?? runtime.isTTY();
+  const created = createCommandUi({
+    json: flags.json,
+    yes: flags.yes,
+    isTTY: runtime.isTTY(),
+    stdinTTY,
+    stdoutTTY,
+    stderrTTY: runtime.stderrTTY?.() ?? runtime.isTTY(),
+    ...(runtime.columns ? { columns: runtime.columns() } : {}),
+    ...(runtime.rows ? { rows: runtime.rows() } : {}),
+    ...(runtime.accessible !== undefined ? { accessible: runtime.accessible } : {}),
+    env: runtime.env,
+    ...(streams ? { streams } : {}),
+  });
+  perRuntime.set(key, created);
+  return created;
+}
+
+/** REF-01: release adapter resources exactly once per runtime. */
+function disposeUi(runtime: CliRuntime): void {
+  const perRuntime = uiCache.get(runtime);
+  if (!perRuntime) return;
+  for (const ui of perRuntime.values()) {
+    try {
+      ui.dispose?.();
+    } catch {
+      /* Cleanup failures must not change the command result. */
+    }
+  }
+  uiCache.delete(runtime);
+}
+
+export function runtimeCapabilities(runtime: CliRuntime, json = false): TerminalCapabilities {
+  return detectCapabilities({
+    env: runtime.env,
+    json,
+    stdinTTY: runtime.stdinTTY?.() ?? runtime.isTTY(),
+    stdoutTTY: runtime.stdoutTTY?.() ?? runtime.isTTY(),
+    stderrTTY: runtime.stderrTTY?.() ?? runtime.isTTY(),
+    ...(runtime.columns ? { columns: runtime.columns() } : {}),
+    ...(runtime.rows ? { rows: runtime.rows() } : {}),
+    ...(runtime.accessible !== undefined ? { accessible: runtime.accessible } : {}),
+  });
+}
+
+function commandContext(
+  runtime: CliRuntime,
+  flags: { json: boolean; yes: boolean },
+): CommandContext {
   return {
-    ui: createCommandUi({
-      json: flags.json,
-      yes: flags.yes,
-      isTTY: runtime.isTTY(),
-      env: runtime.env,
-      ...(streams ? { streams } : {}),
-    }),
+    ui: uiForRuntime(runtime, flags),
     cwd: runtime.cwd(),
     env: runtime.env,
     signal: runtime.signal ?? new AbortController().signal,
@@ -151,6 +230,7 @@ function freeDownloadDeps(runtime: CliRuntime): Omit<FreeDownloadIo, "signal"> {
     fetchFn: globalThis.fetch.bind(globalThis),
     readFileSync: (path) => new Uint8Array(readFileSync(path)),
     writeFileSync: (path, data) => writeFileSync(path, data),
+    copyFileSync: (from, to) => copyFileSync(from, to),
     mkdirSync: (path) => mkdirSync(path, { recursive: true }),
     existsSync,
     renameSync,
@@ -179,10 +259,11 @@ export const BANNER = MOEICONS_BANNER;
 
 /** Wordmark rendered for interactive wizard startup (notices come later). */
 export function renderBanner(runtime: CliRuntime): void {
+  const capabilities = runtimeCapabilities(runtime);
   runtime.stdout(
     `${renderWordmarkText({
-      columns: runtime.columns?.() ?? 80,
-      color: createTheme(isThemeEnabled(runtime.env, runtime.isTTY())).enabled,
+      columns: resolveColumns(capabilities.columns),
+      color: capabilities.color,
     })}\n`,
   );
 }
@@ -195,20 +276,74 @@ function writeJson(runtime: CliRuntime, value: unknown): void {
   runtime.stdout(JSON.stringify(value));
 }
 
+/**
+ * P1-06: one redacted error line, plus an actionable hint only when there is
+ * one. JSON keeps `ok/code/message` and adds phase/retryable/hint/operationId.
+ * A debug/ring-buffer failure can never change the exit code.
+ */
 function reportFailure(runtime: CliRuntime, json: boolean, error: unknown): number {
+  const recorder = diagnosticsFor(runtime, {
+    ...(runtime.debug ? { debug: true } : {}),
+    stderr: runtime.stderr,
+    redact: { cwd: runtime.cwd() },
+  });
   if (isCliError(error)) {
+    const operationId = error.operationId ?? createOperationId();
+    const message = redactText(error.message, { cwd: runtime.cwd() });
+    const hint = error.hint ? redactText(error.hint, { cwd: runtime.cwd() }) : undefined;
+    recorder.record({
+      level: error.code === "CANCELLED" ? "info" : "error",
+      message,
+      code: error.code,
+      operationId,
+      ...(error.phase ? { phase: error.phase } : {}),
+      ...(hint ? { context: { hint } } : {}),
+    });
     if (error.code === "CANCELLED") {
-      if (json) writeJson(runtime, jsonErrorBody(error.code, error.message));
-      else runtime.stderr("Cancelled\n");
+      if (json) {
+        writeJson(runtime, {
+          ...jsonErrorBody(error.code, message),
+          ...(runtime.debug ? { operationId } : {}),
+        });
+      } else runtime.stderr("Cancelled\n");
       return 0;
     }
-    if (json) writeJson(runtime, jsonErrorBody(error.code, error.message));
-    else runtime.stderr(`error: ${error.message}\n`);
+    if (json) {
+      // `operationId` is opt-in (debug) so the historical `ok/code/message`
+      // payload stays byte-identical for existing JSON consumers.
+      writeJson(
+        runtime,
+        cliErrorJson({ ...error, message } as CliError, runtime.debug ? operationId : undefined),
+      );
+    } else {
+      runtime.stderr(`error [${error.code}] ${message}\n`);
+      if (hint) runtime.stderr(`hint: ${hint}\n`);
+    }
     return error.exitCode;
   }
-  const message = error instanceof Error ? error.message : String(error);
-  if (json) writeJson(runtime, jsonErrorBody("UNEXPECTED", message));
-  else runtime.stderr(`unexpected error: ${message}\n`);
+  const message = redactText(error instanceof Error ? error.message : String(error), {
+    cwd: runtime.cwd(),
+  });
+  const operationId = createOperationId();
+  recorder.record({
+    level: "error",
+    message,
+    code: "UNEXPECTED",
+    operationId,
+    phase: "startup",
+  });
+  if (json) {
+    writeJson(runtime, {
+      ...jsonErrorBody("UNEXPECTED", message),
+      phase: "startup",
+      ...(runtime.debug ? { operationId } : {}),
+    });
+  } else {
+    runtime.stderr(`error [UNEXPECTED] ${message}\n`);
+    runtime.stderr(
+      "hint: run `moeicons doctor --export-diagnostics` and inspect the local bundle\n",
+    );
+  }
   return 5;
 }
 
@@ -219,20 +354,53 @@ export async function main(argv: readonly string[], runtime: CliRuntime): Promis
   try {
     parsed = parseArgs(argv);
   } catch (error) {
-    return reportFailure(runtime, jsonHint, error);
+    return reportFailure(
+      { ...runtime, ...(jsonHint ? { debug: argv.includes("--debug") } : {}) },
+      jsonHint,
+      error,
+    );
   }
 
+  const activeRuntime: CliRuntime = {
+    ...runtime,
+    ...(runtime.debug === true || parsed.debug ? { debug: true } : {}),
+    ...(runtime.accessible === true || parsed.accessible ? { accessible: true } : {}),
+  };
+  // REF-09: expire old diagnostic bundles at startup; never auto-create one.
+  try {
+    pruneDiagnosticBundles(diagnosticsDirectory(activeRuntime.env));
+  } catch {
+    /* A read-only cache directory must not block normal commands. */
+  }
+  // REF-07: the wrapper owns signals; the CLI only registers bounded cleanup.
+  activeRuntime.onCleanup?.(() => {
+    disposeUi(activeRuntime);
+    cleanupDownloadTempDirsSync();
+  });
+  // One recorder per runtime; the ring buffer is destroyed with the process.
+  const recorder = diagnosticsFor(activeRuntime, {
+    ...(activeRuntime.debug ? { debug: true } : {}),
+    stderr: activeRuntime.stderr,
+    redact: { cwd: activeRuntime.cwd() },
+  });
+  recorder.record({
+    level: "info",
+    code: parsed.command.name,
+    message: `command ${parsed.command.name}`,
+  });
   try {
     return await dispatchSync(
       parsed.command,
-      runtime,
+      activeRuntime,
       parsed.json,
       parsed.yes,
       parsed.noTailwind,
       parsed.target,
     );
   } catch (error) {
-    return reportFailure(runtime, parsed.json, error);
+    return reportFailure(activeRuntime, parsed.json, error);
+  } finally {
+    disposeUi(activeRuntime);
   }
 }
 
@@ -327,7 +495,13 @@ async function dispatchSync(
     case "init":
       return await runInit(runtime, json, yes, command.dryRun === true, target);
     case "doctor":
-      return runDoctor(runtime, json, command.check === true, command.dryRun === true);
+      return runDoctor(
+        runtime,
+        json,
+        command.check === true,
+        command.dryRun === true,
+        command.exportDiagnostics === true,
+      );
     case "mcp":
       await runMcp(runtime);
       return 0;
@@ -534,7 +708,8 @@ async function runInit(
   }
 
   if (fixes.length === 0) {
-    if (report.anchors.some((anchor) => anchor.status === "ambiguous")) throw new CliError("VALIDATION_ERROR", "select --target before initializing this project");
+    if (report.anchors.some((anchor) => anchor.status === "ambiguous"))
+      throw new CliError("VALIDATION_ERROR", "select --target before initializing this project");
     if (json) writeJson(runtime, { ok: true, alreadyConfigured: true, ...doctorJson(report) });
     else runtime.stdout("already configured\n");
     return 0;
@@ -571,8 +746,105 @@ async function runInit(
   return 0;
 }
 
-/** Read-only four-anchor diagnosis command (`doctor`). */
-function runDoctor(runtime: CliRuntime, json: boolean, check: boolean, dryRun: boolean): number {
+export function diagnosticsDirectory(env: Readonly<Record<string, string | undefined>>): string {
+  const cacheDir = env.MOEICONS_CACHE_DIR ?? join(homedir(), ".moeicons", "cache");
+  return join(cacheDir, "diagnostics");
+}
+
+/**
+ * Read-only four-anchor diagnosis command (`doctor`, REF-09).
+ *
+ * `--export-diagnostics` is the ONLY path that writes a diagnostic file: a
+ * single short-lived, redacted local bundle. Plain `doctor` never writes.
+ */
+function runDoctor(
+  runtime: CliRuntime,
+  json: boolean,
+  check: boolean,
+  dryRun: boolean,
+  exportDiagnostics = false,
+): number {
+  if (exportDiagnostics) {
+    const local = detectLocalInstall(runtime.cwd(), {
+      existsSync,
+      readFileSync: (path) => readFileSync(path, "utf8"),
+    });
+    const source = detectInstallSource({ env: runtime.env, ...local });
+    const recorder = diagnosticsFor(runtime, {
+      ...(runtime.debug ? { debug: true } : {}),
+      stderr: runtime.stderr,
+      redact: { cwd: runtime.cwd() },
+    });
+    let exported: ReturnType<typeof exportDiagnosticBundle>;
+    try {
+      exported = exportDiagnosticBundle({
+        directory: diagnosticsDirectory(runtime.env),
+        input: {
+          cwd: runtime.cwd(),
+          env: runtime.env,
+          cliVersion: versionString(),
+          stdinTTY: runtime.stdinTTY?.() ?? runtime.isTTY(),
+          stdoutTTY: runtime.stdoutTTY?.() ?? runtime.isTTY(),
+          stderrTTY: runtime.stderrTTY?.() ?? runtime.isTTY(),
+          ...(runtime.columns ? { columns: runtime.columns() } : {}),
+          installSource:
+            source.kind === "unknown"
+              ? "unknown"
+              : source.kind === "npx"
+                ? "npx"
+                : `${source.kind}:${source.manager}`,
+          diagnostics: recorder,
+        },
+      });
+    } catch (error) {
+      recorder.record({
+        level: "warn",
+        code: "DIAGNOSTIC_WRITE_FAILED",
+        message: `diagnostic export failed: ${error instanceof Error ? error.message : "unknown"}`,
+        phase: "diagnostic",
+      });
+      throw new CliError(
+        "VALIDATION_ERROR",
+        "could not write a diagnostic bundle; check that the cache directory is writable",
+        {
+          phase: "diagnostic",
+          hint: "set MOEICONS_CACHE_DIR to a writable directory and retry",
+        },
+      );
+    }
+    if (json) {
+      let preview = "";
+      try {
+        preview = readFileSync(exported.path, "utf8").slice(0, 2_000);
+      } catch {
+        preview = "";
+      }
+      // Preview is redacted by construction; the absolute path is returned only
+      // so the user can open the local file.
+      writeJson(runtime, {
+        ok: true,
+        exported: true,
+        path: exported.path,
+        bytes: exported.bytes,
+        createdAt: exported.createdAt,
+        expiresAt: exported.expiresAt,
+        preview,
+      });
+    } else {
+      recorder.record({
+        level: "info",
+        phase: "diagnostic",
+        code: "DIAGNOSTICS_EXPORTED",
+        message: `diagnostic bundle exported (${exported.bytes} bytes)`,
+      });
+      runtime.stdout(`Diagnostic bundle written: ${exported.path}\n`);
+      runtime.stdout(`Size: ${exported.bytes} bytes; expires ${exported.expiresAt} (24h).\n`);
+      runtime.stdout(
+        "Review it locally before sharing; it contains no tokens or email addresses.\n",
+      );
+    }
+    return 0;
+  }
   const { report } = runDoctorDiagnose(runtime.cwd());
   void dryRun; // doctor is always read-only; --dry-run is accepted for parity
   if (json) writeJson(runtime, doctorJson(report));
@@ -588,47 +860,132 @@ function runDoctor(runtime: CliRuntime, json: boolean, check: boolean, dryRun: b
 export function createMcpServices(runtime: CliRuntime) {
   return createProjectMcpServices(runtime, async (argv) => {
     let output = "";
-    const status = await main(argv, { ...runtime, isTTY: () => false, stdout: (text) => { output += text; }, stderr: (text) => runtime.stderr(String(safeMcpValue(text)).split(runtime.cwd()).join(".")) });
-    try { return JSON.parse(output) as unknown; }
-    catch { return { ok: false, code: "COMMAND_FAILED", message: `command returned ${status} without a JSON result` }; }
+    const status = await main(argv, {
+      ...runtime,
+      isTTY: () => false,
+      stdout: (text) => {
+        output += text;
+      },
+      stderr: (text) => runtime.stderr(String(safeMcpValue(text)).split(runtime.cwd()).join(".")),
+    });
+    try {
+      return JSON.parse(output) as unknown;
+    } catch {
+      return {
+        ok: false,
+        code: "COMMAND_FAILED",
+        message: `command returned ${status} without a JSON result`,
+      };
+    }
   });
 }
 
 async function runMcp(runtime: CliRuntime): Promise<void> {
   const { runMcpStdio } = await import("./mcp/server.js");
   if (runtime.mcpLines) {
-    await runMcpStdio({ services: createMcpServices(runtime), projectRoot: runtime.cwd(), stdout: runtime.stdout, stderr: runtime.stderr, lines: runtime.mcpLines, ...(runtime.signal ? { signal: runtime.signal } : {}) });
+    await runMcpStdio({
+      services: createMcpServices(runtime),
+      projectRoot: runtime.cwd(),
+      stdout: runtime.stdout,
+      stderr: runtime.stderr,
+      lines: runtime.mcpLines,
+      ...(runtime.signal ? { signal: runtime.signal } : {}),
+    });
     return;
   }
   const readline = await import("node:readline");
   const controller = new AbortController();
+  const external = runtime.signal;
+  const abort = () => controller.abort();
+  if (external?.aborted) abort();
+  else external?.addEventListener("abort", abort, { once: true });
   const services = createMcpServices({ ...runtime, signal: controller.signal });
   const rl = readline.createInterface({ input: process.stdin });
-  const stop = () => { controller.abort(); rl.close(); };
   const eof = () => controller.abort();
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
+  // The wrapper owns process signals; embedding callers without a signal keep a
+  // local fallback. Never install duplicate SIGINT handlers in the business lib.
+  const stop = () => {
+    controller.abort();
+    rl.close();
+  };
+  if (!external) {
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  }
   rl.once("close", eof);
-  try { await runMcpStdio({ services, projectRoot: runtime.cwd(), stdout: runtime.stdout, stderr: runtime.stderr, lines: rl, signal: controller.signal }); }
-  finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); rl.removeListener("close", eof); rl.close(); }
+  try {
+    await runMcpStdio({
+      services,
+      projectRoot: runtime.cwd(),
+      stdout: runtime.stdout,
+      stderr: runtime.stderr,
+      lines: rl,
+      signal: controller.signal,
+    });
+  } finally {
+    if (!external) {
+      process.removeListener("SIGINT", stop);
+      process.removeListener("SIGTERM", stop);
+    }
+    external?.removeEventListener("abort", abort);
+    rl.removeListener("close", eof);
+    rl.close();
+  }
 }
 
 function versionString(): string {
   return CLI_VERSION;
 }
 
-function renderCliUpdateNotice(update: Awaited<ReturnType<typeof runCliUpdateCheck>>): string {
-  const latest = update.latestVersion ?? "unavailable";
-  const instruction =
-    update.instruction ?? (update.status === "current" ? "already up to date" : "unavailable");
-  const prompt =
-    update.status === "update"
-      ? "A newer Moeicons CLI is available. Update with the command below."
-      : "Moeicons CLI version status";
-  return renderNoticeBox([
-    prompt,
-    `Current ${update.currentVersion} / Latest ${latest} / Update: ${instruction}`,
-  ]);
+/**
+ * REF-06 / P0-01: npm and GitHub evidence are displayed independently. Only npm
+ * can produce an executable upgrade command; GitHub-only evidence is labelled
+ * as a separate release channel and never impersonates an npm upgrade.
+ */
+function renderCliVersionNotice(check: CliVersionCheck): string {
+  if (check.npm.status !== "ok" && check.github.status !== "ok") {
+    return renderNoticeBox([
+      "Moeicons CLI version status",
+      `Current ${check.currentVersion} / Latest unavailable / Update: unavailable`,
+    ]);
+  }
+  const npmLine =
+    check.npm.status === "ok"
+      ? `npm: ${check.npm.latestVersion ?? "no stable release"}${check.npmUpdateAvailable ? " (update available)" : " (current)"}`
+      : `npm: unavailable (${check.npm.error?.code ?? "error"})`;
+  const githubLine =
+    check.github.status === "ok"
+      ? `GitHub: ${check.github.latestVersion ? `v${check.github.latestVersion}` : "no stable release"}${check.githubUpdateAvailable ? " (newer release evidence)" : ""}`
+      : `GitHub: unavailable (${check.github.error?.code ?? "error"})`;
+  const lines = [`Current ${check.currentVersion}`, npmLine, githubLine];
+  if (check.npmUpdateAvailable && check.npmInstruction) {
+    lines.unshift(
+      "A newer Moeicons CLI is available on the npm channel. Update with the command below.",
+    );
+    lines.push(`Run: ${check.npmInstruction}`);
+  } else if (check.npm.status === "ok") {
+    lines.push("The installed npm CLI is up to date in its channel.");
+  }
+  if (check.githubUpdateAvailable && !check.npmUpdateAvailable) {
+    lines.push(check.githubNote);
+  }
+  return renderNoticeBox(["Moeicons CLI version status", ...lines]);
+}
+
+function cliVersionCheckOptions(runtime: CliRuntime, timeoutMs = 1_000) {
+  return {
+    currentVersion: versionString(),
+    cwd: runtime.cwd(),
+    env: runtime.env,
+    fs: { existsSync, readFileSync: (path: string) => readFileSync(path, "utf8") },
+    timeoutMs,
+    // A test-seam fetchVersions without an explicit fetch keeps the check
+    // offline; production uses the independent GitHub request.
+    checkGithub: runtime.fetchVersions === undefined || runtime.fetch !== undefined,
+    ...(runtime.fetchVersions ? { fetchVersions: runtime.fetchVersions } : {}),
+    ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
+    ...(runtime.signal ? { signal: runtime.signal } : {}),
+  };
 }
 
 /** Guided flow: Free / Pro / Login, with project-root confirmation before write. */
@@ -642,19 +999,19 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
     return 0;
   }
 
-  if (runtime.isTTY()) {
+  const capabilities = runtimeCapabilities(runtime);
+  if (capabilities.interactiveInput) {
     renderBanner(runtime);
     runtime.stdout(`CLI ${versionString()}\n`);
     try {
-      const update = await runCliUpdateCheck({
-        currentVersion: versionString(),
-        cwd: runtime.cwd(),
-        env: runtime.env,
-        fs: { existsSync, readFileSync: (path) => readFileSync(path, "utf8") },
-        timeoutMs: 1_000,
-        ...(runtime.fetchVersions ? { fetchVersions: runtime.fetchVersions } : {}),
+      const update = await runCliVersionCheck(cliVersionCheckOptions(runtime));
+      diagnosticsFor(runtime).record({
+        level: "info",
+        phase: "update",
+        code: "CLI_VERSION_CHECK",
+        message: `npm=${update.npm.status}:${update.npm.latestVersion ?? "-"} github=${update.github.status}:${update.github.latestVersion ?? "-"}`,
       });
-      runtime.stdout(`${renderCliUpdateNotice(update)}\n`);
+      runtime.stdout(`${renderCliVersionNotice(update)}\n`);
     } catch {
       runtime.stdout(
         `${renderNoticeBox([
@@ -663,7 +1020,7 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
         ])}\n`,
       );
     }
-    runtime.stdout(`${renderProjectNotice(runtime.columns?.() ?? 80)}\n`);
+    runtime.stdout(`${renderProjectNotice(resolveColumns(capabilities.columns))}\n`);
     if (runtime.readLine === undefined) await runBootstrap(runtime);
   }
 
@@ -679,7 +1036,7 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
   };
 
   // W3-E2: single-line preview of the most recent task, colour-coded by state.
-  const theme = createTheme(isThemeEnabled(runtime.env, runtime.isTTY()));
+  const theme = createTheme(capabilities.color);
   let lastTask: HistoryEntry | undefined;
 
   // Single-level loop: never recurse runWizard; banner/bootstrap once per process.
@@ -749,14 +1106,9 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
         await runLogout(runtime, false, true);
         continue;
       }
-      const update = await runCliUpdateCheck({
-        currentVersion: versionString(),
-        cwd: runtime.cwd(),
-        env: runtime.env,
-        fs: { existsSync, readFileSync: (path) => readFileSync(path, "utf8") },
+      const update = await runCliVersionCheck({
+        ...cliVersionCheckOptions(runtime),
         signal: context.signal,
-        timeoutMs: 1_000,
-        ...(runtime.fetchVersions ? { fetchVersions: runtime.fetchVersions } : {}),
       }).catch(() => undefined);
       if (!update) {
         runtime.stdout(
@@ -765,14 +1117,11 @@ async function runWizard(runtime: CliRuntime, json: boolean, yes: boolean): Prom
             `Current ${versionString()} / Latest unavailable / Update: unavailable`,
           ])}\n`,
         );
-      } else if (update.status === "update") {
-        runtime.stdout(
-          `CLI ${update.currentVersion} → ${update.latestVersion}\nRun: ${update.instruction}\n`,
-        );
-      } else if (update.status === "current") {
-        runtime.stdout(`CLI ${update.currentVersion} is up to date.\n`);
       } else {
-        runtime.stdout(`Unable to find a CLI release in the current channel.\n`);
+        runtime.stdout(`${renderCliVersionNotice(update)}\n`);
+        if (update.npmUpdateAvailable && update.npmInstruction) {
+          runtime.stdout(`Run: ${update.npmInstruction}\n`);
+        }
       }
       continue;
     }

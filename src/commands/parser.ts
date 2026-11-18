@@ -10,7 +10,12 @@ export type Command =
   | { readonly name: "generate" }
   | { readonly name: "recover" }
   | { readonly name: "init"; readonly dryRun?: boolean }
-  | { readonly name: "doctor"; readonly check?: boolean; readonly dryRun?: boolean }
+  | {
+      readonly name: "doctor";
+      readonly check?: boolean;
+      readonly dryRun?: boolean;
+      readonly exportDiagnostics?: boolean;
+    }
   | { readonly name: "mcp" }
   | { readonly name: "update"; readonly metadata?: boolean }
   | { readonly name: "help" }
@@ -24,6 +29,10 @@ export interface ParseResult {
   readonly yes: boolean;
   /** Skip Tailwind config auto-integration (H4). */
   readonly noTailwind: boolean;
+  /** REF-08: explicit redacted debug stream on stderr (omitted when false). */
+  readonly debug?: boolean;
+  /** REF-02: explicit static/accessible prompt mode (omitted when false). */
+  readonly accessible?: boolean;
   readonly target?: Target;
 }
 
@@ -56,6 +65,8 @@ const GLOBAL_OPTIONS = new Set([
   "--version",
   "-v",
   "--showVersion",
+  "--debug",
+  "--accessible",
 ]);
 
 function commandName(argv: readonly string[]): string | undefined {
@@ -68,7 +79,7 @@ function commandName(argv: readonly string[]): string | undefined {
 /** Validate that no option is unknown for the given command. */
 function rejectUnknownOptions(argv: readonly string[], command?: string): void {
   const allowLocal = command === "init" || command === "doctor";
-  const local = new Set<string>(["--dry-run", "--check"]);
+  const local = new Set<string>(["--dry-run", "--check", "--export-diagnostics"]);
   for (const arg of argv) {
     if (!arg.startsWith("-")) continue;
     const name = arg.split("=")[0] ?? arg;
@@ -76,7 +87,8 @@ function rejectUnknownOptions(argv: readonly string[], command?: string): void {
     if (GLOBAL_OPTIONS.has(name)) continue;
     if (allowLocal && local.has(name)) continue;
     throw new CliError("VALIDATION_ERROR", `unknown option: ${name}`);
-  }}
+  }
+}
 
 function parseTarget(argv: readonly string[]): Target | undefined {
   const targetIndex = argv.indexOf("--target");
@@ -99,7 +111,9 @@ function addSharedOptions(command: Commander): Commander {
     .option("--yes")
     .option("--no-tailwind")
     .option("--pro")
-    .option("--ent");
+    .option("--ent")
+    .option("--debug")
+    .option("--accessible");
 }
 
 const KNOWN_COMMANDS = new Set<string>(["install", "update", "init", "doctor", ...SIMPLE_COMMANDS]);
@@ -113,6 +127,8 @@ export function parseArgs(argv: readonly string[]): ParseResult {
   const json = argv.includes("--json");
   const yes = argv.includes("--yes");
   const noTailwind = argv.includes("--no-tailwind");
+  const debug = argv.includes("--debug");
+  const accessible = argv.includes("--accessible");
   const version = argv.includes("--version") || argv.includes("-v");
   const help = argv.includes("--help") || argv.includes("-h");
   const pro = argv.includes("--pro");
@@ -135,15 +151,33 @@ export function parseArgs(argv: readonly string[]): ParseResult {
 
   // Preserve previous flag precedence: version/help/legacy aliases beat subcommands.
   if (version)
-    return { command: { name: "version" }, json, yes, noTailwind, ...(target ? { target } : {}) };
+    return {
+      command: { name: "version" },
+      json,
+      yes,
+      noTailwind,
+      ...(debug ? { debug: true } : {}),
+      ...(accessible ? { accessible: true } : {}),
+      ...(target ? { target } : {}),
+    };
   if (help)
-    return { command: { name: "help" }, json, yes, noTailwind, ...(target ? { target } : {}) };
+    return {
+      command: { name: "help" },
+      json,
+      yes,
+      noTailwind,
+      ...(debug ? { debug: true } : {}),
+      ...(accessible ? { accessible: true } : {}),
+      ...(target ? { target } : {}),
+    };
   if (pro)
     return {
       command: withTarget({ name: "install", group: "pro" }),
       json,
       yes,
       noTailwind,
+      ...(debug ? { debug: true } : {}),
+      ...(accessible ? { accessible: true } : {}),
       ...(target ? { target } : {}),
     };
   if (ent)
@@ -152,15 +186,22 @@ export function parseArgs(argv: readonly string[]): ParseResult {
       json,
       yes,
       noTailwind,
+      ...(debug ? { debug: true } : {}),
+      ...(accessible ? { accessible: true } : {}),
       ...(target ? { target } : {}),
     };
 
   if (first === "init") {
     return {
-      command: withTarget({ name: "init", ...(argv.includes("--dry-run") ? { dryRun: true } : {}) }),
+      command: withTarget({
+        name: "init",
+        ...(argv.includes("--dry-run") ? { dryRun: true } : {}),
+      }),
       json,
       yes,
       noTailwind,
+      ...(debug ? { debug: true } : {}),
+      ...(accessible ? { accessible: true } : {}),
       ...(target ? { target } : {}),
     };
   }
@@ -170,10 +211,13 @@ export function parseArgs(argv: readonly string[]): ParseResult {
         name: "doctor",
         ...(argv.includes("--check") ? { check: true } : {}),
         ...(argv.includes("--dry-run") ? { dryRun: true } : {}),
+        ...(argv.includes("--export-diagnostics") ? { exportDiagnostics: true } : {}),
       },
       json,
       yes,
       noTailwind,
+      ...(debug ? { debug: true } : {}),
+      ...(accessible ? { accessible: true } : {}),
       ...(target ? { target } : {}),
     };
   }
@@ -192,6 +236,8 @@ export function parseArgs(argv: readonly string[]): ParseResult {
     json,
     yes,
     noTailwind,
+    ...(debug ? { debug: true } : {}),
+    ...(accessible ? { accessible: true } : {}),
     ...(target ? { target } : {}),
   };
 }
@@ -259,6 +305,8 @@ Usage:
   moeicons doctor               diagnose project anchors (read-only)
   moeicons recover              recover interrupted writes (run at project root)
   moeicons doctor --check       exit non-zero when any required anchor is not OK
+  moeicons doctor --export-diagnostics
+                                write a local redacted diagnostic bundle
   moeicons update metadata      sync MANUAL.md/catalog.json/manifest.json only
   moeicons update               full code + metadata update
   moeicons mcp                  start the MCP stdio server
@@ -272,4 +320,7 @@ Options:
   --no-tailwind  skip Tailwind config auto-integration
   --dry-run      (init/doctor) plan only, never write
   --check        (doctor) exit 1 when required anchors are not OK
+  --export-diagnostics (doctor) write a short-lived local diagnostic bundle
+  --debug        redacted debug events on stderr (never a log file)
+  --accessible   static numbered input, no animation (screen-reader friendly)
 `;

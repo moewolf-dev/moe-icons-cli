@@ -1,5 +1,7 @@
 import { CliError } from "../errors/index.js";
-import { downloadArtifact, verifyArtifact } from "../project/install.js";
+import { readFile } from "node:fs/promises";
+import { downloadArtifactToFile, type DownloadedFile } from "../project/install.js";
+import type { DownloadScheduler } from "../project/download-scheduler.js";
 
 const API_ORIGIN = "https://api.moeicons.com";
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -104,63 +106,98 @@ export async function fetchSignedArtifactDescriptor(
   }
 }
 
-/** Download signed bytes without forwarding API credentials or cookies. */
-export async function downloadSignedArtifact(
+export interface SignedDownloadOptions {
+  readonly allowedHosts: readonly string[];
+  readonly fetch?: typeof fetch;
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+  readonly maxRedirects?: number;
+  readonly now?: number;
+  readonly allowLoopback?: boolean;
+  readonly onProgress?: (event: {
+    readonly downloadedBytes: number;
+    readonly totalBytes?: number;
+  }) => void;
+  /** REF-04: transient-failure retry (default on for file downloads). */
+  readonly maxAttempts?: number;
+  readonly stallTimeoutMs?: number;
+  readonly scheduler?: DownloadScheduler;
+}
+
+function downloadLimitsFor(checked: SignedArtifactDescriptor, options: SignedDownloadOptions) {
+  return {
+    maxBytes: checked.size,
+    timeoutMs:
+      options.timeoutMs ??
+      Math.min(600_000, Math.max(30_000, Math.ceil(checked.size / (128 * 1024)) * 1_000 + 15_000)),
+    maxRedirects: options.maxRedirects ?? 5,
+    allowedHosts: options.allowedHosts,
+    ...(options.allowLoopback ? { allowHttpLoopback: true } : {}),
+    ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+    ...(options.maxAttempts !== undefined ? { maxAttempts: options.maxAttempts } : {}),
+    ...(options.stallTimeoutMs !== undefined ? { stallTimeoutMs: options.stallTimeoutMs } : {}),
+    ...(options.scheduler ? { scheduler: options.scheduler } : {}),
+  } as const;
+}
+
+/**
+ * P0-02: download a signed resource to a verified local file. The caller owns
+ * the file and MUST call `cleanup()` after extraction/commit.
+ */
+export async function downloadSignedArtifactToFile(
   descriptor: SignedArtifactDescriptor,
-  options: {
-    readonly allowedHosts: readonly string[];
-    readonly fetch?: typeof fetch;
-    readonly signal?: AbortSignal;
-    readonly timeoutMs?: number;
-    readonly maxRedirects?: number;
-    readonly now?: number;
-    readonly allowLoopback?: boolean;
-    readonly onProgress?: (event: {
-      readonly downloadedBytes: number;
-      readonly totalBytes?: number;
-    }) => void;
-  },
-): Promise<Uint8Array> {
+  options: SignedDownloadOptions,
+): Promise<DownloadedFile> {
   if (options.signal?.aborted)
     throw new CliError("CANCELLED", "signed resource download cancelled");
   const checked = parseSignedDescriptor(descriptor, options.now ?? Date.now(), options);
-  const result = await downloadArtifact(
-    checked.url,
-    {
-      maxBytes: checked.size,
-      timeoutMs:
-        options.timeoutMs ??
-        Math.min(
-          600_000,
-          Math.max(30_000, Math.ceil(checked.size / (128 * 1024)) * 1_000 + 15_000),
-        ),
-      maxRedirects: options.maxRedirects ?? 5,
-      allowedHosts: options.allowedHosts,
-      ...(options.allowLoopback ? { allowHttpLoopback: true } : {}),
-      ...(options.onProgress ? { onProgress: options.onProgress } : {}),
-    },
-    {
-      ...(options.fetch ? { fetchFn: options.fetch } : {}),
-      ...(options.signal ? { signal: options.signal } : {}),
-    },
-  );
-  if (options.signal?.aborted)
+  const result = await downloadArtifactToFile(checked.url, downloadLimitsFor(checked, options), {
+    ...(options.fetch ? { fetchFn: options.fetch } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
+  });
+  if (options.signal?.aborted) {
+    if (result.ok) await result.file.cleanup();
     throw new CliError("CANCELLED", "signed resource download cancelled");
+  }
   if (!result.ok)
     throw new CliError(
       result.code === "NETWORK_ERROR" ? "NETWORK_ERROR" : "VALIDATION_ERROR",
       result.message,
+      { phase: "download", retryable: result.retryable === true },
     );
-  if (result.bytes.byteLength !== checked.size)
+  if (result.file.size !== checked.size) {
+    await result.file.cleanup();
     throw new CliError(
       "VALIDATION_ERROR",
-      `artifact size mismatch: expected ${checked.size}, got ${result.bytes.byteLength}`,
+      `artifact size mismatch: expected ${checked.size}, got ${result.file.size}`,
+      { phase: "verify" },
     );
-  const verified = verifyArtifact(result.bytes, checked.sha256);
-  if (!verified.ok)
+  }
+  if (result.file.sha256.toLowerCase() !== checked.sha256.toLowerCase()) {
+    const actual = result.file.sha256;
+    await result.file.cleanup();
     throw new CliError(
       "VALIDATION_ERROR",
-      `artifact SHA-256 mismatch: expected ${checked.sha256}, got ${verified.actual}`,
+      `artifact SHA-256 mismatch: expected ${checked.sha256}, got ${actual}`,
+      { phase: "verify" },
     );
-  return result.bytes;
+  }
+  return result.file;
+}
+
+/**
+ * Small-metadata convenience wrapper. Large resources MUST use the file API so
+ * the whole package is never read back into memory.
+ */
+export async function downloadSignedArtifact(
+  descriptor: SignedArtifactDescriptor,
+  options: SignedDownloadOptions,
+): Promise<Uint8Array> {
+  const file = await downloadSignedArtifactToFile(descriptor, options);
+  try {
+    const buffer = await readFile(file.path);
+    return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  } finally {
+    await file.cleanup();
+  }
 }

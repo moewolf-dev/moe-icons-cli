@@ -11,7 +11,7 @@ import { withProjectLock } from "../project/project-lock.js";
 import type { Target } from "../commands/parser.js";
 import {
   configuredComponentFiles,
-  selectTargetSubtreeAsync,
+  selectTargetSubtreeFromFileAsync,
   selectTargetSubtreeFromFiles,
   computeSubtreeHash,
 } from "./target-subtree.js";
@@ -272,7 +272,16 @@ export async function runInstallUseCase(
     ? { ok: true as const, target, files: selectedTarget, ...computeSubtreeHash(selectedTarget) }
     : downloaded.archiveFiles
       ? selectTargetSubtreeFromFiles(downloaded.archiveFiles, downloaded.descriptor.free, target)
-      : await selectTargetSubtreeAsync(downloaded.artifactBytes, downloaded.descriptor.free, target, context.signal);
+      : downloaded.artifactPath
+        ? await selectTargetSubtreeFromFileAsync(
+            downloaded.artifactPath,
+            downloaded.descriptor.free,
+            target,
+            context.signal,
+          )
+        : (() => {
+            throw new CliError("VALIDATION_ERROR", "verified archive file is missing");
+          })();
   if (!subtree.ok) {
     return subtree.reason === "checksum-mismatch"
       ? { ok: false, reason: "checksum-mismatch", message: subtree.message }
@@ -365,13 +374,14 @@ export async function runInstallUseCase(
     };
   }
 
+  await downloaded.artifactCleanup?.();
   return {
     ok: true,
     projectRoot: project.root,
     packageManager: project.packageManager,
     group: "free",
     target,
-    artifactBytes: downloaded.selected?.payloadBytes ?? downloaded.artifactBytes.byteLength,
+    artifactBytes: downloaded.selected?.payloadBytes ?? downloaded.artifactSize,
     downloadMode: downloaded.selected ? "icons" : "full",
     ...(downloaded.selected
       ? {

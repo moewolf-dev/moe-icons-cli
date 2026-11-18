@@ -99,6 +99,8 @@ describe("CLI output compatibility contract", () => {
         moeicons doctor               diagnose project anchors (read-only)
         moeicons recover              recover interrupted writes (run at project root)
         moeicons doctor --check       exit non-zero when any required anchor is not OK
+        moeicons doctor --export-diagnostics
+                                      write a local redacted diagnostic bundle
         moeicons update metadata      sync MANUAL.md/catalog.json/manifest.json only
         moeicons update               full code + metadata update
         moeicons mcp                  start the MCP stdio server
@@ -112,6 +114,9 @@ describe("CLI output compatibility contract", () => {
         --no-tailwind  skip Tailwind config auto-integration
         --dry-run      (init/doctor) plan only, never write
         --check        (doctor) exit 1 when required anchors are not OK
+        --export-diagnostics (doctor) write a short-lived local diagnostic bundle
+        --debug        redacted debug events on stderr (never a log file)
+        --accessible   static numbered input, no animation (screen-reader friendly)
       ",
       }
     `);

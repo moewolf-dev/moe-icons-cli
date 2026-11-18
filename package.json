@@ -27,7 +27,7 @@
     "moeicons": "bin/moeicons.js"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=24.0.0"
   },
   "files": [
     "bin",
@@ -48,7 +48,8 @@
     "release:preflight": "node scripts/release-preflight.mjs",
     "release:bump": "node scripts/release-bump.mjs",
     "prepublishOnly": "node scripts/verify-small-pack-pin.mjs && npm run release:preflight",
-    "format": "prettier --write src tests"
+    "format": "prettier --write src tests",
+    "test:perf": "vitest run --config vitest.perf.config.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
