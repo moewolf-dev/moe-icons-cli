@@ -1,5 +1,5 @@
 import { isCliError } from "../errors/index.js";
-import { openSync, readSync, closeSync } from "node:fs";
+import { openSync, readSync, closeSync, statSync } from "node:fs";
 import {
   parseResourceIndex,
   planSelectedResources,
@@ -14,15 +14,22 @@ import {
 } from "../project/config.js";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { downloadArtifact, verifyArtifact, type DownloadLimits } from "../project/install.js";
+import {
+  downloadArtifact,
+  downloadArtifactToFile,
+  verifyArtifact,
+  verifyFileSha256,
+  type DownloadLimits,
+  type DownloadedFile,
+} from "../project/install.js";
 import {
   decodeUtf8,
-  extractTarGzAsync,
+  extractTarGzFile,
   ICON_ARCHIVE_MAX_ENTRIES,
   ICON_ARCHIVE_MAX_EXPANDED_BYTES,
 } from "../project/tar-gz.js";
 import { catalog as bundledCatalog } from "../catalog/catalog.js";
-import { cacheArtifact, type CacheIo } from "./cache.js";
+import { cacheArtifact, cacheArtifactFile, type CacheIo } from "./cache.js";
 import { extractAndVerifyMetadataArchive, type MetadataArchiveFiles } from "../metadata/archive.js";
 import {
   assertLocalCandidateAllowed,
@@ -72,7 +79,14 @@ export type FreeDownloadSuccess = {
   readonly ok: true;
   readonly descriptor: ReleaseDescriptor;
   readonly descriptorSha256: string;
-  readonly artifactBytes: Uint8Array;
+  /**
+   * P0-02: the verified full archive is a local file, not an in-memory package.
+   * Absent for selected-resource downloads.
+   */
+  readonly artifactPath?: string;
+  readonly artifactSize: number;
+  /** Set when `artifactPath` is a temporary file the caller must release. */
+  readonly artifactCleanup?: () => Promise<void>;
   readonly archiveFiles?: Readonly<Record<string, Uint8Array>>;
   readonly selected?: SelectedResourceDownload;
   readonly downloadNote?: string;
@@ -124,6 +138,7 @@ function descriptorLimits(
     allowedHosts: fixtureBaseUrl ? [new URL(fixtureBaseUrl).host] : FREE_DOWNLOAD_HOSTS,
     ...(fixtureBaseUrl ? { allowHttpLoopback: true } : {}),
     userAgent: userAgent(cliVersion),
+    kind: "metadata" as const,
     ...(onProgress ? { onProgress } : {}),
   };
 }
@@ -141,6 +156,7 @@ function artifactLimits(
     allowedHosts: fixtureBaseUrl ? [new URL(fixtureBaseUrl).host] : FREE_DOWNLOAD_HOSTS,
     ...(fixtureBaseUrl ? { allowHttpLoopback: true } : {}),
     userAgent: userAgent(cliVersion),
+    kind: "package" as const,
     ...(onProgress ? { onProgress } : {}),
   };
 }
@@ -158,6 +174,7 @@ function metadataLimits(
     allowedHosts: fixtureBaseUrl ? [new URL(fixtureBaseUrl).host] : FREE_DOWNLOAD_HOSTS,
     ...(fixtureBaseUrl ? { allowHttpLoopback: true } : {}),
     userAgent: userAgent(cliVersion),
+    kind: "metadata" as const,
     ...(onProgress ? { onProgress } : {}),
   };
 }
@@ -269,18 +286,74 @@ async function loadBytes(
   };
 }
 
-async function catalogFromArchive(
-  artifactBytes: Uint8Array,
+/**
+ * REF-04: download a large artifact to a verified local file. The network body
+ * never lands in a JS buffer; the SHA-256 is computed while streaming.
+ */
+async function loadFile(
+  io: FreeDownloadIo,
+  filename: string,
+  limits: DownloadLimits,
+  tag: string,
+): Promise<{ ok: true; file: DownloadedFile } | FreeDownloadFailure> {
+  if (io.signal.aborted) return { ok: false, reason: "cancelled", message: "download cancelled" };
+  if (io.fixtureDir) {
+    try {
+      const path = join(io.fixtureDir, filename);
+      const bytes = io.readFileSync(path);
+      return {
+        ok: true,
+        file: {
+          path,
+          sha256: sha256Hex(bytes),
+          size: bytes.byteLength,
+          finalUrl: `fixture://${filename}`,
+          cleanup: () => Promise.resolve(),
+        },
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: "validation",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+  const url = io.fixtureBaseUrl
+    ? new URL(
+        filename,
+        io.fixtureBaseUrl.endsWith("/") ? io.fixtureBaseUrl : `${io.fixtureBaseUrl}/`,
+      ).toString()
+    : githubReleaseAssetUrl(tag, filename);
+  const result = await downloadArtifactToFile(
+    url,
+    { ...limits, retry: true, maxAttempts: MAX_DOWNLOAD_ATTEMPTS },
+    { fetchFn: io.fetchFn, signal: io.signal },
+  );
+  if (result.ok) return { ok: true, file: result.file };
+  if (result.code === "HTTP_ERROR" && / 404$/.test(result.message)) {
+    return { ok: false, reason: "not-found", message: result.message };
+  }
+  return mapDownloadError(result.code, result.message);
+}
+
+async function catalogFromArchiveFile(
+  artifactPath: string,
   catalogFilename: string,
   expectedSha: string,
   signal?: AbortSignal,
 ): Promise<{ ok: true; json: string; files: Record<string, Uint8Array> } | FreeDownloadFailure> {
-  const unpacked = await extractTarGzAsync(artifactBytes, {
-    maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
-    maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
-  }, signal);
+  const unpacked = await extractTarGzFile(
+    artifactPath,
+    {
+      maxEntries: ICON_ARCHIVE_MAX_ENTRIES,
+      maxExpandedBytes: ICON_ARCHIVE_MAX_EXPANDED_BYTES,
+    },
+    signal,
+  );
   if (unpacked.errors.length > 0) {
-    if (signal?.aborted) return { ok: false, reason: "cancelled", message: "archive extraction cancelled" };
+    if (signal?.aborted)
+      return { ok: false, reason: "cancelled", message: "archive extraction cancelled" };
     return { ok: false, reason: "validation", message: unpacked.errors[0] ?? "extract failed" };
   }
   const catalogBytes = unpacked.files[catalogFilename] ?? unpacked.files[`./${catalogFilename}`];
@@ -666,7 +739,7 @@ export async function downloadFreeRelease(
         descriptor,
         descriptorSha256,
         tag,
-        artifactBytes: new Uint8Array(),
+        artifactSize: 0,
         cacheHit: fetched.cacheHits === plan.paths.length,
         catalogJson: metadata.value.catalogJson,
         manifestJson: metadata.value.manifestJson,
@@ -717,11 +790,10 @@ export async function downloadFreeRelease(
   );
   const artifactCache = cachePath(io, descriptor.fullVersion, descriptor.free.sha256);
   if (io.existsSync(artifactCache)) {
-    const cached = io.readFileSync(artifactCache);
-    const verified = verifyArtifact(cached, descriptor.free.sha256);
+    const verified = await verifyFileSha256(artifactCache, descriptor.free.sha256);
     if (verified.ok) {
-      const catalog = await catalogFromArchive(
-        cached,
+      const catalog = await catalogFromArchiveFile(
+        artifactCache,
         descriptor.catalog.filename,
         descriptor.catalog.sha256,
         io.signal,
@@ -743,7 +815,14 @@ export async function downloadFreeRelease(
         ok: true,
         descriptor,
         descriptorSha256,
-        artifactBytes: cached,
+        artifactPath: artifactCache,
+        artifactSize: (() => {
+          try {
+            return statSync(artifactCache).size;
+          } catch {
+            return descriptor.free.size ?? 0;
+          }
+        })(),
         catalogJson: catalog.json,
         archiveFiles: catalog.files,
         cacheHit: true,
@@ -762,7 +841,7 @@ export async function downloadFreeRelease(
       message: "not enough free disk space to cache the icon library",
     };
   }
-  const artifact = await loadBytes(
+  const artifact = await loadFile(
     io,
     descriptor.free.filename,
     artifactLimits(io.cliVersion, io.onProgress, io.fixtureBaseUrl, io.timeoutMs),
@@ -774,21 +853,25 @@ export async function downloadFreeRelease(
     }
     return artifact;
   }
-  const verified = verifyArtifact(artifact.bytes, descriptor.free.sha256);
+  const verified = await verifyFileSha256(artifact.file.path, descriptor.free.sha256);
   if (!verified.ok) {
+    await artifact.file.cleanup();
     return {
       ok: false,
       reason: "checksum-mismatch",
       message: `free artifact SHA-256 mismatch: expected ${descriptor.free.sha256}, got ${verified.actual}`,
     };
   }
-  const catalog = await catalogFromArchive(
-    artifact.bytes,
+  const catalog = await catalogFromArchiveFile(
+    artifact.file.path,
     descriptor.catalog.filename,
     descriptor.catalog.sha256,
     io.signal,
   );
-  if (!catalog.ok) return catalog;
+  if (!catalog.ok) {
+    await artifact.file.cleanup();
+    return catalog;
+  }
 
   const metadata = preflightMetadata
     ? { ok: true as const, value: preflightMetadata, cacheHit: true }
@@ -803,17 +886,26 @@ export async function downloadFreeRelease(
       );
   if (!metadata.ok) return metadata;
 
+  let artifactPath = artifact.file.path;
+  let artifactCleanup: (() => Promise<void>) | undefined = artifact.file.cleanup;
   try {
-    cacheArtifact(io, artifactCache, artifact.bytes, descriptor.free.sha256);
+    cacheArtifactFile(io, artifactCache, artifact.file.path, descriptor.free.sha256);
+    if (io.existsSync(artifactCache)) {
+      artifactPath = artifactCache;
+      artifactCleanup = undefined;
+      await artifact.file.cleanup();
+    }
   } catch {
-    // Cache is best-effort; verified bytes are still used for this install.
+    // Cache is best-effort; the verified temp file is still used for this install.
   }
 
   return {
     ok: true,
     descriptor,
     descriptorSha256,
-    artifactBytes: artifact.bytes,
+    artifactPath,
+    artifactSize: artifact.file.size,
+    ...(artifactCleanup ? { artifactCleanup } : {}),
     catalogJson: catalog.json,
     archiveFiles: catalog.files,
     cacheHit: false,

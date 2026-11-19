@@ -1,5 +1,13 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, renameSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  existsSync,
+  renameSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -27,10 +35,12 @@ function sha256(bytes: Uint8Array): string {
 
 describe("tar-gz roundtrip", () => {
   it("packs and unpacks catalog.json", () => {
-    const packed = createTarGz({ "catalog.json": "{\"ok\":true}\n" });
+    const packed = createTarGz({ "catalog.json": '{"ok":true}\n' });
     const unpacked = extractTarGz(packed, { maxEntries: 10, maxExpandedBytes: 4096 });
     expect(unpacked.errors).toEqual([]);
-    expect(Buffer.from(unpacked.files["catalog.json"] ?? []).toString("utf8")).toBe('{"ok":true}\n');
+    expect(Buffer.from(unpacked.files["catalog.json"] ?? []).toString("utf8")).toBe(
+      '{"ok":true}\n',
+    );
   });
 });
 
@@ -242,7 +252,10 @@ describe("downloadArtifact redirect host policy", () => {
       },
       {
         fetchFn: async () =>
-          new Response(null, { status: 302, headers: { location: "https://evil.example.com/g.zip" } }),
+          new Response(null, {
+            status: 302,
+            headers: { location: "https://evil.example.com/g.zip" },
+          }),
       },
     );
     expect(result.ok).toBe(false);
@@ -289,7 +302,9 @@ describe("downloadFreeRelease", () => {
     if (!first.ok) return;
     expect(first.cacheHit).toBe(false);
     expect(first.descriptorSha256).toBe(meta.descriptorSha);
-    expect(sha256(first.artifactBytes)).toBe(meta.freeSha);
+    expect(first.artifactPath).toBeTruthy();
+    expect(sha256(readFileSync(first.artifactPath!))).toBe(meta.freeSha);
+    expect(first.artifactSize).toBe(readFileSync(first.artifactPath!).byteLength);
 
     const second = await downloadFreeRelease(io(), meta.version);
     expect(second.ok).toBe(true);
@@ -316,7 +331,10 @@ describe("downloadFreeRelease", () => {
     writeFreeReleaseFixture(fixture);
     const controller = new AbortController();
     controller.abort();
-    const result = await downloadFreeRelease(io({ signal: controller.signal }), bundledSourceVersion());
+    const result = await downloadFreeRelease(
+      io({ signal: controller.signal }),
+      bundledSourceVersion(),
+    );
     expect(result).toMatchObject({ ok: false, reason: "cancelled" });
   });
 
@@ -333,10 +351,22 @@ describe("downloadFreeRelease", () => {
   it("rejects a remote legacy descriptor before any full-library payload download", async () => {
     const meta = writeFreeReleaseFixture(fixture);
     const served = new Map<string, Uint8Array>([
-      [githubReleaseAssetUrl(`v${meta.version}`, RELEASE_LATEST_NAME), new Uint8Array(readFileSync(join(fixture, RELEASE_LATEST_NAME)))],
-      [githubReleaseAssetUrl(`v${meta.version}`, "release-descriptor.json"), new Uint8Array(readFileSync(join(fixture, "release-descriptor.json")))],
-      [githubReleaseAssetUrl(`v${meta.version}`, meta.freeName), new Uint8Array(readFileSync(join(fixture, meta.freeName)))],
-      [githubReleaseAssetUrl(`v${meta.version}`, meta.metadataName), new Uint8Array(readFileSync(join(fixture, meta.metadataName)))],
+      [
+        githubReleaseAssetUrl(`v${meta.version}`, RELEASE_LATEST_NAME),
+        new Uint8Array(readFileSync(join(fixture, RELEASE_LATEST_NAME))),
+      ],
+      [
+        githubReleaseAssetUrl(`v${meta.version}`, "release-descriptor.json"),
+        new Uint8Array(readFileSync(join(fixture, "release-descriptor.json"))),
+      ],
+      [
+        githubReleaseAssetUrl(`v${meta.version}`, meta.freeName),
+        new Uint8Array(readFileSync(join(fixture, meta.freeName))),
+      ],
+      [
+        githubReleaseAssetUrl(`v${meta.version}`, meta.metadataName),
+        new Uint8Array(readFileSync(join(fixture, meta.metadataName))),
+      ],
     ]);
     const requested: string[] = [];
     const base = io();
@@ -432,22 +462,52 @@ describe("downloadFreeRelease", () => {
     let mode: "ok" | "missing" | "slow" | "corrupt" = "ok";
     const server: Server = createServer((request, response) => {
       const name = new URL(request.url ?? "/", "http://localhost").pathname.slice(1);
-      if (mode === "missing") { response.writeHead(404).end(); return; }
-      if (mode === "slow") { setTimeout(() => response.end("late"), 100); return; }
-      if (mode === "corrupt" && name === meta.freeName) { response.end("corrupt"); return; }
-      try { response.end(readFileSync(join(fixture, name))); } catch { response.writeHead(404).end(); }
+      if (mode === "missing") {
+        response.writeHead(404).end();
+        return;
+      }
+      if (mode === "slow") {
+        setTimeout(() => response.end("late"), 100);
+        return;
+      }
+      if (mode === "corrupt" && name === meta.freeName) {
+        response.end("corrupt");
+        return;
+      }
+      try {
+        response.end(readFileSync(join(fixture, name)));
+      } catch {
+        response.writeHead(404).end();
+      }
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("fixture server failed to bind");
     const { fixtureDir: _fixtureDir, ...base } = io();
-    const remote = (timeoutMs = 1000) => ({ ...base, fixtureBaseUrl: `http://127.0.0.1:${address.port}`, timeoutMs });
+    const remote = (timeoutMs = 1000) => ({
+      ...base,
+      fixtureBaseUrl: `http://127.0.0.1:${address.port}`,
+      timeoutMs,
+    });
     try {
       expect(await downloadFreeRelease(remote(), meta.version)).toMatchObject({ ok: true });
-      rmSync(cache, { recursive: true, force: true }); mkdirSync(cache);
-      mode = "missing"; expect(await downloadFreeRelease(remote(), meta.version)).toMatchObject({ ok: false, reason: "not-found" });
-      mode = "slow"; expect(await downloadFreeRelease(remote(5), meta.version)).toMatchObject({ ok: false, reason: "offline-no-cache" });
-      mode = "corrupt"; expect(await downloadFreeRelease(remote(), meta.version)).toMatchObject({ ok: false, reason: "checksum-mismatch" });
+      rmSync(cache, { recursive: true, force: true });
+      mkdirSync(cache);
+      mode = "missing";
+      expect(await downloadFreeRelease(remote(), meta.version)).toMatchObject({
+        ok: false,
+        reason: "not-found",
+      });
+      mode = "slow";
+      expect(await downloadFreeRelease(remote(5), meta.version)).toMatchObject({
+        ok: false,
+        reason: "offline-no-cache",
+      });
+      mode = "corrupt";
+      expect(await downloadFreeRelease(remote(), meta.version)).toMatchObject({
+        ok: false,
+        reason: "checksum-mismatch",
+      });
     } finally {
       const closed = new Promise<void>((resolve) => server.close(() => resolve()));
       server.closeAllConnections();

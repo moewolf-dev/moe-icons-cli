@@ -67,7 +67,10 @@ describe("doctor command end-to-end", () => {
     const { runtime, out } = makeRuntime();
     const code = await main(["doctor", "--json"], runtime);
     expect(code).toBe(0);
-    const parsed = JSON.parse(out.join("")) as { ok: boolean; anchors: Array<{ kind: string; status: string }> };
+    const parsed = JSON.parse(out.join("")) as {
+      ok: boolean;
+      anchors: Array<{ kind: string; status: string }>;
+    };
     expect(parsed.anchors.map((a) => a.kind)).toEqual([
       "manifest",
       "config",
@@ -94,6 +97,23 @@ describe("doctor command end-to-end", () => {
     const code = await main(["doctor", "--nope"], runtime);
     expect(code).toBe(1);
     expect(err.join("")).toContain("unknown option: --nope");
+  });
+
+  it("never prints an absolute project path when the config is invalid", async () => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "p", version: "1.0.0" }));
+    writeFileSync(join(dir, "moeicons.config.jsonc"), '{ "schemaVersion": 3, "tier": ');
+    const { runtime, out } = makeRuntime();
+    expect(await main(["doctor", "--json"], runtime)).toBe(0);
+    const json = out.join("");
+    expect(json).not.toContain(dir);
+    const body = JSON.parse(json) as { anchors: Array<{ kind: string; path?: string }> };
+    const config = body.anchors.find((anchor) => anchor.kind === "config");
+    expect(config?.path).toBe("moeicons.config.jsonc");
+
+    const human = makeRuntime();
+    expect(await main(["doctor"], human.runtime)).toBe(0);
+    expect(human.out.join("")).not.toContain(dir);
+    expect(human.out.join("")).toContain("moeicons.config.jsonc");
   });
 
   it("doctor --check returns 1 when a required anchor is missing", async () => {

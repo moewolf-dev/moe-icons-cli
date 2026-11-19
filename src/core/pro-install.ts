@@ -23,7 +23,7 @@ import {
 import { artifactCachePath, metadataCachePath } from "./free-download.js";
 import {
   configuredComponentFiles,
-  selectTargetSubtreeAsync,
+  selectTargetSubtreeFromFileAsync,
   selectTargetSubtreeFromFiles,
   computeSubtreeHash,
 } from "./target-subtree.js";
@@ -59,6 +59,7 @@ function toCacheIo(fs_: ProInstallFs): CacheIo {
     rmSync: fs_.rmSync,
     ...(fs_.readFileSync ? { readFileSync: fs_.readFileSync } : {}),
     ...(fs_.readdirSync ? { readdirSync: fs_.readdirSync } : {}),
+    ...(fs_.copyFileSync ? { copyFileSync: fs_.copyFileSync } : {}),
   };
 }
 import { homedir } from "node:os";
@@ -84,6 +85,33 @@ function cacheVerifiedArtifact(
   if (fs_.existsSync(cached)) return;
   fs_.mkdirSync(join(cached, ".."), { recursive: true });
   fs_.writeFileSync(cached, bytes);
+}
+
+/**
+ * REF-04: persist a verified archive by copying the local file; the whole code
+ * package is never read into a second in-memory buffer just to write the cache.
+ */
+function cacheVerifiedArtifactFromFile(
+  fs_: ProInstallFs,
+  cacheDir: string,
+  version: string,
+  sha256: string,
+  sourcePath: string,
+  kind: "code" | "metadata" = "code",
+): void {
+  const cached =
+    kind === "metadata"
+      ? metadataCachePath(cacheDir, version, sha256)
+      : artifactCachePath(cacheDir, version, sha256);
+  if (fs_.existsSync(cached)) return;
+  fs_.mkdirSync(join(cached, ".."), { recursive: true });
+  if (fs_.copyFileSync) {
+    fs_.copyFileSync(sourcePath, cached);
+    return;
+  }
+  if (!fs_.readFileSync)
+    throw new CliError("UNEXPECTED", "file system cannot copy the verified archive");
+  fs_.writeFileSync(cached, fs_.readFileSync(sourcePath));
 }
 
 export async function runProInstallUseCase(
@@ -218,7 +246,16 @@ export async function runProInstallUseCase(
     ? { ok: true as const, target, files: selectedTarget, ...computeSubtreeHash(selectedTarget) }
     : downloaded.archiveFiles
       ? selectTargetSubtreeFromFiles(downloaded.archiveFiles, downloaded.descriptor, target)
-      : await selectTargetSubtreeAsync(downloaded.artifactBytes, downloaded.descriptor, target, context.signal);
+      : downloaded.artifactPath
+        ? await selectTargetSubtreeFromFileAsync(
+            downloaded.artifactPath,
+            downloaded.descriptor,
+            target,
+            context.signal,
+          )
+        : (() => {
+            throw new CliError("VALIDATION_ERROR", "verified archive file is missing");
+          })();
   if (!subtree.ok) {
     throw new CliError("VALIDATION_ERROR", subtree.message);
   }
@@ -250,13 +287,13 @@ export async function runProInstallUseCase(
     : configuredComponentFiles(subtree.files, target, config, installedCatalog);
   // Only after the snapshot passes strict validation do we persist the
   // content-addressed code/metadata caches. A rejected config writes nothing.
-  if (!downloaded.selected)
-    cacheVerifiedArtifact(
+  if (!downloaded.selected && downloaded.artifactPath)
+    cacheVerifiedArtifactFromFile(
       deps.fs,
       cacheDir,
       downloaded.descriptor.version,
       downloaded.descriptor.sha256,
-      downloaded.artifactBytes,
+      downloaded.artifactPath,
     );
   if (downloaded.metadataBytes && downloaded.descriptor.metadata) {
     cacheVerifiedArtifact(
@@ -380,12 +417,13 @@ export async function runProInstallUseCase(
       throw new CliError("VALIDATION_ERROR", "config changed while preparing install; retry");
     executeInstallPlan(createInstallPlan(project.root, files), deps.fs);
   });
+  await downloaded.artifactCleanup?.();
   return {
     projectRoot: project.root,
     artifactVersion: downloaded.descriptor.version,
     descriptorSha256: downloaded.descriptor.descriptorSha256,
     catalogSha256: downloaded.descriptor.catalogSha256,
-    artifactBytes: downloaded.selected?.payloadBytes ?? downloaded.artifactBytes.byteLength,
+    artifactBytes: downloaded.selected?.payloadBytes ?? downloaded.artifactSize,
     downloadMode: downloaded.selected ? "icons" : "full",
     downloadNotes:
       downloaded.selected?.fallbacks ??

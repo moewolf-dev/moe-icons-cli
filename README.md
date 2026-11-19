@@ -13,7 +13,10 @@ moeicons login              browser login (PKCE)
 moeicons logout             clear local session
 moeicons account            show account/tier info
 moeicons generate           generate target-specific project files
-moeicons doctor --check     check configuration and integration
+moeicons doctor              diagnose project configuration/integration (read-only)
+moeicons doctor --check      exit non-zero when a required anchor is not OK
+moeicons doctor --export-diagnostics
+                             write a short-lived local redacted diagnostic bundle
 moeicons recover            recover an interrupted transaction
 moeicons init               create moeicons.config.jsonc
 moeicons update metadata    sync metadata for supported legacy installs
@@ -25,16 +28,112 @@ moeicons --help             show help
 
 ## Requirements
 
-Node.js **22 or later**. Node 20 reached end-of-life on 2026-03-24 and is not
-on the supported line (no security patches). The CLI fails fast with an install
-link instead of a `SyntaxError` if the runtime is too old.
+Node.js **24 or later** (`engines.node >= 24.0.0`). Node 20 and 22 are not on
+the supported line and no longer receive security patches. The zero-dependency
+`bin/check-node.cjs` wrapper fails *before* importing `dist/`, prints the current
+version, the `>=24` requirement, the official download page and (only when a
+version manager is actually detected) its upgrade command. It never throws a
+bare `SyntaxError`.
 
-Primary development and CI use Node 24. See https://nodejs.org/en/about/eol
+```sh
+node -v            # expect v24.x or later
+moeicons --version # verify after reopening the terminal
+```
 
-**Platforms:** Linux x64 and macOS ARM64 use Node 22/24 in CI. Windows x64
-verification covers Node 22/24, npm/pnpm, Free React/Vue core commands,
-production builds and interrupted-write recovery. Windows Pro authentication
-and interactive terminal/PTY behavior are outside this verified scope.
+Primary development, CI, packaging and release use Node 24. The VS Code
+extension is a separate runtime: its Extension Host is managed by VS Code and
+does not require users to install Node 24. See https://nodejs.org/en/about/eol
+
+**Platforms (current round):** macOS arm64 is the executed development/test
+environment. Linux x64 and Windows x64 workflows are configured for Node 24, but
+this round did not run those hosts; Windows interactive resize/PTY remains
+unverified. Do not read CI configuration as a passed platform test.
+
+## Install and upgrade
+
+Fresh install (global):
+
+```sh
+npm install --global @moewolf/moe-icons-cli@latest
+moeicons --version
+```
+
+Project-local (recommended when the project pins the CLI):
+
+```sh
+npm install --save-exact --save-dev @moewolf/moe-icons-cli@latest
+npx moeicons --version
+```
+
+pnpm / yarn equivalents:
+
+```sh
+pnpm add --save-exact -D @moewolf/moe-icons-cli@latest
+yarn add --exact -D @moewolf/moe-icons-cli@latest
+```
+
+Upgrade behaviour:
+
+- The CLI checks **npm metadata** (the executable-install truth) and, independently,
+  the GitHub Release feed. It never merges the two into one version number.
+- When npm has a newer stable version, the interactive TUI shows the current
+  version and the exact command for the detected install source (npm/pnpm/yarn,
+  local/global/npx). When only GitHub has a newer release, it says so and links
+  to the documentation; it does not claim `npm` can already upgrade.
+- When the install source is unknown, only the documentation link is shown —
+  the CLI never guesses a package manager.
+- The CLI never replaces its own executable and never writes an update log.
+  Checks are suppressed for JSON/non-TTY/CI and have bounded timeouts and an
+  in-process 5-minute cache.
+- `moeicons update` updates **icon resources**, not the CLI executable.
+
+Rollback: install the previous exact version again
+(`npm install --global @moewolf/moe-icons-cli@<previous>`), then run
+`moeicons doctor` to confirm the project still matches its installed resources.
+
+## Interaction, accessibility and machine output
+
+- `--json`: machine output only; no banner, spinner or update notice. Existing
+  `ok/code/message` error fields remain stable; `--debug` adds `operationId`.
+- `--yes`: skip confirmations in non-interactive mode. Without it, a non-TTY
+  confirmation fails with an actionable `NOT_TTY` error instead of waiting.
+- `--accessible` (or `MOEICONS_ACCESSIBLE=1`): static numbered input with plain
+  line editing: multi-digit numbers, `0` to cancel, `[Y/n]` confirmations, no
+  animation and no raw mode. Useful for screen readers and limited terminals.
+- `NO_COLOR`, `TERM=dumb` and `MOEICONS_ASCII=1` disable colour/Unicode without
+  changing navigation.
+- `--debug` writes redacted diagnostic events to stderr; it never creates a log
+  file, never writes to stdout, and never changes the exit code.
+
+Exit codes: `0` success/cancel, `1` validation, `2` auth, `3` network,
+`4` not found, `5` unexpected/disk.
+
+## Troubleshooting and diagnostics
+
+1. `moeicons doctor` — read-only four-anchor project diagnosis (manifest,
+   config, application, styling); project-relative paths only.
+2. `moeicons doctor --check` — exit 1 when a required anchor is not OK.
+3. `moeicons --debug <command>` — one-line error plus redacted phase/code events
+   on stderr.
+4. `moeicons doctor --export-diagnostics [--json]` — writes one local text
+   bundle (no network). Limits: ≤1 MiB per bundle; ≤5 files / ≤5 MiB per
+   directory; 24-hour expiry; stale bundles are pruned on the next start.
+   Content: Node/OS/arch/shell/TTY/CI, CLI version and install source, package
+   manager/lockfile, four anchors, config fields and the last 20 redacted
+   events. It never contains tokens, e-mail addresses, signed URLs, response
+   bodies, request headers or absolute home paths.
+
+Network failures never block a business command: the version notice degrades to
+"unavailable" for the affected source only. A 429/5xx or transient connection
+error during a resource download is retried a bounded number of times; 401/403,
+404, checksum/size failures and cancellation are not retried.
+
+Downloads use a single process-wide scheduler with a hard ceiling of **3 active
+resource-package requests**. A completed slot immediately starts the next queued
+item; retries and backoff do not hold a slot. Metadata requests use a separate
+bounded pool. Large archives stream to a verified temporary file with an
+incremental SHA-256 and are extracted from that file; only small metadata stays
+in memory. Successful cache writes are atomic and only after verification.
 
 ## Framework support
 
@@ -45,7 +144,7 @@ and interactive terminal/PTY behavior are outside this verified scope.
 | Tailwind CSS 4 or no Tailwind | Core icon dimensions work without a Tailwind config rewrite |
 | Next App Router / Nuxt SSR | Generated local components verified with single/multiple themes, production server rendering and browser hydration |
 | Vanilla DOM | SVG factories and project runtime; bitmap style groups are unavailable |
-| Windows x64 | Free React/Vue core flow verified on Node 22/24 with npm/pnpm |
+| Windows x64 | Free React/Vue core flow verified on Node 24 with npm/pnpm |
 
 Next Pages Router and custom Nuxt modules require their own integration checks.
 Custom bootstrap shapes can require manual Provider placement; `doctor --check`
@@ -181,6 +280,10 @@ updates, and Pro preview warm-ups.
 | `MOEICONS_STATE_DIR` | session storage preference directory (default `~/.moeicons`) |
 | `MOEICONS_DISABLE_SYSTEM_KEYCHAIN` | `1` disables OS keychain storage |
 | `MOEICONS_AUTH0_ISSUER` / `MOEICONS_AUTH0_CLIENT_ID` | explicit Auth0 refresh/revoke overrides; official production defaults are bundled |
+| `NO_COLOR` / `TERM=dumb` | disable brand colour and Unicode decorations |
+| `MOEICONS_ACCESSIBLE` / `MOEICONS_STATIC` | static numbered input, no animation (same as `--accessible`) |
+| `MOEICONS_ASCII` | force ASCII symbols |
+| `MOEICONS_GITHUB_RELEASES_URL` | test-only GitHub releases endpoint override (https or loopback http) |
 
 ## Status
 

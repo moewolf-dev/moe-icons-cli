@@ -1,4 +1,4 @@
-import { ConfirmPrompt, SelectPrompt, isCancel } from "@clack/core";
+import { ConfirmPrompt, SelectPrompt, TextPrompt, isCancel } from "@clack/core";
 import type { Readable, Writable } from "node:stream";
 import type { UiChoice } from "../core/context.js";
 import type { UiTheme } from "./theme.js";
@@ -43,7 +43,12 @@ export function formatChoiceNumber(index: number, total: number, label: string):
 }
 
 /** Renders every option with 1-based numbers. Back separators are blank lines. */
-export function renderSelectFrame(prompt: SelectFrameState, message: string, theme: UiTheme, options: FrameRenderOptions = {}): string {
+export function renderSelectFrame(
+  prompt: SelectFrameState,
+  message: string,
+  theme: UiTheme,
+  options: FrameRenderOptions = {},
+): string {
   const { pointer, submit, cancel } = theme.symbols;
   const total = prompt.options.length;
   const numbered = (index: number, label: string) => formatChoiceNumber(index, total, label);
@@ -66,7 +71,12 @@ export function renderSelectFrame(prompt: SelectFrameState, message: string, the
   return lines.join("\n");
 }
 
-export function renderConfirmFrame(prompt: ConfirmFrameState, message: string, theme: UiTheme, options: FrameRenderOptions = {}): string {
+export function renderConfirmFrame(
+  prompt: ConfirmFrameState,
+  message: string,
+  theme: UiTheme,
+  options: FrameRenderOptions = {},
+): string {
   const { radio, submit, cancel } = theme.symbols;
   if (prompt.state === "cancel") return theme.red(`${cancel} Cancelled`);
   if (prompt.state === "submit") {
@@ -74,7 +84,9 @@ export function renderConfirmFrame(prompt: ConfirmFrameState, message: string, t
   }
   const yes = prompt.value ? theme.blue(`${radio} Yes`) : theme.blue("Yes");
   const no = prompt.value ? theme.red("No") : theme.red(`${radio} No`);
-  return options.hints ? `${message}\n${yes}  ${no}\n${renderKeyHints(CONFIRM_KEY_HINTS, theme)}` : `${message}\n${yes}  ${no}`;
+  return options.hints
+    ? `${message}\n${yes}  ${no}\n${renderKeyHints(CONFIRM_KEY_HINTS, theme)}`
+    : `${message}\n${yes}  ${no}`;
 }
 
 export async function brandedSelect(
@@ -122,4 +134,27 @@ export async function brandedConfirm(
   const value = await prompt.prompt();
   if (isCancel(value)) return value;
   return Boolean(value);
+}
+
+/**
+ * REF-01: text input through the same prompt lifecycle as select/confirm, so the
+ * caller's AbortSignal cancels raw mode and restores the cursor. `p.text()` has
+ * no signal option in the locked Clack version and would leave input live.
+ */
+export async function brandedText(
+  options: BrandedPromptIo & { readonly message: string },
+): Promise<string | symbol> {
+  const prompt = new TextPrompt({
+    ...(options.input ? { input: options.input } : {}),
+    ...(options.output ? { output: options.output } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
+    render() {
+      const { submit, cancel } = options.theme.symbols;
+      if (this.state === "cancel") return options.theme.red(`${cancel} Cancelled`);
+      if (this.state === "submit")
+        return `${options.theme.blue(submit)} ${String(this.value ?? "")}`;
+      return `${options.message}\n${this.valueWithCursor}`;
+    },
+  });
+  return prompt.prompt();
 }

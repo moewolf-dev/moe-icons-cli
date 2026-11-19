@@ -12,10 +12,10 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { CliError } from "../errors/index.js";
-import { cacheArtifact, type CacheIo } from "./cache.js";
-import { extractTarGz } from "../project/tar-gz.js";
+import { cacheArtifactFile, type CacheIo } from "./cache.js";
+import { extractTarGz, extractTarGzFile } from "../project/tar-gz.js";
 import { PRO_DOWNLOAD_HOSTS } from "./pro-download.js";
-import { downloadSignedArtifact, type SignedArtifactDescriptor } from "./signed-artifact.js";
+import { downloadSignedArtifactToFile, type SignedArtifactDescriptor } from "./signed-artifact.js";
 import {
   BITMAP_SHARD_SCHEMA_VERSION,
   buildBitmapShardObjectKey,
@@ -23,7 +23,11 @@ import {
   type BitmapShardFormat,
   type BitmapShardImageSize,
 } from "./bitmap-shards.js";
-import { BITMAP_SHARD_BUDGET, BITMAP_SHARD_MAX_ENTRIES, BITMAP_SHARD_MAX_EXPANDED_BYTES } from "./bitmap-shard-budget.js";
+import {
+  BITMAP_SHARD_BUDGET,
+  BITMAP_SHARD_MAX_ENTRIES,
+  BITMAP_SHARD_MAX_EXPANDED_BYTES,
+} from "./bitmap-shard-budget.js";
 
 export { BITMAP_SHARD_MAX_ENTRIES, BITMAP_SHARD_MAX_EXPANDED_BYTES };
 
@@ -59,7 +63,8 @@ export interface BitmapShardCacheIdentity {
   readonly sha256: string;
 }
 
-export interface BitmapShardDescriptor extends SignedArtifactDescriptor, BitmapShardVerificationTarget {
+export interface BitmapShardDescriptor
+  extends SignedArtifactDescriptor, BitmapShardVerificationTarget {
   readonly tier: "pro";
   readonly descriptorSha256: string;
   readonly filename: string;
@@ -71,19 +76,26 @@ export interface BitmapShardDescriptor extends SignedArtifactDescriptor, BitmapS
  * production endpoint can never be redirected by a stray environment variable
  * to a plaintext or untrusted origin (mirrors the Pro descriptor seam).
  */
-export function resolveBitmapShardDescriptorEndpoint(env: Readonly<Record<string, string | undefined>>):
-  { readonly url: string; readonly allowLoopback: boolean } {
+export function resolveBitmapShardDescriptorEndpoint(
+  env: Readonly<Record<string, string | undefined>>,
+): { readonly url: string; readonly allowLoopback: boolean } {
   const override = env.MOEICONS_BITMAP_SHARD_DESCRIPTOR_URL;
   if (!override) return { url: BITMAP_SHARD_DESCRIPTOR_URL, allowLoopback: false };
   let parsed: URL;
   try {
     parsed = new URL(override);
   } catch {
-    throw new CliError("VALIDATION_ERROR", "MOEICONS_BITMAP_SHARD_DESCRIPTOR_URL is not a valid URL");
+    throw new CliError(
+      "VALIDATION_ERROR",
+      "MOEICONS_BITMAP_SHARD_DESCRIPTOR_URL is not a valid URL",
+    );
   }
   const loopback = parsed.protocol === "http:" && LOOPBACK.has(parsed.hostname);
   if (parsed.protocol !== "https:" && !loopback) {
-    throw new CliError("VALIDATION_ERROR", "MOEICONS_BITMAP_SHARD_DESCRIPTOR_URL must be https or loopback http");
+    throw new CliError(
+      "VALIDATION_ERROR",
+      "MOEICONS_BITMAP_SHARD_DESCRIPTOR_URL must be https or loopback http",
+    );
   }
   return { url: override, allowLoopback: loopback };
 }
@@ -98,22 +110,49 @@ export function parseBitmapShardDescriptor(
   options: { readonly allowLoopback?: boolean } = {},
 ): BitmapShardDescriptor {
   if (!isRecord(value)) throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
-  const allowed = ["ok", "tier", "version", "descriptorSha256", "styleGroupId", "imageSize", "format", "filename", "url", "expiresAt", "size", "sha256", "manifestSha256"];
-  if (Object.keys(value).some((key) => !allowed.includes(key))) throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
-  if (value.ok !== undefined && value.ok !== true) throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
+  const allowed = [
+    "ok",
+    "tier",
+    "version",
+    "descriptorSha256",
+    "styleGroupId",
+    "imageSize",
+    "format",
+    "filename",
+    "url",
+    "expiresAt",
+    "size",
+    "sha256",
+    "manifestSha256",
+  ];
+  if (Object.keys(value).some((key) => !allowed.includes(key)))
+    throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
+  if (value.ok !== undefined && value.ok !== true)
+    throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
   if (value.tier !== "pro" || typeof value.version !== "string" || !VERSION.test(value.version)) {
     throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
   }
-  if (typeof value.descriptorSha256 !== "string" || !SHA256.test(value.descriptorSha256)) throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
-  if (typeof value.styleGroupId !== "string" || typeof value.format !== "string" || (value.format !== "png" && value.format !== "webp")) {
+  if (typeof value.descriptorSha256 !== "string" || !SHA256.test(value.descriptorSha256))
+    throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
+  if (
+    typeof value.styleGroupId !== "string" ||
+    typeof value.format !== "string" ||
+    (value.format !== "png" && value.format !== "webp")
+  ) {
     throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
   }
   const imageSize = value.imageSize;
-  if (!isRecord(imageSize) || typeof imageSize.width !== "number" || typeof imageSize.height !== "number"
-    || imageSize.width !== imageSize.height || !BITMAP_SIZES.has(imageSize.width)) {
+  if (
+    !isRecord(imageSize) ||
+    typeof imageSize.width !== "number" ||
+    typeof imageSize.height !== "number" ||
+    imageSize.width !== imageSize.height ||
+    !BITMAP_SIZES.has(imageSize.width)
+  ) {
     throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
   }
-  if (typeof value.manifestSha256 !== "string" || !SHA256.test(value.manifestSha256)) throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
+  if (typeof value.manifestSha256 !== "string" || !SHA256.test(value.manifestSha256))
+    throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
   const expectedKey = buildBitmapShardObjectKey({
     tier: "pro",
     styleGroupId: value.styleGroupId,
@@ -122,18 +161,39 @@ export function parseBitmapShardDescriptor(
     resourceVersion: value.version,
   });
   const expectedFilename = expectedKey.split("/").pop();
-  if (value.filename !== expectedFilename) throw new CliError("VALIDATION_ERROR", "bitmap shard filename does not match its tuple");
+  if (value.filename !== expectedFilename)
+    throw new CliError("VALIDATION_ERROR", "bitmap shard filename does not match its tuple");
   const url = value.url;
   const expiresAt = value.expiresAt;
-  if (typeof url !== "string" || typeof expiresAt !== "string" || typeof value.size !== "number" || !Number.isSafeInteger(value.size) || value.size < 1
-    || typeof value.sha256 !== "string" || !SHA256.test(value.sha256)) {
+  if (
+    typeof url !== "string" ||
+    typeof expiresAt !== "string" ||
+    typeof value.size !== "number" ||
+    !Number.isSafeInteger(value.size) ||
+    value.size < 1 ||
+    typeof value.sha256 !== "string" ||
+    !SHA256.test(value.sha256)
+  ) {
     throw new CliError("VALIDATION_ERROR", "invalid bitmap shard descriptor");
   }
   let parsed: URL;
-  try { parsed = new URL(url); } catch { throw new CliError("VALIDATION_ERROR", "invalid bitmap shard URL"); }
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new CliError("VALIDATION_ERROR", "invalid bitmap shard URL");
+  }
   const expires = Date.parse(expiresAt);
-  const loopbackHttp = options.allowLoopback === true && parsed.protocol === "http:" && (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "::1");
-  if ((parsed.protocol !== "https:" && !loopbackHttp) || !Number.isFinite(expires) || expires <= now) {
+  const loopbackHttp =
+    options.allowLoopback === true &&
+    parsed.protocol === "http:" &&
+    (parsed.hostname === "127.0.0.1" ||
+      parsed.hostname === "localhost" ||
+      parsed.hostname === "::1");
+  if (
+    (parsed.protocol !== "https:" && !loopbackHttp) ||
+    !Number.isFinite(expires) ||
+    expires <= now
+  ) {
     throw new CliError("VALIDATION_ERROR", "bitmap shard descriptor is expired or insecure");
   }
   return value as unknown as BitmapShardDescriptor;
@@ -145,13 +205,29 @@ export function parseBitmapShardDescriptor(
  * honors an external cancellation signal (DEV-G08).
  */
 export async function fetchBitmapShardDescriptor(
-  tuple: { readonly version: string; readonly descriptorSha256: string; readonly styleGroupId: string; readonly imageSize: BitmapShardImageSize; readonly format: BitmapShardFormat },
+  tuple: {
+    readonly version: string;
+    readonly descriptorSha256: string;
+    readonly styleGroupId: string;
+    readonly imageSize: BitmapShardImageSize;
+    readonly format: BitmapShardFormat;
+  },
   accessToken: string,
-  deps: { readonly fetch?: typeof fetch; readonly now?: number; readonly allowLoopback?: boolean; readonly endpoint?: string; readonly timeoutMs?: number; readonly signal?: AbortSignal } = {},
+  deps: {
+    readonly fetch?: typeof fetch;
+    readonly now?: number;
+    readonly allowLoopback?: boolean;
+    readonly endpoint?: string;
+    readonly timeoutMs?: number;
+    readonly signal?: AbortSignal;
+  } = {},
 ): Promise<BitmapShardDescriptor> {
   const url = deps.endpoint ?? BITMAP_SHARD_DESCRIPTOR_URL;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), deps.timeoutMs ?? BITMAP_SHARD_BUDGET.descriptorTimeoutMs);
+  const timer = setTimeout(
+    () => controller.abort(),
+    deps.timeoutMs ?? BITMAP_SHARD_BUDGET.descriptorTimeoutMs,
+  );
   const onExternalAbort = () => controller.abort();
   if (deps.signal?.aborted) controller.abort();
   deps.signal?.addEventListener("abort", onExternalAbort, { once: true });
@@ -160,18 +236,41 @@ export async function fetchBitmapShardDescriptor(
       method: "POST",
       redirect: "error",
       signal: controller.signal,
-      headers: { authorization: `Bearer ${accessToken}`, accept: "application/json", "content-type": "application/json" },
-      body: JSON.stringify({ version: tuple.version, descriptorSha256: tuple.descriptorSha256, styleGroupId: tuple.styleGroupId, imageSize: tuple.imageSize, format: tuple.format }),
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        accept: "application/json",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        version: tuple.version,
+        descriptorSha256: tuple.descriptorSha256,
+        styleGroupId: tuple.styleGroupId,
+        imageSize: tuple.imageSize,
+        format: tuple.format,
+      }),
     });
     if (!response.ok) {
-      const code = response.status === 401 ? "AUTH_ERROR" : response.status === 403 ? "FORBIDDEN" : response.status === 404 ? "NOT_FOUND" : "NETWORK_ERROR";
+      const code =
+        response.status === 401
+          ? "AUTH_ERROR"
+          : response.status === 403
+            ? "FORBIDDEN"
+            : response.status === 404
+              ? "NOT_FOUND"
+              : "NETWORK_ERROR";
       throw new CliError(code, `bitmap shard descriptor request failed with ${response.status}`);
     }
-    return parseBitmapShardDescriptor(await response.json(), deps.now ?? Date.now(), deps.allowLoopback ? { allowLoopback: true } : {});
+    return parseBitmapShardDescriptor(
+      await response.json(),
+      deps.now ?? Date.now(),
+      deps.allowLoopback ? { allowLoopback: true } : {},
+    );
   } catch (error) {
     if (error instanceof CliError) throw error;
-    if (deps.signal?.aborted) throw new CliError("CANCELLED", "bitmap shard descriptor request cancelled");
-    if (controller.signal.aborted) throw new CliError("NETWORK_ERROR", "bitmap shard descriptor request timed out");
+    if (deps.signal?.aborted)
+      throw new CliError("CANCELLED", "bitmap shard descriptor request cancelled");
+    if (controller.signal.aborted)
+      throw new CliError("NETWORK_ERROR", "bitmap shard descriptor request timed out");
     throw new CliError("NETWORK_ERROR", "bitmap shard descriptor request failed");
   } finally {
     clearTimeout(timer);
@@ -180,21 +279,42 @@ export async function fetchBitmapShardDescriptor(
 }
 
 function magicMatches(bytes: Uint8Array, format: BitmapShardFormat): boolean {
-  if (format === "png") return bytes.byteLength >= 8 && Buffer.from(bytes.subarray(0, 8)).equals(PNG_SIGNATURE);
-  return bytes.byteLength >= 12 && Buffer.from(bytes).toString("ascii", 0, 4) === "RIFF" && Buffer.from(bytes).toString("ascii", 8, 12) === "WEBP";
+  if (format === "png")
+    return bytes.byteLength >= 8 && Buffer.from(bytes.subarray(0, 8)).equals(PNG_SIGNATURE);
+  return (
+    bytes.byteLength >= 12 &&
+    Buffer.from(bytes).toString("ascii", 0, 4) === "RIFF" &&
+    Buffer.from(bytes).toString("ascii", 8, 12) === "WEBP"
+  );
 }
 
-function readImageSize(bytes: Uint8Array, format: BitmapShardFormat): { width: number; height: number } | undefined {
+function readImageSize(
+  bytes: Uint8Array,
+  format: BitmapShardFormat,
+): { width: number; height: number } | undefined {
   const buffer = Buffer.from(bytes);
   if (format === "png") {
     if (buffer.byteLength < 24 || !buffer.subarray(0, 8).equals(PNG_SIGNATURE)) return undefined;
     return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
   }
-  if (buffer.byteLength < 30 || buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WEBP") return undefined;
+  if (
+    buffer.byteLength < 30 ||
+    buffer.toString("ascii", 0, 4) !== "RIFF" ||
+    buffer.toString("ascii", 8, 12) !== "WEBP"
+  )
+    return undefined;
   const chunk = buffer.toString("ascii", 12, 16);
-  if (chunk === "VP8X") return { width: 1 + (buffer[24]! | (buffer[25]! << 8) | (buffer[26]! << 16)), height: 1 + (buffer[27]! | (buffer[28]! << 8) | (buffer[29]! << 16)) };
-  if (chunk === "VP8L") { const bits = buffer.readUInt32LE(21); return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 }; }
-  if (chunk === "VP8 ") return { width: buffer.readUInt16LE(26) & 0x3fff, height: buffer.readUInt16LE(28) & 0x3fff };
+  if (chunk === "VP8X")
+    return {
+      width: 1 + (buffer[24]! | (buffer[25]! << 8) | (buffer[26]! << 16)),
+      height: 1 + (buffer[27]! | (buffer[28]! << 8) | (buffer[29]! << 16)),
+    };
+  if (chunk === "VP8L") {
+    const bits = buffer.readUInt32LE(21);
+    return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+  }
+  if (chunk === "VP8 ")
+    return { width: buffer.readUInt16LE(26) & 0x3fff, height: buffer.readUInt16LE(28) & 0x3fff };
   return undefined;
 }
 
@@ -216,33 +336,58 @@ export interface CachedBitmapShard {
  * DEC-101: verify response size/SHA, then the internal manifest digest,
  * icon set, magic bytes and real dimensions before accepting any bytes.
  */
-function verifyShardContents(bytes: Uint8Array, descriptor: BitmapShardVerificationTarget): { readonly files: Record<string, Uint8Array>; readonly iconIds: readonly string[] } {
-  if (bytes.byteLength !== descriptor.size) {
-    throw new CliError("VALIDATION_ERROR", `bitmap shard size mismatch: expected ${descriptor.size}, got ${bytes.byteLength}`);
+function verifyShardFiles(
+  extractedFiles: Readonly<Record<string, Uint8Array>>,
+  descriptor: BitmapShardVerificationTarget,
+  archiveSize: number,
+  archiveSha: string,
+): { readonly files: Record<string, Uint8Array>; readonly iconIds: readonly string[] } {
+  if (archiveSize !== descriptor.size) {
+    throw new CliError(
+      "VALIDATION_ERROR",
+      `bitmap shard size mismatch: expected ${descriptor.size}, got ${archiveSize}`,
+    );
   }
-  if (bytes.byteLength > BITMAP_SHARD_BUDGET.compressedBytes) {
-    throw new CliError("VALIDATION_ERROR", `bitmap shard exceeds the compressed byte budget (${BITMAP_SHARD_BUDGET.compressedBytes})`);
+  if (archiveSize > BITMAP_SHARD_BUDGET.compressedBytes) {
+    throw new CliError(
+      "VALIDATION_ERROR",
+      `bitmap shard exceeds the compressed byte budget (${BITMAP_SHARD_BUDGET.compressedBytes})`,
+    );
   }
-  const archiveSha = createHash("sha256").update(bytes).digest("hex");
   if (archiveSha !== descriptor.sha256) {
-    throw new CliError("VALIDATION_ERROR", `bitmap shard SHA-256 mismatch: expected ${descriptor.sha256}, got ${archiveSha}`);
+    throw new CliError(
+      "VALIDATION_ERROR",
+      `bitmap shard SHA-256 mismatch: expected ${descriptor.sha256}, got ${archiveSha}`,
+    );
   }
-  const extracted = extractTarGz(bytes, { maxEntries: BITMAP_SHARD_MAX_ENTRIES, maxExpandedBytes: BITMAP_SHARD_MAX_EXPANDED_BYTES });
-  if (extracted.errors.length > 0) throw new CliError("VALIDATION_ERROR", `bitmap shard archive rejected: ${extracted.errors[0]}`);
+  const extracted = { files: extractedFiles };
   const manifestBytes = extracted.files["manifest.json"];
-  if (!manifestBytes) throw new CliError("VALIDATION_ERROR", "bitmap shard is missing manifest.json");
+  if (!manifestBytes)
+    throw new CliError("VALIDATION_ERROR", "bitmap shard is missing manifest.json");
   if (createHash("sha256").update(manifestBytes).digest("hex") !== descriptor.manifestSha256) {
     throw new CliError("VALIDATION_ERROR", "bitmap shard manifest digest mismatch");
   }
   let manifest: Record<string, unknown>;
-  try { manifest = JSON.parse(Buffer.from(manifestBytes).toString("utf8")) as Record<string, unknown>; }
-  catch { throw new CliError("VALIDATION_ERROR", "bitmap shard manifest is not valid JSON"); }
-  if (manifest.schemaVersion !== BITMAP_SHARD_SCHEMA_VERSION || manifest.resourceVersion !== descriptor.version
-    || manifest.tier !== "pro" || manifest.styleGroupId !== descriptor.styleGroupId || manifest.format !== descriptor.format) {
+  try {
+    manifest = JSON.parse(Buffer.from(manifestBytes).toString("utf8")) as Record<string, unknown>;
+  } catch {
+    throw new CliError("VALIDATION_ERROR", "bitmap shard manifest is not valid JSON");
+  }
+  if (
+    manifest.schemaVersion !== BITMAP_SHARD_SCHEMA_VERSION ||
+    manifest.resourceVersion !== descriptor.version ||
+    manifest.tier !== "pro" ||
+    manifest.styleGroupId !== descriptor.styleGroupId ||
+    manifest.format !== descriptor.format
+  ) {
     throw new CliError("VALIDATION_ERROR", "bitmap shard manifest identity mismatch");
   }
   const declaredSize = manifest.imageSize as { width?: unknown; height?: unknown } | undefined;
-  if (!declaredSize || declaredSize.width !== descriptor.imageSize.width || declaredSize.height !== descriptor.imageSize.height) {
+  if (
+    !declaredSize ||
+    declaredSize.width !== descriptor.imageSize.width ||
+    declaredSize.height !== descriptor.imageSize.height
+  ) {
     throw new CliError("VALIDATION_ERROR", "bitmap shard manifest imageSize mismatch");
   }
   const files = manifest.files;
@@ -253,48 +398,139 @@ function verifyShardContents(bytes: Uint8Array, descriptor: BitmapShardVerificat
   const iconIds: string[] = [];
   const seen = new Set<string>();
   for (const entry of files) {
-    if (!isRecord(entry) || typeof entry.iconId !== "string" || !ICON_ID.test(entry.iconId) || seen.has(entry.iconId)) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.iconId !== "string" ||
+      !ICON_ID.test(entry.iconId) ||
+      seen.has(entry.iconId)
+    ) {
       throw new CliError("VALIDATION_ERROR", "bitmap shard manifest has an invalid icon id");
     }
     seen.add(entry.iconId);
     const path = `icons/${entry.iconId}.${descriptor.format}`;
-    if (entry.path !== path) throw new CliError("VALIDATION_ERROR", `bitmap shard manifest path ${String(entry.path)} is not canonical`);
+    if (entry.path !== path)
+      throw new CliError(
+        "VALIDATION_ERROR",
+        `bitmap shard manifest path ${String(entry.path)} is not canonical`,
+      );
     const content = extracted.files[path];
     if (!content) throw new CliError("VALIDATION_ERROR", `bitmap shard is missing ${path}`);
     if (content.byteLength > BITMAP_SHARD_BUDGET.singleFileBytes) {
-      throw new CliError("VALIDATION_ERROR", `bitmap shard payload ${path} exceeds the single-file byte budget`);
+      throw new CliError(
+        "VALIDATION_ERROR",
+        `bitmap shard payload ${path} exceeds the single-file byte budget`,
+      );
     }
-    if (typeof entry.byteSize !== "number" || entry.byteSize !== content.byteLength) throw new CliError("VALIDATION_ERROR", `bitmap shard size drift for ${path}`);
-    if (typeof entry.sha256 !== "string" || createHash("sha256").update(content).digest("hex") !== entry.sha256) {
+    if (typeof entry.byteSize !== "number" || entry.byteSize !== content.byteLength)
+      throw new CliError("VALIDATION_ERROR", `bitmap shard size drift for ${path}`);
+    if (
+      typeof entry.sha256 !== "string" ||
+      createHash("sha256").update(content).digest("hex") !== entry.sha256
+    ) {
       throw new CliError("VALIDATION_ERROR", `bitmap shard digest drift for ${path}`);
     }
-    if (!magicMatches(content, descriptor.format)) throw new CliError("VALIDATION_ERROR", `bitmap shard magic does not match ${descriptor.format} for ${path}`);
+    if (!magicMatches(content, descriptor.format))
+      throw new CliError(
+        "VALIDATION_ERROR",
+        `bitmap shard magic does not match ${descriptor.format} for ${path}`,
+      );
     const size = readImageSize(content, descriptor.format);
-    if (!size || size.width !== descriptor.imageSize.width || size.height !== descriptor.imageSize.height) {
-      throw new CliError("VALIDATION_ERROR", `bitmap shard dimensions do not match its tuple for ${path}`);
+    if (
+      !size ||
+      size.width !== descriptor.imageSize.width ||
+      size.height !== descriptor.imageSize.height
+    ) {
+      throw new CliError(
+        "VALIDATION_ERROR",
+        `bitmap shard dimensions do not match its tuple for ${path}`,
+      );
     }
     expected[path] = content;
     iconIds.push(entry.iconId);
   }
   const declaredFiles = Object.keys(extracted.files).filter((name) => name.startsWith("icons/"));
-  if (declaredFiles.length !== files.length) throw new CliError("VALIDATION_ERROR", "bitmap shard archive has undeclared icons");
+  if (declaredFiles.length !== files.length)
+    throw new CliError("VALIDATION_ERROR", "bitmap shard archive has undeclared icons");
   iconIds.sort((a, b) => a.localeCompare(b, "en"));
   return { files: expected, iconIds };
 }
 
+/** Byte-path verification for a cached shard (cache reads are size-bounded). */
+function verifyShardContents(
+  bytes: Uint8Array,
+  descriptor: BitmapShardVerificationTarget,
+): { readonly files: Record<string, Uint8Array>; readonly iconIds: readonly string[] } {
+  if (bytes.byteLength !== descriptor.size) {
+    throw new CliError(
+      "VALIDATION_ERROR",
+      `bitmap shard size mismatch: expected ${descriptor.size}, got ${bytes.byteLength}`,
+    );
+  }
+  const archiveSha = createHash("sha256").update(bytes).digest("hex");
+  if (archiveSha !== descriptor.sha256) {
+    throw new CliError(
+      "VALIDATION_ERROR",
+      `bitmap shard SHA-256 mismatch: expected ${descriptor.sha256}, got ${archiveSha}`,
+    );
+  }
+  const extracted = extractTarGz(bytes, {
+    maxEntries: BITMAP_SHARD_MAX_ENTRIES,
+    maxExpandedBytes: BITMAP_SHARD_MAX_EXPANDED_BYTES,
+  });
+  if (extracted.errors.length > 0)
+    throw new CliError("VALIDATION_ERROR", `bitmap shard archive rejected: ${extracted.errors[0]}`);
+  return verifyShardFiles(extracted.files, descriptor, bytes.byteLength, archiveSha);
+}
+
 /** DEC-101 verification of downloaded shard bytes against the full descriptor. */
-export function verifyBitmapShardArchive(bytes: Uint8Array, descriptor: BitmapShardVerificationTarget): VerifiedBitmapShard {
+export function verifyBitmapShardArchive(
+  bytes: Uint8Array,
+  descriptor: BitmapShardVerificationTarget,
+): VerifiedBitmapShard {
   const { files, iconIds } = verifyShardContents(bytes, descriptor);
+  return { descriptor: descriptor as BitmapShardDescriptor, files, iconIds };
+}
+
+/** REF-04: verify a downloaded shard file without materialising the archive buffer. */
+export async function verifyBitmapShardArchiveFile(
+  path: string,
+  descriptor: BitmapShardVerificationTarget,
+): Promise<VerifiedBitmapShard> {
+  const extracted = await extractTarGzFile(path, {
+    maxEntries: BITMAP_SHARD_MAX_ENTRIES,
+    maxExpandedBytes: BITMAP_SHARD_MAX_EXPANDED_BYTES,
+  });
+  if (extracted.errors.length > 0)
+    throw new CliError("VALIDATION_ERROR", `bitmap shard archive rejected: ${extracted.errors[0]}`);
+  const { files, iconIds } = verifyShardFiles(
+    extracted.files,
+    descriptor,
+    descriptor.size,
+    descriptor.sha256,
+  );
   return { descriptor: descriptor as BitmapShardDescriptor, files, iconIds };
 }
 
 /** Unambiguous cache identity (DEC-101). */
 export function bitmapShardCacheKey(identity: BitmapShardCacheIdentity): string {
-  return [identity.version, "pro", identity.styleGroupId, identity.imageSize.width, identity.imageSize.height, identity.format, identity.sha256].join("/");
+  return [
+    identity.version,
+    "pro",
+    identity.styleGroupId,
+    identity.imageSize.width,
+    identity.imageSize.height,
+    identity.format,
+    identity.sha256,
+  ].join("/");
 }
 
 export function bitmapShardCachePath(cacheDir: string, identity: BitmapShardCacheIdentity): string {
-  return join(cacheDir, "bitmap-shards", ...bitmapShardCacheKey(identity).split("/").slice(0, -1), `${identity.sha256}.tgz`);
+  return join(
+    cacheDir,
+    "bitmap-shards",
+    ...bitmapShardCacheKey(identity).split("/").slice(0, -1),
+    `${identity.sha256}.tgz`,
+  );
 }
 
 /**
@@ -309,7 +545,10 @@ export function loadCachedBitmapShard(
 ): CachedBitmapShard {
   const path = bitmapShardCachePath(cacheDir, target);
   if (!io.existsSync(path) || !io.readFileSync) {
-    throw new CliError("VALIDATION_ERROR", `bitmap shard is not cached for ${target.styleGroupId}/${target.imageSize.width}/${target.format}; run install while online`);
+    throw new CliError(
+      "VALIDATION_ERROR",
+      `bitmap shard is not cached for ${target.styleGroupId}/${target.imageSize.width}/${target.format}; run install while online`,
+    );
   }
   const bytes = io.readFileSync(path);
   const { files, iconIds } = verifyShardContents(bytes, target);
@@ -340,7 +579,10 @@ export function bitmapShardVerificationTargetFromPin(pin: {
 /** Build the canonical pin identity from a freshly verified download. */
 export function bitmapShardPinFromVerified(verified: VerifiedBitmapShard): BitmapShard {
   const descriptor = verified.descriptor;
-  const expandedSize = Object.values(verified.files).reduce((total, bytes) => total + bytes.byteLength, 0);
+  const expandedSize = Object.values(verified.files).reduce(
+    (total, bytes) => total + bytes.byteLength,
+    0,
+  );
   const filename = descriptor.filename;
   return {
     schemaVersion: BITMAP_SHARD_SCHEMA_VERSION,
@@ -383,13 +625,19 @@ export async function downloadAndCacheBitmapShard(
     readonly statfs?: (dir: string) => { readonly availableBytes: number } | undefined;
     readonly timeoutMs?: number;
     /** W2-B6: byte-level progress for a single shard payload. */
-    readonly onProgress?: (event: { readonly downloadedBytes: number; readonly totalBytes?: number }) => void;
+    readonly onProgress?: (event: {
+      readonly downloadedBytes: number;
+      readonly totalBytes?: number;
+    }) => void;
   },
 ): Promise<VerifiedBitmapShard> {
   // DEV-G08-R2: reject an over-budget shard BEFORE issuing any network request,
   // so a hostile/oversized descriptor costs zero bytes and never touches cache.
   if (descriptor.size > BITMAP_SHARD_BUDGET.compressedBytes) {
-    throw new CliError("VALIDATION_ERROR", `bitmap shard ${descriptor.filename} exceeds the compressed byte budget (${BITMAP_SHARD_BUDGET.compressedBytes})`);
+    throw new CliError(
+      "VALIDATION_ERROR",
+      `bitmap shard ${descriptor.filename} exceeds the compressed byte budget (${BITMAP_SHARD_BUDGET.compressedBytes})`,
+    );
   }
   // DEV-G08: reserve room for the compressed shard PLUS the unpacked staging
   // headroom before downloading. A missing statfs is treated as "enough"
@@ -399,15 +647,26 @@ export async function downloadAndCacheBitmapShard(
     try {
       available = deps.statfs(deps.cacheDir);
     } catch {
-      throw new CliError("DISK_FULL", `cannot determine cache space for bitmap shard ${descriptor.filename}`);
+      throw new CliError(
+        "DISK_FULL",
+        `cannot determine cache space for bitmap shard ${descriptor.filename}`,
+      );
     }
     const required = descriptor.size + BITMAP_SHARD_BUDGET.tempDiskBytes;
     if (available && available.availableBytes < required) {
-      throw new CliError("DISK_FULL", `insufficient cache space for bitmap shard ${descriptor.filename} (needs ${required} bytes, has ${available.availableBytes})`);
+      throw new CliError(
+        "DISK_FULL",
+        `insufficient cache space for bitmap shard ${descriptor.filename} (needs ${required} bytes, has ${available.availableBytes})`,
+      );
     }
   }
-  const bytes = await downloadSignedArtifact(
-    { url: descriptor.url, expiresAt: descriptor.expiresAt, size: descriptor.size, sha256: descriptor.sha256 },
+  const file = await downloadSignedArtifactToFile(
+    {
+      url: descriptor.url,
+      expiresAt: descriptor.expiresAt,
+      size: descriptor.size,
+      sha256: descriptor.sha256,
+    },
     {
       allowedHosts: deps.allowedHosts ?? PRO_DOWNLOAD_HOSTS,
       ...(deps.fetch ? { fetch: deps.fetch } : {}),
@@ -418,7 +677,16 @@ export async function downloadAndCacheBitmapShard(
       timeoutMs: deps.timeoutMs ?? BITMAP_SHARD_BUDGET.downloadTimeoutMs,
     },
   );
-  const verified = verifyBitmapShardArchive(bytes, descriptor);
-  cacheArtifact(deps.io, bitmapShardCachePath(deps.cacheDir, descriptor), bytes, descriptor.sha256);
-  return verified;
+  try {
+    const verified = await verifyBitmapShardArchiveFile(file.path, descriptor);
+    cacheArtifactFile(
+      deps.io,
+      bitmapShardCachePath(deps.cacheDir, descriptor),
+      file.path,
+      descriptor.sha256,
+    );
+    return verified;
+  } finally {
+    await file.cleanup();
+  }
 }

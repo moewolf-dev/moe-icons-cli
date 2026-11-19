@@ -1,6 +1,15 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { readdirSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync } from "node:fs";
+import {
+  readdirSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  rmSync,
+  renameSync,
+  copyFileSync,
+} from "node:fs";
 import { CliError } from "../errors/index.js";
 import { artifactCachePath, metadataCachePath } from "./free-download.js";
 import { downloadSignedArtifact } from "./signed-artifact.js";
@@ -42,9 +51,20 @@ function cachedProVersions(dir: string): string[] {
 }
 
 export type ProResourceState =
-  | { readonly kind: "not-cached"; readonly version: string; readonly codeBytes: number; readonly metadataBytes: number }
+  | {
+      readonly kind: "not-cached";
+      readonly version: string;
+      readonly codeBytes: number;
+      readonly metadataBytes: number;
+    }
   | { readonly kind: "current"; readonly version: string }
-  | { readonly kind: "outdated"; readonly version: string; readonly latestVersion: string; readonly codeBytes: number; readonly metadataBytes: number }
+  | {
+      readonly kind: "outdated";
+      readonly version: string;
+      readonly latestVersion: string;
+      readonly codeBytes: number;
+      readonly metadataBytes: number;
+    }
   | { readonly kind: "corrupt"; readonly version: string }
   | { readonly kind: "unavailable"; readonly reason: string };
 
@@ -59,7 +79,11 @@ export async function proResourceState(
 ): Promise<ProResourceState> {
   let versions;
   try {
-    versions = await fetchLibraryVersions({ ...(deps.fetch ? { fetch: deps.fetch } : {}), signal: context.signal, env: context.env });
+    versions = await fetchLibraryVersions({
+      ...(deps.fetch ? { fetch: deps.fetch } : {}),
+      signal: context.signal,
+      env: context.env,
+    });
   } catch {
     return { kind: "unavailable", reason: "version check failed" };
   }
@@ -89,7 +113,9 @@ export async function proResourceState(
 
   if (existsSync(codePath) && (metaPath === undefined || existsSync(metaPath))) {
     const codeOk = verifyArtifact(readFileSync(codePath), descriptor.sha256).ok;
-    const metaOk = metaPath === undefined || verifyArtifact(readFileSync(metaPath), descriptor.metadata!.sha256).ok;
+    const metaOk =
+      metaPath === undefined ||
+      verifyArtifact(readFileSync(metaPath), descriptor.metadata!.sha256).ok;
     if (codeOk && metaOk) return { kind: "current", version: descriptor.version };
     return { kind: "corrupt", version: descriptor.version };
   }
@@ -177,9 +203,18 @@ export async function runProPredownloadUseCase(
     }
   };
 
-  const codeRef = { url: descriptor.url, expiresAt: descriptor.expiresAt, size: descriptor.size, sha256: descriptor.sha256 };
+  const codeRef = {
+    url: descriptor.url,
+    expiresAt: descriptor.expiresAt,
+    size: descriptor.size,
+    sha256: descriptor.sha256,
+  };
   const codeBytes = await downloadSignedArtifact(codeRef, downloadOptions);
-  persist(artifactCachePath(dir, descriptor.version, descriptor.sha256), codeBytes, descriptor.sha256);
+  persist(
+    artifactCachePath(dir, descriptor.version, descriptor.sha256),
+    codeBytes,
+    descriptor.sha256,
+  );
 
   let metadataSha256: string | undefined;
   let metadataBytes = 0;
@@ -187,7 +222,11 @@ export async function runProPredownloadUseCase(
     const metaBytes = await downloadSignedArtifact(descriptor.metadata, downloadOptions);
     metadataSha256 = descriptor.metadata.sha256;
     metadataBytes = metaBytes.byteLength;
-    persist(metadataCachePath(dir, descriptor.version, descriptor.metadata.sha256), metaBytes, descriptor.metadata.sha256);
+    persist(
+      metadataCachePath(dir, descriptor.version, descriptor.metadata.sha256),
+      metaBytes,
+      descriptor.metadata.sha256,
+    );
   }
 
   return {
@@ -296,6 +335,7 @@ function cacheIo(): CacheIo {
     rmSync,
     readFileSync,
     readdirSync,
+    copyFileSync,
   };
 }
 
@@ -328,14 +368,17 @@ export async function runProResourceWarmupUseCase(
   try {
     catalog = parseCatalog(JSON.parse(extracted.value.catalogJson));
   } catch (error) {
-    throw new CliError("VALIDATION_ERROR", error instanceof Error ? error.message : "invalid pro catalog");
+    throw new CliError(
+      "VALIDATION_ERROR",
+      error instanceof Error ? error.message : "invalid pro catalog",
+    );
   }
 
   const accessToken = await runAccessTokenUseCase(context, auth);
   const endpoint = resolveBitmapShardDescriptorEndpoint(context.env);
   const allowedHosts = endpoint.allowLoopback
     ? [...PRO_DOWNLOAD_HOSTS, new URL(endpoint.url).host]
-    : deps.allowedProHosts ?? PRO_DOWNLOAD_HOSTS;
+    : (deps.allowedProHosts ?? PRO_DOWNLOAD_HOSTS);
 
   const result = await warmDefaultBitmapShards({
     catalog,
