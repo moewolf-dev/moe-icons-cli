@@ -3,3 +3,5 @@
 src/core/small-pack/*.cjs text eol=lf
 src/core/small-pack/*.cts text eol=lf
 src/core/small-pack/*.json text eol=lf
+src/generator/shared/*.cjs text eol=lf
+src/generator/shared/*.json text eol=lf
