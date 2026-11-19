@@ -1,0 +1,5 @@
+# Pinned small-pack vendor files are hashed byte-for-byte. Windows checkouts
+# must not apply core.autocrlf, otherwise verify-small-pack-pin fails.
+src/core/small-pack/*.cjs text eol=lf
+src/core/small-pack/*.cts text eol=lf
+src/core/small-pack/*.json text eol=lf
